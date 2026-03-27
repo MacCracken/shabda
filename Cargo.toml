@@ -1,0 +1,36 @@
+[package]
+name = "shabda"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89"
+license = "GPL-3.0-only"
+description = "shabda — Grapheme-to-phoneme (G2P) conversion: text to phoneme sequences for vocal synthesis"
+homepage = "https://github.com/MacCracken/shabda"
+repository = "https://github.com/MacCracken/shabda"
+readme = "README.md"
+documentation = "https://docs.rs/shabda"
+keywords = ["g2p", "phoneme", "text-to-speech", "pronunciation", "grapheme"]
+categories = ["text-processing", "multimedia::audio"]
+exclude = [".claude/", ".github/", "docs/", "scripts/"]
+
+[dependencies]
+hisab = { version = "1.2", default-features = false, features = ["num"] }
+serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
+svara = { version = "1", default-features = false }
+thiserror = { version = "2", default-features = false }
+tracing = { version = "0.1", default-features = false }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"], optional = true }
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+serde_json = "1"
+
+[features]
+default = ["std"]
+full = ["std", "logging"]
+std = ["serde/std", "svara/std", "thiserror/std", "tracing/std"]
+logging = ["dep:tracing-subscriber"]
+
+[[bench]]
+name = "benchmarks"
+harness = false
