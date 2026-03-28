@@ -53,6 +53,7 @@ pub mod error;
 pub mod normalize;
 pub mod prosody;
 pub mod rules;
+pub mod syllable;
 
 /// Convenience re-exports for common usage.
 pub mod prelude {

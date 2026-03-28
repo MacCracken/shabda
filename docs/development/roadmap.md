@@ -19,12 +19,13 @@
 - [x] User dictionary overlay (application-specific terms)
 - [x] Extracted into standalone `shabdakosh` crate
 
-### Rule Engine Improvements
-- [ ] Context-sensitive rules (vowel before consonant cluster affects pronunciation)
-- [ ] Silent letter handling (knight, gnome, write, psychology)
-- [ ] Morphological awareness (un-prefix, -tion suffix, -ed ending: /t/ vs /d/ vs /ɪd/)
-- [ ] Stress from syllable weight (heavy syllables attract stress)
-- [ ] Syllabification algorithm (needed for stress rules and hyphenation)
+### Rule Engine Improvements — Completed
+- [x] Context-sensitive rules (magic-e, r-colored vowels)
+- [x] Silent letter handling (kn, gn, wr, ps, pn, mn, mb, bt, igh, eigh, ough)
+- [x] Morphological awareness (un-/re-/dis- prefixes, -tion/-sion suffixes, -ed /t/d/ɪd/)
+- [x] Stress from syllable weight (heavy penult rule)
+- [x] Syllabification algorithm (Maximal Onset Principle with sonority)
+- [x] Number-to-words expansion (0–999,999,999, decimals, negatives)
 
 ### Prosody
 - [ ] Phrase-level prosody (comma = continuation rise, period = falling)
@@ -44,7 +45,7 @@
 ### Accuracy
 - [ ] Heteronym disambiguation (read/read, live/live, wind/wind — needs POS tagging)
 - [ ] Abbreviation expansion (Dr., St., etc.)
-- [ ] Number-to-words (42 → "forty two")
+- [x] Number-to-words (42 → "forty two") — done in rule engine improvements
 - [ ] Acronym handling (NASA, FBI — spell out vs pronounce)
 - [ ] Foreign word detection and passthrough
 
@@ -60,13 +61,13 @@
 
 ## v1.0 Criteria
 
-- [ ] English dictionary with 5,000+ entries
-- [ ] Syllabification algorithm
-- [ ] Morphological awareness (-tion, -ed, un-, re-)
-- [ ] Silent letter handling
-- [ ] Context-sensitive vowel rules
+- [x] English dictionary with 10,000+ entries (via shabdakosh)
+- [x] Syllabification algorithm
+- [x] Morphological awareness (-tion, -ed, un-, re-)
+- [x] Silent letter handling
+- [x] Context-sensitive vowel rules
 - [ ] Phrase-level prosody (commas, periods)
-- [ ] Number-to-words conversion
-- [ ] All public types: Serialize + Deserialize + roundtrip tested
-- [ ] Benchmarks baselined
+- [x] Number-to-words conversion
+- [x] All public types: Serialize + Deserialize + roundtrip tested
+- [x] Benchmarks baselined
 - [ ] Comprehensive documentation

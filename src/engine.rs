@@ -108,9 +108,15 @@ impl G2PEngine {
                 continue;
             }
 
-            // Assign stress based on word type
+            // Syllabify and assign stress based on syllable weight
             let is_content = prosody::is_content_word(word);
-            let word_events = prosody::assign_stress(&phonemes, is_content);
+            let syllables = crate::syllable::syllabify(&phonemes);
+            let word_events = if syllables.is_empty() {
+                // Fallback for consonant-only sequences
+                prosody::assign_stress(&phonemes, is_content)
+            } else {
+                prosody::assign_stress_syllabic(&syllables, is_content)
+            };
             events.extend(word_events);
 
             // Insert short silence between words (not after last word)

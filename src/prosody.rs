@@ -9,6 +9,7 @@ use svara::prosody::Stress;
 use svara::sequence::PhonemeEvent;
 
 use crate::normalize::SentenceType;
+use crate::syllable::Syllable;
 
 /// Converts a sequence of phonemes for a word into PhonemeEvents with stress.
 ///
@@ -34,6 +35,62 @@ pub fn assign_stress(phonemes: &[Phoneme], is_content_word: bool) -> Vec<Phoneme
             Stress::Unstressed
         };
         events.push(PhonemeEvent::new(ph, dur, stress));
+    }
+
+    events
+}
+
+/// Assigns stress using syllable weight analysis.
+///
+/// Uses a simplified English stress rule:
+/// - Monosyllables: primary stress
+/// - Two syllables: stress first
+/// - Heavy penult: stress penult
+/// - Otherwise: stress antepenult
+/// - Function words: all unstressed
+#[must_use]
+pub fn assign_stress_syllabic(syllables: &[Syllable], is_content_word: bool) -> Vec<PhonemeEvent> {
+    if syllables.is_empty() {
+        return Vec::new();
+    }
+
+    // Determine which syllable index gets primary stress
+    let primary_idx = if !is_content_word {
+        usize::MAX // no primary stress for function words
+    } else if syllables.len() <= 2 {
+        0 // Monosyllables and 2-syllable words: stress first
+    } else {
+        // 3+ syllables: check penult weight
+        let penult = syllables.len() - 2;
+        if syllables[penult].is_heavy() {
+            penult
+        } else {
+            // Stress antepenult (third from end)
+            syllables.len().saturating_sub(3)
+        }
+    };
+
+    let mut events = Vec::new();
+    for (syl_idx, syllable) in syllables.iter().enumerate() {
+        let syl_stress = if syl_idx == primary_idx {
+            Stress::Primary
+        } else {
+            Stress::Unstressed
+        };
+
+        // Onset: unstressed
+        for &ph in &syllable.onset {
+            let dur = svara::phoneme::phoneme_duration(&ph);
+            events.push(PhonemeEvent::new(ph, dur, Stress::Unstressed));
+        }
+        // Nucleus: carries the syllable's stress
+        let dur = svara::phoneme::phoneme_duration(&syllable.nucleus);
+        events.push(PhonemeEvent::new(syllable.nucleus, dur, syl_stress));
+        // Coda: unstressed
+        for &ph in &syllable.coda {
+            let dur = svara::phoneme::phoneme_duration(&ph);
+            events.push(PhonemeEvent::new(ph, dur, Stress::Unstressed));
+        }
     }
 
     events
