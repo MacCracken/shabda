@@ -13,10 +13,11 @@
 
 ## Backlog — High Priority
 
-### Dictionary Expansion
-- [ ] Expand English dictionary to 5,000+ common words (CMU Pronouncing Dictionary format)
-- [ ] Import/export dictionary format (JSON, CMUdict-compatible)
-- [ ] User dictionary overlay (application-specific terms)
+### Dictionary Expansion — Extracted to shabdakosh
+- [x] Expand English dictionary to 5,000+ common words (CMU Pronouncing Dictionary format)
+- [x] Import/export dictionary format (JSON, CMUdict-compatible)
+- [x] User dictionary overlay (application-specific terms)
+- [x] Extracted into standalone `shabdakosh` crate
 
 ### Rule Engine Improvements
 - [ ] Context-sensitive rules (vowel before consonant cluster affects pronunciation)

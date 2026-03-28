@@ -46,8 +46,8 @@
 
 extern crate alloc;
 
-pub mod arpabet;
-pub mod dictionary;
+pub use shabdakosh::arpabet;
+pub use shabdakosh::dictionary;
 pub mod engine;
 pub mod error;
 pub mod normalize;

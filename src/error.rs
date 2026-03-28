@@ -30,3 +30,9 @@ pub enum ShabdaError {
 
 /// Convenience type alias for shabda results.
 pub type Result<T> = core::result::Result<T, ShabdaError>;
+
+impl From<shabdakosh::ShabdakoshError> for ShabdaError {
+    fn from(e: shabdakosh::ShabdakoshError) -> Self {
+        ShabdaError::DictParseError(alloc::format!("{e}"))
+    }
+}

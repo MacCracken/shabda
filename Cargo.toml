@@ -12,10 +12,10 @@ documentation = "https://docs.rs/shabda"
 keywords = ["g2p", "phoneme", "text-to-speech", "pronunciation", "grapheme"]
 categories = ["text-processing", "multimedia::audio"]
 exclude = [".claude/", ".github/", "docs/", "scripts/"]
-build = "build.rs"
 
 [dependencies]
 hisab = { version = "1.2", default-features = false, features = ["num"] }
+shabdakosh = { version = "1", path = "../shabdakosh", default-features = false }
 serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
 svara = { version = "1", default-features = false }
 thiserror = { version = "2", default-features = false }
@@ -30,8 +30,8 @@ serde_json = "1"
 [features]
 default = ["std"]
 full = ["std", "logging", "json"]
-std = ["serde/std", "svara/std", "thiserror/std", "tracing/std"]
-json = ["dep:serde_json"]
+std = ["serde/std", "svara/std", "thiserror/std", "tracing/std", "shabdakosh/std"]
+json = ["dep:serde_json", "shabdakosh/json"]
 logging = ["dep:tracing-subscriber"]
 
 [[bench]]

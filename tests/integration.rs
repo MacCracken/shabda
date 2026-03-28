@@ -1,6 +1,5 @@
 //! Integration tests for shabda.
 
-use shabda::dictionary::PronunciationDict;
 use shabda::prelude::*;
 
 #[test]
@@ -59,7 +58,6 @@ fn test_speak_sentence() {
 fn test_question_intonation() {
     let g2p = G2PEngine::new(Language::English);
     let voice = svara::voice::VoiceProfile::new_male();
-    // Should not error even with punctuation
     let samples = g2p.speak("hello?", &voice, 44100.0).unwrap();
     assert!(!samples.is_empty());
 }
@@ -109,151 +107,6 @@ fn test_serde_roundtrip_engine() {
 #[test]
 fn test_serde_roundtrip_error() {
     let err = ShabdaError::UnknownWord("test".into());
-    let json = serde_json::to_string(&err).unwrap();
-    let e2: ShabdaError = serde_json::from_str(&json).unwrap();
-    assert_eq!(err.to_string(), e2.to_string());
-}
-
-// --- Expanded dictionary tests ---
-
-#[test]
-fn test_expanded_dictionary_size() {
-    let dict = PronunciationDict::english();
-    assert!(
-        dict.len() >= 5000,
-        "expanded dictionary should have 5000+ entries, got {}",
-        dict.len()
-    );
-}
-
-#[test]
-fn test_expanded_dictionary_common_words() {
-    let g2p = G2PEngine::new(Language::English);
-    // These words should all be in the dictionary now
-    let words = [
-        "people", "because", "through", "enough", "beautiful", "colonel", "psychology",
-        "knight", "thought", "language", "world", "hello", "the", "computer", "science",
-        "music", "water", "friend", "school", "house",
-    ];
-    for word in words {
-        let events = g2p.convert(word).unwrap();
-        assert!(
-            !events.is_empty(),
-            "'{word}' should produce phoneme events"
-        );
-    }
-}
-
-#[test]
-fn test_minimal_dictionary_still_works() {
-    let minimal = PronunciationDict::english_minimal();
-    assert_eq!(minimal.len(), 29);
-    assert!(minimal.lookup("the").is_some());
-    assert!(minimal.lookup("hello").is_some());
-    assert!(minimal.lookup("computer").is_none());
-}
-
-// --- User overlay tests ---
-
-#[test]
-fn test_user_overlay_precedence() {
-    let mut dict = PronunciationDict::english();
-    let original = dict.lookup("hello").unwrap().to_vec();
-
-    // Insert a different pronunciation in the user overlay
-    let custom = &[svara::phoneme::Phoneme::VowelA];
-    dict.insert_user("hello", custom);
-
-    // User entry should take precedence
-    assert_eq!(dict.lookup("hello").unwrap(), custom);
-
-    // Remove user entry, base should come back
-    assert!(dict.remove_user("hello"));
-    assert_eq!(dict.lookup("hello").unwrap(), original.as_slice());
-}
-
-#[test]
-fn test_user_overlay_new_word() {
-    let mut dict = PronunciationDict::english();
-    assert!(dict.lookup("xyzzy").is_none());
-
-    dict.insert_user(
-        "xyzzy",
-        &[
-            svara::phoneme::Phoneme::FricativeZ,
-            svara::phoneme::Phoneme::VowelNearI,
-            svara::phoneme::Phoneme::FricativeZ,
-            svara::phoneme::Phoneme::VowelE,
-        ],
-    );
-    assert!(dict.lookup("xyzzy").is_some());
-    assert_eq!(dict.user_len(), 1);
-}
-
-#[test]
-fn test_user_overlay_serde_roundtrip() {
-    let mut dict = PronunciationDict::english_minimal();
-    dict.insert_user("custom", &[svara::phoneme::Phoneme::VowelA]);
-
-    let json = serde_json::to_string(&dict).unwrap();
-    let dict2: PronunciationDict = serde_json::from_str(&json).unwrap();
-
-    assert_eq!(dict2.lookup("custom").unwrap(), &[svara::phoneme::Phoneme::VowelA]);
-    assert_eq!(dict2.user_len(), 1);
-    assert_eq!(dict2.len(), dict.len());
-}
-
-// --- Format tests ---
-
-#[test]
-fn test_cmudict_parse_roundtrip() {
-    use shabda::dictionary::format;
-
-    let input = ";;; test dict\nhello  HH AH0 L OW1\nworld  W ER1 L D\n";
-    let dict = format::parse_cmudict(input).unwrap();
-    assert_eq!(dict.len(), 2);
-    assert!(dict.lookup("hello").is_some());
-    assert!(dict.lookup("world").is_some());
-}
-
-#[test]
-fn test_cmudict_export() {
-    use shabda::dictionary::format;
-
-    let mut dict = PronunciationDict::new();
-    dict.insert(
-        "cat",
-        &[
-            svara::phoneme::Phoneme::PlosiveK,
-            svara::phoneme::Phoneme::VowelAsh,
-            svara::phoneme::Phoneme::PlosiveT,
-        ],
-    );
-    let output = format::to_cmudict(&dict);
-    assert!(output.contains("cat  K AE1 T"));
-}
-
-#[test]
-fn test_cmudict_parse_error_missing_separator() {
-    use shabda::dictionary::format;
-
-    let input = "badline\n";
-    let result = format::parse_cmudict(input);
-    assert!(result.is_err());
-}
-
-#[test]
-fn test_cmudict_parse_error_unknown_symbol() {
-    use shabda::dictionary::format;
-
-    let input = "word  XX1\n";
-    let result = format::parse_cmudict(input);
-    assert!(result.is_err());
-}
-
-#[test]
-fn test_serde_roundtrip_dict_parse_error() {
-    let err = ShabdaError::DictParseError("test parse error".into());
     let json = serde_json::to_string(&err).unwrap();
     let e2: ShabdaError = serde_json::from_str(&json).unwrap();
     assert_eq!(err.to_string(), e2.to_string());

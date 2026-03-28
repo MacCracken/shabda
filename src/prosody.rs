@@ -10,7 +10,6 @@ use svara::sequence::PhonemeEvent;
 
 use crate::normalize::SentenceType;
 
-
 /// Converts a sequence of phonemes for a word into PhonemeEvents with stress.
 ///
 /// Applies simple stress rules:

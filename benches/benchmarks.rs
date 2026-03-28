@@ -61,7 +61,14 @@ fn bench_dict_construction(c: &mut Criterion) {
 fn bench_dict_lookup(c: &mut Criterion) {
     c.bench_function("dict_lookup_5k", |b| {
         let g2p = G2PEngine::new(Language::English);
-        let words = ["the", "beautiful", "psychology", "computer", "knight", "enough"];
+        let words = [
+            "the",
+            "beautiful",
+            "psychology",
+            "computer",
+            "knight",
+            "enough",
+        ];
         b.iter(|| {
             for word in &words {
                 black_box(g2p.dictionary().lookup(word));
