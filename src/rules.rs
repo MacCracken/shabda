@@ -10,6 +10,7 @@
 
 use alloc::vec::Vec;
 use svara::phoneme::Phoneme;
+use tracing::trace;
 
 /// Converts a single English word to phonemes using letter-to-sound rules.
 ///
@@ -24,9 +25,13 @@ pub fn english_rules(word: &str) -> Vec<Phoneme> {
 
     // Step 1: Strip silent letters
     let chars = preprocess_silent(&chars);
+    trace!(word, "silent letter preprocessing complete");
 
     // Step 2: Detect and strip prefix
     let (prefix_phonemes, stem) = strip_prefix(&chars);
+    if prefix_phonemes.is_some() {
+        trace!(word, "prefix detected and stripped");
+    }
 
     // Step 3: Detect suffix for post-processing
     let (stem, suffix) = detect_suffix(stem);

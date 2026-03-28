@@ -111,3 +111,41 @@ fn test_serde_roundtrip_error() {
     let e2: ShabdaError = serde_json::from_str(&json).unwrap();
     assert_eq!(err.to_string(), e2.to_string());
 }
+
+#[test]
+fn test_phrase_pause_comma() {
+    let g2p = G2PEngine::new(Language::English);
+    let events = g2p.convert("hello, world").unwrap();
+    // Should contain a longer silence for the comma (0.15s)
+    let pauses: Vec<_> = events
+        .iter()
+        .filter(|e| e.phoneme == svara::phoneme::Phoneme::Silence && e.duration > 0.1)
+        .collect();
+    assert!(!pauses.is_empty(), "comma should produce a phrase pause");
+}
+
+#[test]
+fn test_phrase_pause_period() {
+    let g2p = G2PEngine::new(Language::English);
+    let events = g2p.convert("hello. world").unwrap();
+    // Should contain a longer silence for the period (0.30s)
+    let pauses: Vec<_> = events
+        .iter()
+        .filter(|e| e.phoneme == svara::phoneme::Phoneme::Silence && e.duration > 0.2)
+        .collect();
+    assert!(
+        !pauses.is_empty(),
+        "period should produce a longer phrase pause"
+    );
+}
+
+#[test]
+fn test_number_expansion_in_pipeline() {
+    let g2p = G2PEngine::new(Language::English);
+    // "42" should be expanded to "forty two" and produce phonemes
+    let events = g2p.convert("42").unwrap();
+    assert!(
+        events.len() > 4,
+        "number should expand to words with phonemes"
+    );
+}

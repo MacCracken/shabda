@@ -41,6 +41,18 @@ impl Syllable {
 /// Syllabifies a phoneme sequence using the Maximal Onset Principle.
 ///
 /// Returns an empty vector if the input contains no vowels.
+///
+/// # Examples
+///
+/// ```
+/// use svara::phoneme::Phoneme;
+/// use shabda::syllable::syllabify;
+///
+/// let phonemes = vec![Phoneme::PlosiveK, Phoneme::VowelAsh, Phoneme::PlosiveT];
+/// let syllables = syllabify(&phonemes);
+/// assert_eq!(syllables.len(), 1);
+/// assert!(syllables[0].is_heavy()); // "cat" has a coda
+/// ```
 #[must_use]
 pub fn syllabify(phonemes: &[Phoneme]) -> Vec<Syllable> {
     if phonemes.is_empty() {

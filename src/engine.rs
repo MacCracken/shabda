@@ -2,7 +2,7 @@
 
 use alloc::{string::ToString, vec::Vec};
 use serde::{Deserialize, Serialize};
-use tracing::trace;
+use tracing::{trace, warn};
 
 use svara::phoneme::Phoneme;
 use svara::sequence::PhonemeEvent;
@@ -66,16 +66,26 @@ impl G2PEngine {
     /// Converts text to a sequence of phoneme events.
     ///
     /// The pipeline:
-    /// 1. Detect sentence intonation from punctuation
-    /// 2. Normalize text (lowercase, strip punctuation)
-    /// 3. Split into words
-    /// 4. For each word: dictionary lookup → rule-based fallback
-    /// 5. Assign stress based on word class (content vs function)
-    /// 6. Insert silence between words
+    /// 1. Expand numbers to words and normalize text
+    /// 2. Detect sentence intonation from punctuation
+    /// 3. For each word: dictionary lookup → rule-based fallback
+    /// 4. Syllabify and assign stress based on syllable weight
+    /// 5. Insert phrase pauses at commas (150ms) and periods (300ms)
+    /// 6. Insert word-boundary silence (40ms) between words
     ///
     /// # Errors
     ///
     /// Returns `ShabdaError::InvalidInput` if the text is empty.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use shabda::prelude::*;
+    ///
+    /// let g2p = G2PEngine::new(Language::English);
+    /// let events = g2p.convert("hello world").unwrap();
+    /// assert!(!events.is_empty());
+    /// ```
     pub fn convert(&self, text: &str) -> Result<Vec<PhonemeEvent>> {
         if text.trim().is_empty() {
             return Err(ShabdaError::InvalidInput("empty text".to_string()));
@@ -95,16 +105,37 @@ impl G2PEngine {
         let mut events = Vec::new();
 
         for (i, word) in words.iter().enumerate() {
+            // Handle phrase boundary markers
+            if *word == normalize::COMMA_PAUSE {
+                events.push(PhonemeEvent::new(
+                    Phoneme::Silence,
+                    0.15,
+                    svara::prosody::Stress::Unstressed,
+                ));
+                continue;
+            }
+            if *word == normalize::PERIOD_PAUSE {
+                events.push(PhonemeEvent::new(
+                    Phoneme::Silence,
+                    0.30,
+                    svara::prosody::Stress::Unstressed,
+                ));
+                continue;
+            }
+
             // Look up in dictionary first, fall back to rules
             let phonemes: Vec<Phoneme> = if let Some(dict_entry) = self.dictionary.lookup(word) {
+                trace!(word, phoneme_count = dict_entry.len(), "dictionary hit");
                 dict_entry.to_vec()
             } else {
+                trace!(word, "dictionary miss, falling back to rules");
                 match self.language {
                     Language::English => rules::english_rules(word),
                 }
             };
 
             if phonemes.is_empty() {
+                warn!(word, "no phonemes produced, skipping word");
                 continue;
             }
 
@@ -112,9 +143,15 @@ impl G2PEngine {
             let is_content = prosody::is_content_word(word);
             let syllables = crate::syllable::syllabify(&phonemes);
             let word_events = if syllables.is_empty() {
-                // Fallback for consonant-only sequences
+                trace!(word, "no syllables (consonant-only), using simple stress");
                 prosody::assign_stress(&phonemes, is_content)
             } else {
+                trace!(
+                    word,
+                    syllable_count = syllables.len(),
+                    is_content,
+                    "syllabified"
+                );
                 prosody::assign_stress_syllabic(&syllables, is_content)
             };
             events.extend(word_events);
@@ -139,6 +176,17 @@ impl G2PEngine {
     /// # Errors
     ///
     /// Returns errors from either G2P conversion or audio synthesis.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use shabda::prelude::*;
+    ///
+    /// let g2p = G2PEngine::new(Language::English);
+    /// let voice = svara::voice::VoiceProfile::new_male();
+    /// let samples = g2p.speak("hello", &voice, 44100.0).unwrap();
+    /// assert!(!samples.is_empty());
+    /// ```
     pub fn speak(
         &self,
         text: &str,
@@ -153,6 +201,6 @@ impl G2PEngine {
         }
 
         seq.render(voice, sample_rate)
-            .map_err(|e| ShabdaError::RuleError(alloc::format!("{e}")))
+            .map_err(|e| ShabdaError::RuleError(alloc::format!("audio synthesis failed: {e}")))
     }
 }

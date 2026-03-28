@@ -1,13 +1,29 @@
 //! Text normalization: lowercasing, punctuation handling, number expansion.
 
 use alloc::string::String;
+use tracing::trace;
+
+/// Phrase boundary marker emitted for commas (short pause).
+pub const COMMA_PAUSE: &str = ",pause";
+/// Phrase boundary marker emitted for periods/semicolons (longer pause).
+pub const PERIOD_PAUSE: &str = ".pause";
 
 /// Normalizes input text for G2P processing.
 ///
 /// - Expands numbers to words (42 → "forty two")
 /// - Converts to lowercase
+/// - Preserves phrase boundary markers for commas and periods
 /// - Strips non-alphabetic characters (preserving spaces, apostrophes, hyphens)
 /// - Collapses multiple spaces
+///
+/// # Examples
+///
+/// ```
+/// use shabda::normalize::normalize;
+///
+/// assert_eq!(normalize("Hello World!"), "hello world");
+/// assert_eq!(normalize("I have 42 cats"), "i have forty two cats");
+/// ```
 #[must_use]
 pub fn normalize(text: &str) -> String {
     let expanded = expand_numbers(text);
@@ -22,7 +38,15 @@ pub fn normalize(text: &str) -> String {
             }
             result.push(ch.to_lowercase().next().unwrap_or(ch));
             prev_space = false;
-        } else if ch.is_whitespace() || ch == ',' || ch == '.' || ch == '!' || ch == '?' {
+        } else if ch == ',' {
+            // Emit phrase boundary marker for comma (short pause)
+            result.push_str(" ,pause");
+            prev_space = true;
+        } else if ch == '.' || ch == ';' {
+            // Emit phrase boundary marker for period/semicolon (longer pause)
+            result.push_str(" .pause");
+            prev_space = true;
+        } else if ch.is_whitespace() || ch == '!' || ch == '?' {
             prev_space = true;
         }
     }
@@ -45,21 +69,33 @@ pub fn expand_numbers(text: &str) -> String {
         if chars[i] == '-' && i + 1 < chars.len() && chars[i + 1].is_ascii_digit() {
             i += 1; // skip the minus
             let (num_str, consumed) = collect_number(&chars[i..]);
+            let expanded = expand_number_token(&num_str);
+            trace!(
+                num_str = num_str.as_str(),
+                expanded = expanded.as_str(),
+                "expanded negative number"
+            );
             if !result.is_empty() && !result.ends_with(' ') {
                 result.push(' ');
             }
             result.push_str("negative ");
-            result.push_str(&expand_number_token(&num_str));
+            result.push_str(&expanded);
             i += consumed;
             continue;
         }
 
         if chars[i].is_ascii_digit() {
             let (num_str, consumed) = collect_number(&chars[i..]);
+            let expanded = expand_number_token(&num_str);
+            trace!(
+                num_str = num_str.as_str(),
+                expanded = expanded.as_str(),
+                "expanded number"
+            );
             if !result.is_empty() && !result.ends_with(' ') {
                 result.push(' ');
             }
-            result.push_str(&expand_number_token(&num_str));
+            result.push_str(&expanded);
             i += consumed;
         } else {
             result.push(chars[i]);
@@ -270,7 +306,8 @@ mod tests {
 
     #[test]
     fn test_normalize_punctuation() {
-        assert_eq!(normalize("it's a test."), "it's a test");
+        // Period at end produces a .pause marker
+        assert_eq!(normalize("it's a test."), "it's a test .pause");
     }
 
     #[test]
@@ -343,5 +380,17 @@ mod tests {
     #[test]
     fn test_normalize_with_numbers() {
         assert_eq!(normalize("I have 42 cats!"), "i have forty two cats");
+    }
+
+    #[test]
+    fn test_normalize_comma_pause() {
+        let result = normalize("hello, world");
+        assert!(result.contains(COMMA_PAUSE));
+    }
+
+    #[test]
+    fn test_normalize_period_pause() {
+        let result = normalize("first. second");
+        assert!(result.contains(PERIOD_PAUSE));
     }
 }

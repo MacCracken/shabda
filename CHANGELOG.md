@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Number-to-words**: `expand_numbers()` in normalize — integers 0–999,999,999, decimals, negatives
 - **Syllabification**: New `syllable` module with `Syllable` type and `syllabify()` using Maximal Onset Principle with sonority constraints
 - **Syllable-weight stress**: `assign_stress_syllabic()` in prosody — heavy penult rule, antepenult fallback
+- **Phrase-level prosody**: Commas insert 150ms pause, periods/semicolons insert 300ms pause
 - **Dictionary extracted** to standalone `shabdakosh` crate (10,000+ entries, O(1) lookup, IPA, PLS, SSML)
 
 ### Changed

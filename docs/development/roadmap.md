@@ -28,7 +28,7 @@
 - [x] Number-to-words expansion (0–999,999,999, decimals, negatives)
 
 ### Prosody
-- [ ] Phrase-level prosody (comma = continuation rise, period = falling)
+- [x] Phrase-level prosody (comma = 150ms pause, period = 300ms pause)
 - [ ] Emphasis markers (CAPS = emphatic stress, *asterisks* = focus)
 - [ ] Speaking rate control (words per minute)
 - [ ] SSML subset support (<break>, <emphasis>, <prosody>)
@@ -66,7 +66,7 @@
 - [x] Morphological awareness (-tion, -ed, un-, re-)
 - [x] Silent letter handling
 - [x] Context-sensitive vowel rules
-- [ ] Phrase-level prosody (commas, periods)
+- [x] Phrase-level prosody (commas, periods)
 - [x] Number-to-words conversion
 - [x] All public types: Serialize + Deserialize + roundtrip tested
 - [x] Benchmarks baselined
