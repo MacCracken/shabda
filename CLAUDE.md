@@ -7,7 +7,7 @@
 - **Type**: Flat library crate
 - **License**: GPL-3.0
 - **MSRV**: 1.89
-- **Version**: SemVer 0.1.0
+- **Version**: SemVer — `VERSION` file is source of truth; use `scripts/version-bump.sh <ver>` to update
 
 ## Consumers
 
