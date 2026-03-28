@@ -49,12 +49,45 @@ fn bench_speak_sentence(c: &mut Criterion) {
     });
 }
 
+fn bench_dict_construction(c: &mut Criterion) {
+    c.bench_function("dict_english_construction", |b| {
+        b.iter(|| {
+            let dict = shabda::dictionary::PronunciationDict::english();
+            black_box(dict);
+        });
+    });
+}
+
+fn bench_dict_lookup(c: &mut Criterion) {
+    c.bench_function("dict_lookup_5k", |b| {
+        let g2p = G2PEngine::new(Language::English);
+        let words = ["the", "beautiful", "psychology", "computer", "knight", "enough"];
+        b.iter(|| {
+            for word in &words {
+                black_box(g2p.dictionary().lookup(word));
+            }
+        });
+    });
+}
+
+fn bench_dict_lookup_miss(c: &mut Criterion) {
+    c.bench_function("dict_lookup_miss", |b| {
+        let g2p = G2PEngine::new(Language::English);
+        b.iter(|| {
+            black_box(g2p.dictionary().lookup("zxqvbnm"));
+        });
+    });
+}
+
 criterion_group!(
     benches,
     bench_convert_hello_world,
     bench_convert_sentence,
     bench_speak_hello,
     bench_speak_sentence,
+    bench_dict_construction,
+    bench_dict_lookup,
+    bench_dict_lookup_miss,
 );
 
 criterion_main!(benches);

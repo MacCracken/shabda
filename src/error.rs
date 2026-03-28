@@ -22,6 +22,10 @@ pub enum ShabdaError {
     /// A conversion rule failed.
     #[error("rule error: {0}")]
     RuleError(String),
+
+    /// Dictionary parsing or I/O failed.
+    #[error("dictionary parse error: {0}")]
+    DictParseError(String),
 }
 
 /// Convenience type alias for shabda results.

@@ -46,6 +46,7 @@
 
 extern crate alloc;
 
+pub mod arpabet;
 pub mod dictionary;
 pub mod engine;
 pub mod error;
