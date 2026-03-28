@@ -17,7 +17,6 @@ dhvani (audio engine), vansh (voice AI shell), and any AGNOS component needing t
 
 - **shabdakosh**: Pronunciation dictionary (10K+ entries, ARPABET/IPA, user overlay)
 - **svara**: Phoneme types, synthesis engine, voice profiles
-- **hisab**: Math utilities
 
 ## Work Loop
 
