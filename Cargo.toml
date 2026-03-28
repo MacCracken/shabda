@@ -15,7 +15,7 @@ exclude = [".claude/", ".github/", "docs/", "scripts/"]
 
 [dependencies]
 hisab = { version = "1.2", default-features = false, features = ["num"] }
-shabdakosh = { version = "1", path = "../shabdakosh", default-features = false }
+shabdakosh = { version = "1", default-features = false }
 serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
 svara = { version = "1", default-features = false }
 thiserror = { version = "2", default-features = false }

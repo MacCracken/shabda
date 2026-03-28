@@ -216,9 +216,9 @@ checksum = "fc0fef456e4baa96da950455cd02c081ca953b141298e41db3fc7e36b1da849c"
 
 [[package]]
 name = "hisab"
-version = "1.2.0"
+version = "1.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f9919abccaae790b33a53d155c517488d9e5e49a42f0c230abe05bd67bfb0c54"
+checksum = "6548cb83e812c5113aba95e8f3990b30e8d2680b76832807473d04adeac95831"
 dependencies = [
  "glam",
  "serde",
@@ -508,6 +508,8 @@ dependencies = [
 [[package]]
 name = "shabdakosh"
 version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "158332dabf4e9af6ae17055dd8bc9243a23fe7e87490854664dae182dd87261c"
 dependencies = [
  "hashbrown",
  "serde",
