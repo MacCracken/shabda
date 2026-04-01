@@ -182,7 +182,10 @@ fn test_convert_with_speaking_rate() {
     let g2p = G2PEngine::new(Language::English);
     let normal = g2p.convert("hello world").unwrap();
     let slow = g2p
-        .convert_with("hello world", &ConvertOptions::new().with_speaking_rate(75.0))
+        .convert_with(
+            "hello world",
+            &ConvertOptions::new().with_speaking_rate(75.0),
+        )
         .unwrap();
     // Slow speech should have longer total duration
     let normal_dur: f32 = normal.iter().map(|e| e.duration).sum();
@@ -201,4 +204,40 @@ fn test_serde_roundtrip_convert_options() {
     let json = serde_json::to_string(&opts).unwrap();
     let roundtripped: ConvertOptions = serde_json::from_str(&json).unwrap();
     assert_eq!(opts, roundtripped);
+}
+
+// --- Accuracy feature tests ---
+
+#[test]
+fn test_abbreviation_in_pipeline() {
+    let g2p = G2PEngine::new(Language::English);
+    // "Dr." should be expanded to "doctor" and produce phonemes
+    let events = g2p.convert("Dr. Smith").unwrap();
+    assert!(!events.is_empty());
+}
+
+#[test]
+fn test_acronym_in_pipeline() {
+    let g2p = G2PEngine::new(Language::English);
+    // "FBI" spelled out should produce phonemes for each letter
+    let events = g2p.convert("the FBI").unwrap();
+    assert!(!events.is_empty());
+}
+
+#[test]
+fn test_foreign_word_in_pipeline() {
+    let g2p = G2PEngine::new(Language::English);
+    // "café" should still produce phonemes (diacritics stripped)
+    let events = g2p.convert("café").unwrap();
+    assert!(!events.is_empty());
+}
+
+#[test]
+fn test_heteronym_in_pipeline() {
+    let g2p = G2PEngine::new(Language::English);
+    // Both contexts should produce phonemes (even if same variant for now)
+    let events1 = g2p.convert("I read a book").unwrap();
+    let events2 = g2p.convert("please read this").unwrap();
+    assert!(!events1.is_empty());
+    assert!(!events2.is_empty());
 }

@@ -51,6 +51,7 @@ pub use shabdakosh::arpabet;
 pub use shabdakosh::dictionary;
 pub mod engine;
 pub mod error;
+pub mod heteronym;
 pub mod normalize;
 pub mod prosody;
 pub mod rules;

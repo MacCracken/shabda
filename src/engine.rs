@@ -280,10 +280,47 @@ impl G2PEngine {
                 continue;
             }
 
+            // Collect preceding content words for heteronym context
+            let preceding: Vec<&str> = words[..i]
+                .iter()
+                .rev()
+                .filter(|w| {
+                    **w != normalize::COMMA_PAUSE
+                        && **w != normalize::PERIOD_PAUSE
+                        && **w != normalize::EMPHASIS_START
+                        && **w != normalize::EMPHASIS_END
+                })
+                .take(3)
+                .copied()
+                .collect();
+
             // Look up in dictionary first, fall back to rules
-            let phonemes: Vec<Phoneme> = if let Some(dict_entry) = self.dictionary.lookup(word) {
+            let phonemes: Vec<Phoneme> = if let Some(rule) = crate::heteronym::lookup(word) {
+                // Heteronym: select variant based on context
+                if let Some(prons) = self.dictionary.lookup_all(word) {
+                    trace!(word, variant_count = prons.len(), "heteronym lookup");
+                    crate::heteronym::select_phonemes(rule, &preceding, prons).to_vec()
+                } else if let Some(dict_entry) = self.dictionary.lookup(word) {
+                    dict_entry.to_vec()
+                } else {
+                    match self.language {
+                        Language::English => rules::english_rules(word),
+                    }
+                }
+            } else if let Some(dict_entry) = self.dictionary.lookup(word) {
                 trace!(word, phoneme_count = dict_entry.len(), "dictionary hit");
                 dict_entry.to_vec()
+            } else if normalize::is_foreign_word(word) {
+                // Foreign word: strip diacritics and try rules
+                trace!(word, "foreign word detected, stripping diacritics");
+                let stripped = normalize::strip_diacritics(word);
+                if let Some(dict_entry) = self.dictionary.lookup(&stripped) {
+                    dict_entry.to_vec()
+                } else {
+                    match self.language {
+                        Language::English => rules::english_rules(&stripped),
+                    }
+                }
             } else {
                 trace!(word, "dictionary miss, falling back to rules");
                 match self.language {

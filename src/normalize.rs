@@ -30,7 +30,9 @@ pub const EMPHASIS_END: &str = "</emph>";
 /// ```
 #[must_use]
 pub fn normalize(text: &str) -> String {
-    let expanded = expand_numbers(text);
+    let abbr_expanded = expand_abbreviations(text);
+    let acronym_expanded = expand_acronyms(&abbr_expanded);
+    let expanded = expand_numbers(&acronym_expanded);
 
     let mut result = String::with_capacity(expanded.len());
     let mut prev_space = false;
@@ -76,7 +78,8 @@ pub fn normalize(text: &str) -> String {
 /// ```
 #[must_use]
 pub fn normalize_with_emphasis(text: &str) -> String {
-    let expanded = expand_numbers(text);
+    let abbr_expanded = expand_abbreviations(text);
+    let expanded = expand_numbers(&abbr_expanded);
 
     // First pass: detect emphasis patterns in the original casing
     let tokens: alloc::vec::Vec<&str> = expanded.split_whitespace().collect();
@@ -142,6 +145,240 @@ fn normalize_token_into(token: &str, result: &mut String) {
             prev_space = true;
         }
     }
+}
+
+/// Expands common abbreviations to their full spoken forms.
+///
+/// Runs before number expansion and punctuation handling so that
+/// abbreviations like "Dr." don't get their periods eaten by
+/// the pause marker logic. Only matches abbreviations at word boundaries.
+#[must_use]
+pub fn expand_abbreviations(text: &str) -> String {
+    let mut result = String::with_capacity(text.len());
+
+    // Split into words, expand abbreviations at word boundaries
+    let words: alloc::vec::Vec<&str> = text.split_whitespace().collect();
+    for (i, word) in words.iter().enumerate() {
+        if i > 0 {
+            result.push(' ');
+        }
+        if let Some((expansion, consumed)) = match_abbreviation(word) {
+            result.push_str(expansion);
+            // Append any remaining characters after the abbreviation
+            result.push_str(&word[consumed..]);
+        } else {
+            result.push_str(word);
+        }
+    }
+
+    result
+}
+
+/// Tries to match an abbreviation at the start of a word.
+/// Returns (expansion, bytes_consumed) if matched.
+fn match_abbreviation(text: &str) -> Option<(&'static str, usize)> {
+    static ABBREVIATIONS: &[(&str, &str)] = &[
+        ("approx.", "approximately"),
+        ("blvd.", "boulevard"),
+        ("capt.", "captain"),
+        ("col.", "colonel"),
+        ("corp.", "corporation"),
+        ("dept.", "department"),
+        ("govt.", "government"),
+        ("prof.", "professor"),
+        ("mrs.", "missus"),
+        ("mr.", "mister"),
+        ("dr.", "doctor"),
+        ("sr.", "senior"),
+        ("jr.", "junior"),
+        ("st.", "saint"),
+        ("ave.", "avenue"),
+        ("etc.", "et cetera"),
+        ("vs.", "versus"),
+        ("inc.", "incorporated"),
+        ("ltd.", "limited"),
+        ("gen.", "general"),
+        ("sgt.", "sergeant"),
+        ("lt.", "lieutenant"),
+        ("pt.", "point"),
+        ("ft.", "feet"),
+        ("mt.", "mount"),
+    ];
+
+    let lower = text.to_lowercase();
+
+    for &(abbr, expansion) in ABBREVIATIONS {
+        if lower.starts_with(abbr) {
+            // Must be followed by whitespace, end of string, or non-alphabetic
+            // to avoid matching "st." inside "test."
+            let after = &text[abbr.len()..];
+            if after.is_empty()
+                || after.starts_with(|c: char| c.is_whitespace() || !c.is_alphabetic())
+            {
+                return Some((expansion, abbr.len()));
+            }
+        }
+    }
+
+    None
+}
+
+/// Expands acronyms in text to spelled-out or pronounceable forms.
+///
+/// ALL-CAPS sequences of 2–5 letters are treated as acronyms:
+/// - Pronounceable (contains vowel, valid structure): lowercased as a word
+/// - Not pronounceable: spelled out with spaces ("FBI" → "f b i")
+#[must_use]
+pub fn expand_acronyms(text: &str) -> String {
+    let mut result = String::with_capacity(text.len());
+    let words: alloc::vec::Vec<&str> = text.split_whitespace().collect();
+
+    for (i, word) in words.iter().enumerate() {
+        if i > 0 {
+            result.push(' ');
+        }
+
+        // Strip trailing punctuation for detection
+        let (core, trailing) = split_trailing_punct(word);
+
+        if is_acronym(core) {
+            if is_pronounceable_acronym(core) {
+                // Treat as a word: lowercase it
+                for ch in core.chars() {
+                    result.push(ch.to_lowercase().next().unwrap_or(ch));
+                }
+            } else {
+                // Spell out: "FBI" → "f b i"
+                for (j, ch) in core.chars().enumerate() {
+                    if j > 0 {
+                        result.push(' ');
+                    }
+                    result.push(ch.to_lowercase().next().unwrap_or(ch));
+                }
+            }
+            result.push_str(trailing);
+        } else {
+            result.push_str(word);
+        }
+    }
+
+    result
+}
+
+/// Splits trailing punctuation from a word.
+fn split_trailing_punct(word: &str) -> (&str, &str) {
+    let end = word
+        .char_indices()
+        .rev()
+        .take_while(|(_, c)| !c.is_alphanumeric())
+        .last()
+        .map(|(i, _)| i)
+        .unwrap_or(word.len());
+    (&word[..end], &word[end..])
+}
+
+/// Returns true if the word is an acronym (3–5 uppercase letters).
+fn is_acronym(word: &str) -> bool {
+    let len = word.len();
+    (3..=5).contains(&len) && word.chars().all(|c| c.is_ascii_uppercase())
+}
+
+/// Returns true if an acronym is pronounceable as a word.
+///
+/// Heuristic: the word must begin with a valid English onset (single consonant
+/// or valid cluster) followed by a vowel, or start with a vowel. Words like
+/// "NASA" (C+V) are pronounceable; "FBI" (C+C with invalid cluster) are not.
+fn is_pronounceable_acronym(word: &str) -> bool {
+    let lower: String = word.to_lowercase();
+    let chars: alloc::vec::Vec<char> = lower.chars().collect();
+
+    fn is_vowel(c: char) -> bool {
+        matches!(c, 'a' | 'e' | 'i' | 'o' | 'u')
+    }
+
+    // Must have at least one vowel
+    if !chars.iter().any(|c| is_vowel(*c)) {
+        return false;
+    }
+
+    // Starts with vowel → pronounceable (e.g., "AIDS", "AWOL")
+    if is_vowel(chars[0]) {
+        return true;
+    }
+
+    // Starts with single consonant + vowel → pronounceable (e.g., "NASA", "NATO")
+    if chars.len() >= 2 && !is_vowel(chars[0]) && is_vowel(chars[1]) {
+        return true;
+    }
+
+    // Starts with valid English onset cluster + vowel
+    if chars.len() >= 3 && !is_vowel(chars[0]) && !is_vowel(chars[1]) && is_vowel(chars[2]) {
+        let cluster = (chars[0], chars[1]);
+        let valid_onsets = [
+            ('b', 'l'),
+            ('b', 'r'),
+            ('c', 'l'),
+            ('c', 'r'),
+            ('d', 'r'),
+            ('f', 'l'),
+            ('f', 'r'),
+            ('g', 'l'),
+            ('g', 'r'),
+            ('p', 'l'),
+            ('p', 'r'),
+            ('s', 'c'),
+            ('s', 'k'),
+            ('s', 'l'),
+            ('s', 'm'),
+            ('s', 'n'),
+            ('s', 'p'),
+            ('s', 't'),
+            ('s', 'w'),
+            ('t', 'r'),
+            ('t', 'w'),
+            ('t', 'h'),
+            ('s', 'h'),
+            ('c', 'h'),
+            ('w', 'h'),
+        ];
+        if valid_onsets.contains(&cluster) {
+            return true;
+        }
+    }
+
+    false
+}
+
+/// Returns true if a word contains diacritics or non-ASCII Latin characters,
+/// suggesting it may be a foreign loan word.
+#[must_use]
+pub fn is_foreign_word(word: &str) -> bool {
+    word.chars()
+        .any(|c| c.is_alphabetic() && !c.is_ascii_alphabetic() && is_latin_extended(c))
+}
+
+/// Returns true if the character is in a Latin extended Unicode block (accented letters).
+fn is_latin_extended(c: char) -> bool {
+    let cp = c as u32;
+    // Latin-1 Supplement (accented), Latin Extended-A, Latin Extended-B
+    (0x00C0..=0x024F).contains(&cp)
+}
+
+/// Strips diacritics from a word by mapping accented characters to ASCII equivalents.
+#[must_use]
+pub fn strip_diacritics(word: &str) -> String {
+    word.chars()
+        .map(|c| match c {
+            'á' | 'à' | 'â' | 'ä' | 'ã' => 'a',
+            'é' | 'è' | 'ê' | 'ë' => 'e',
+            'í' | 'ì' | 'î' | 'ï' => 'i',
+            'ó' | 'ò' | 'ô' | 'ö' | 'õ' => 'o',
+            'ú' | 'ù' | 'û' | 'ü' => 'u',
+            'ñ' => 'n',
+            'ç' => 's',
+            _ => c,
+        })
+        .collect()
 }
 
 /// Expands digit sequences in text to English words.
@@ -482,5 +719,70 @@ mod tests {
     fn test_normalize_period_pause() {
         let result = normalize("first. second");
         assert!(result.contains(PERIOD_PAUSE));
+    }
+
+    // --- Abbreviation tests ---
+
+    #[test]
+    fn test_expand_abbreviation_dr() {
+        assert_eq!(expand_abbreviations("Dr. Smith"), "doctor Smith");
+    }
+
+    #[test]
+    fn test_expand_abbreviation_mr() {
+        assert_eq!(expand_abbreviations("Mr. Jones"), "mister Jones");
+    }
+
+    #[test]
+    fn test_abbreviation_not_mid_word() {
+        // "test." should NOT match "st."
+        assert_eq!(expand_abbreviations("test."), "test.");
+    }
+
+    #[test]
+    fn test_abbreviation_in_normalize() {
+        let result = normalize("Dr. Smith is here");
+        assert!(result.contains("doctor"), "Dr. should expand to doctor");
+    }
+
+    // --- Acronym tests ---
+
+    #[test]
+    fn test_acronym_spell_out() {
+        // FBI has no vowel → spell out
+        assert_eq!(expand_acronyms("FBI"), "f b i");
+    }
+
+    #[test]
+    fn test_acronym_pronounceable() {
+        // NASA has vowels → keep as word
+        assert_eq!(expand_acronyms("NASA"), "nasa");
+    }
+
+    #[test]
+    fn test_acronym_short_not_matched() {
+        // 2-letter words not treated as acronyms
+        assert_eq!(expand_acronyms("I am OK"), "I am OK");
+    }
+
+    #[test]
+    fn test_acronym_in_sentence() {
+        assert_eq!(expand_acronyms("the FBI and NASA"), "the f b i and nasa");
+    }
+
+    // --- Foreign word tests ---
+
+    #[test]
+    fn test_foreign_word_detection() {
+        assert!(is_foreign_word("café"));
+        assert!(is_foreign_word("naïve"));
+        assert!(!is_foreign_word("hello"));
+    }
+
+    #[test]
+    fn test_strip_diacritics() {
+        assert_eq!(strip_diacritics("café"), "cafe");
+        assert_eq!(strip_diacritics("naïve"), "naive");
+        assert_eq!(strip_diacritics("résumé"), "resume");
     }
 }
