@@ -21,6 +21,10 @@ pub enum Language {
     English,
     /// Spanish (Castilian).
     Spanish,
+    /// German (Standard High German).
+    German,
+    /// Hindi (Modern Standard Hindi, Devanagari script).
+    Hindi,
 }
 
 /// Detects the most likely language for the given text based on script analysis.
@@ -215,7 +219,7 @@ impl G2PEngine {
     pub fn new(language: Language) -> Self {
         let dictionary = match language {
             Language::English => PronunciationDict::english(),
-            Language::Spanish => PronunciationDict::new(),
+            Language::Spanish | Language::German | Language::Hindi => PronunciationDict::new(),
         };
         Self {
             language,
@@ -393,6 +397,8 @@ impl G2PEngine {
                     match self.language {
                         Language::English => rules::english_rules(word),
                         Language::Spanish => rules::spanish_rules(word),
+                        Language::German => rules::german_rules(word),
+                        Language::Hindi => rules::hindi_rules(word),
                     }
                 }
             } else if let Some(dict_entry) = self.dictionary.lookup(word) {
@@ -408,6 +414,8 @@ impl G2PEngine {
                     match self.language {
                         Language::English => rules::english_rules(&stripped),
                         Language::Spanish => rules::spanish_rules(&stripped),
+                        Language::German => rules::german_rules(&stripped),
+                        Language::Hindi => rules::hindi_rules(&stripped),
                     }
                 }
             } else {
@@ -415,6 +423,8 @@ impl G2PEngine {
                 match self.language {
                     Language::English => rules::english_rules(word),
                     Language::Spanish => rules::spanish_rules(word),
+                    Language::German => rules::german_rules(word),
+                    Language::Hindi => rules::hindi_rules(word),
                 }
             };
 
@@ -700,6 +710,8 @@ impl G2PEngine {
                 match self.language {
                     Language::English => rules::english_rules(word),
                     Language::Spanish => rules::spanish_rules(word),
+                    Language::German => rules::german_rules(word),
+                    Language::Hindi => rules::hindi_rules(word),
                 }
             };
 

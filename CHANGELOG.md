@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.0] — 2026-04-01
+
+German and Hindi G2P support.
+
+- **Breaking**: `Language` enum expanded with `German` and `Hindi` variants
+- **Feature**: German G2P rules — sch, ch (ich/ach-Laut), ei/ie/eu digraphs, umlauts, final devoicing, double consonants, ß
+- **Feature**: Hindi G2P rules — Devanagari consonants/vowels, inherent schwa with deletion, virama/matra handling, romanized fallback
+- **Feature**: German and Hindi IPA mappings for varna inventory validation
+
 ## [2.0.0] — 2026-04-01
 
 Multi-language support and phonotactic validation.

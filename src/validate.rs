@@ -102,6 +102,8 @@ pub fn phoneme_to_ipa_for(phoneme: Phoneme, language: Language) -> Option<&'stat
     match language {
         Language::English => phoneme_to_ipa(phoneme),
         Language::Spanish => spanish_phoneme_to_ipa(phoneme),
+        Language::German => german_phoneme_to_ipa(phoneme),
+        Language::Hindi => hindi_phoneme_to_ipa(phoneme),
     }
 }
 
@@ -144,12 +146,100 @@ fn spanish_phoneme_to_ipa(phoneme: Phoneme) -> Option<&'static str> {
     }
 }
 
+/// Maps a svara `Phoneme` to its IPA string in varna's German inventory.
+fn german_phoneme_to_ipa(phoneme: Phoneme) -> Option<&'static str> {
+    match phoneme {
+        // Vowels (short)
+        Phoneme::VowelNearI => Some("ɪ"),
+        Phoneme::VowelOpenE => Some("ɛ"),
+        Phoneme::VowelOpenA => Some("a"),
+        Phoneme::VowelSchwa => Some("ə"),
+        // Vowels (long)
+        Phoneme::VowelE => Some("iː"),
+        Phoneme::VowelO => Some("oː"),
+        Phoneme::VowelU => Some("uː"),
+        Phoneme::VowelAsh => Some("aː"),
+        // Plosives
+        Phoneme::PlosiveP => Some("p"),
+        Phoneme::PlosiveB => Some("b"),
+        Phoneme::PlosiveT => Some("t"),
+        Phoneme::PlosiveD => Some("d"),
+        Phoneme::PlosiveK => Some("k"),
+        Phoneme::PlosiveG => Some("ɡ"),
+        // Fricatives
+        Phoneme::FricativeF => Some("f"),
+        Phoneme::FricativeV => Some("v"),
+        Phoneme::FricativeS => Some("s"),
+        Phoneme::FricativeZ => Some("z"),
+        Phoneme::FricativeSh => Some("ʃ"),
+        Phoneme::FricativeH => Some("h"),
+        // Nasals
+        Phoneme::NasalM => Some("m"),
+        Phoneme::NasalN => Some("n"),
+        Phoneme::NasalNg => Some("ŋ"),
+        // Affricates
+        Phoneme::AffricateCh => Some("t͡ʃ"),
+        // Approximants & lateral
+        Phoneme::ApproximantJ => Some("j"),
+        Phoneme::LateralL => Some("l"),
+        Phoneme::ApproximantR => Some("ʁ"),
+        // Not mapped
+        Phoneme::Silence => None,
+        _ => None,
+    }
+}
+
+/// Maps a svara `Phoneme` to its IPA string in varna's Hindi inventory.
+fn hindi_phoneme_to_ipa(phoneme: Phoneme) -> Option<&'static str> {
+    match phoneme {
+        // Vowels
+        Phoneme::VowelSchwa => Some("ə"),
+        Phoneme::VowelNearI => Some("i"),
+        Phoneme::VowelE => Some("iː"),
+        Phoneme::VowelCupV => Some("u"),
+        Phoneme::VowelU => Some("uː"),
+        Phoneme::VowelOpenE => Some("e"),
+        Phoneme::VowelO => Some("o"),
+        Phoneme::VowelOpenA => Some("ɛː"),
+        Phoneme::VowelOpenO => Some("ɔː"),
+        // Plosives (unaspirated only — svara doesn't have aspirated variants)
+        Phoneme::PlosiveP => Some("p"),
+        Phoneme::PlosiveB => Some("b"),
+        Phoneme::PlosiveT => Some("t̪"),
+        Phoneme::PlosiveD => Some("d̪"),
+        Phoneme::PlosiveK => Some("k"),
+        Phoneme::PlosiveG => Some("ɡ"),
+        // Fricatives
+        Phoneme::FricativeS => Some("s"),
+        Phoneme::FricativeH => Some("ɦ"),
+        Phoneme::FricativeF => Some("f"),
+        Phoneme::FricativeSh => Some("ɕ"),
+        // Nasals
+        Phoneme::NasalM => Some("m"),
+        Phoneme::NasalN => Some("n"),
+        Phoneme::NasalNg => Some("ŋ"),
+        // Approximants & lateral
+        Phoneme::ApproximantJ => Some("j"),
+        Phoneme::LateralL => Some("l"),
+        Phoneme::TapFlap => Some("r"),
+        Phoneme::FricativeV => Some("ʋ"),
+        // Affricates
+        Phoneme::AffricateCh => Some("t͡ɕ"),
+        Phoneme::AffricateJ => Some("d͡ʑ"),
+        // Not mapped
+        Phoneme::Silence => None,
+        _ => None,
+    }
+}
+
 /// Returns the varna `PhonemeInventory` for the given language.
 #[must_use]
 pub fn inventory_for(language: Language) -> PhonemeInventory {
     match language {
         Language::English => varna::phoneme::english(),
         Language::Spanish => varna::phoneme::inventories::spanish(),
+        Language::German => varna::phoneme::inventories::german(),
+        Language::Hindi => varna::phoneme::inventories::hindi(),
     }
 }
 
@@ -160,7 +250,7 @@ pub fn inventory_for(language: Language) -> PhonemeInventory {
 pub fn phonotactics_for(language: Language) -> Option<varna::phoneme::syllable::Phonotactics> {
     match language {
         Language::English => Some(varna::phoneme::syllable::english_phonotactics()),
-        Language::Spanish => None, // not yet defined in varna
+        Language::Spanish | Language::German | Language::Hindi => None, // not yet defined in varna
     }
 }
 

@@ -538,6 +538,332 @@ fn spanish_match(chars: &[char]) -> PatternResult {
     }
 }
 
+// =============================================================================
+// German G2P rules
+// =============================================================================
+
+/// Converts a single German word to phonemes using letter-to-sound rules.
+///
+/// German orthography is fairly regular. Key features: sch→/ʃ/, ch→/ç/ or /x/,
+/// ei/ie/eu/äu digraphs, umlauts (ä/ö/ü), final devoicing (b→p, d→t, g→k).
+#[must_use]
+pub fn german_rules(word: &str) -> Vec<Phoneme> {
+    let chars: Vec<char> = word.to_lowercase().chars().collect();
+    if chars.is_empty() {
+        return Vec::new();
+    }
+
+    let mut phonemes = Vec::new();
+    let mut i = 0;
+
+    while i < chars.len() {
+        let remaining = &chars[i..];
+        let result = german_match(remaining);
+        i += result.consumed();
+        phonemes.extend(result);
+    }
+
+    // Final devoicing: voiced → voiceless at word end
+    if let Some(last) = phonemes.last_mut() {
+        *last = match *last {
+            Phoneme::PlosiveB => Phoneme::PlosiveP,
+            Phoneme::PlosiveD => Phoneme::PlosiveT,
+            Phoneme::PlosiveG => Phoneme::PlosiveK,
+            Phoneme::FricativeV => Phoneme::FricativeF,
+            Phoneme::FricativeZ => Phoneme::FricativeS,
+            other => other,
+        };
+    }
+
+    phonemes
+}
+
+// German static pattern constants
+static DE_SCH: &[Phoneme] = &[Phoneme::FricativeSh];
+static DE_EI: &[Phoneme] = &[Phoneme::DiphthongAI];
+static DE_IE: &[Phoneme] = &[Phoneme::VowelE]; // long /iː/
+static DE_EU: &[Phoneme] = &[Phoneme::DiphthongOI];
+static DE_CH: &[Phoneme] = &[Phoneme::FricativeSh]; // ich/ach-Laut — closest in svara
+static DE_CK: &[Phoneme] = &[Phoneme::PlosiveK];
+static DE_PF: &[Phoneme] = &[Phoneme::PlosiveP, Phoneme::FricativeF];
+static DE_TS: &[Phoneme] = &[Phoneme::PlosiveT, Phoneme::FricativeS];
+
+fn german_match(chars: &[char]) -> PatternResult {
+    if chars.is_empty() {
+        return PatternResult::Static(1, &[]);
+    }
+
+    // 3-letter patterns
+    if chars.len() >= 3 && chars[0] == 's' && chars[1] == 'c' && chars[2] == 'h' {
+        return PatternResult::Static(3, DE_SCH);
+    }
+
+    // 2-letter patterns
+    if chars.len() >= 2 {
+        match (chars[0], chars[1]) {
+            ('c', 'h') => {
+                // ich-Laut after front vowels/consonants, ach-Laut after back vowels
+                // Simplified: use ich-Laut as default
+                return PatternResult::Static(2, DE_CH);
+            }
+            ('c', 'k') => return PatternResult::Static(2, DE_CK),
+            ('e', 'i') => return PatternResult::Static(2, DE_EI),
+            ('i', 'e') => return PatternResult::Static(2, DE_IE),
+            ('e', 'u') => return PatternResult::Static(2, DE_EU),
+            ('ä', 'u') => return PatternResult::Static(2, DE_EU),
+            ('p', 'f') => return PatternResult::Static(2, DE_PF),
+            ('t', 'z') | ('z', _) if chars[0] == 'z' => {}
+            ('s', 'p') | ('s', 't') => {
+                // sp/st at word start → /ʃp/, /ʃt/
+                return PatternResult::Dynamic(1, alloc::vec![Phoneme::FricativeSh]);
+            }
+            ('t', 'h') => return PatternResult::Static(2, &[Phoneme::PlosiveT]),
+            ('p', 'h') => return PatternResult::Static(2, &[Phoneme::FricativeF]),
+            ('q', 'u') => {
+                return PatternResult::Static(2, &[Phoneme::PlosiveK, Phoneme::FricativeV]);
+            }
+            // Double consonants → single phoneme
+            (a, b) if a == b && !is_vowel_char(a) => {
+                return PatternResult::Static(
+                    2,
+                    match a {
+                        'b' => &[Phoneme::PlosiveB],
+                        'c' => &[Phoneme::PlosiveK],
+                        'd' => &[Phoneme::PlosiveD],
+                        'f' => &[Phoneme::FricativeF],
+                        'g' => &[Phoneme::PlosiveG],
+                        'l' => &[Phoneme::LateralL],
+                        'm' => &[Phoneme::NasalM],
+                        'n' => &[Phoneme::NasalN],
+                        'p' => &[Phoneme::PlosiveP],
+                        'r' => &[Phoneme::ApproximantR],
+                        's' => &[Phoneme::FricativeS],
+                        't' => &[Phoneme::PlosiveT],
+                        _ => &[],
+                    },
+                );
+            }
+            _ => {}
+        }
+    }
+
+    // Single characters
+    match chars[0] {
+        'a' | 'á' => PatternResult::Static(1, &[Phoneme::VowelOpenA]),
+        'ä' => PatternResult::Static(1, &[Phoneme::VowelOpenE]),
+        'e' => PatternResult::Static(1, &[Phoneme::VowelOpenE]),
+        'i' => PatternResult::Static(1, &[Phoneme::VowelNearI]),
+        'o' => PatternResult::Static(1, &[Phoneme::VowelO]),
+        'ö' => PatternResult::Static(1, &[Phoneme::VowelOpenE]), // /œ/ — closest
+        'u' => PatternResult::Static(1, &[Phoneme::VowelU]),
+        'ü' => PatternResult::Static(1, &[Phoneme::VowelE]), // /yː/ — closest
+        'b' => PatternResult::Static(1, &[Phoneme::PlosiveB]),
+        'c' => PatternResult::Static(1, &[Phoneme::PlosiveK]),
+        'd' => PatternResult::Static(1, &[Phoneme::PlosiveD]),
+        'f' => PatternResult::Static(1, &[Phoneme::FricativeF]),
+        'g' => PatternResult::Static(1, &[Phoneme::PlosiveG]),
+        'h' => PatternResult::Static(1, &[Phoneme::FricativeH]),
+        'j' => PatternResult::Static(1, &[Phoneme::ApproximantJ]),
+        'k' => PatternResult::Static(1, &[Phoneme::PlosiveK]),
+        'l' => PatternResult::Static(1, &[Phoneme::LateralL]),
+        'm' => PatternResult::Static(1, &[Phoneme::NasalM]),
+        'n' => PatternResult::Static(1, &[Phoneme::NasalN]),
+        'p' => PatternResult::Static(1, &[Phoneme::PlosiveP]),
+        'r' => PatternResult::Static(1, &[Phoneme::ApproximantR]),
+        's' => {
+            // s before vowel → voiced /z/
+            if chars.len() > 1 && is_vowel_char(chars[1]) {
+                PatternResult::Static(1, &[Phoneme::FricativeZ])
+            } else {
+                PatternResult::Static(1, &[Phoneme::FricativeS])
+            }
+        }
+        'ß' => PatternResult::Static(1, &[Phoneme::FricativeS]),
+        't' => PatternResult::Static(1, &[Phoneme::PlosiveT]),
+        'v' => PatternResult::Static(1, &[Phoneme::FricativeF]), // German v = /f/ typically
+        'w' => PatternResult::Static(1, &[Phoneme::FricativeV]), // German w = /v/
+        'x' => PatternResult::Static(1, &[Phoneme::PlosiveK]),
+        'y' => PatternResult::Static(1, &[Phoneme::VowelE]), // /yː/
+        'z' => PatternResult::Static(1, DE_TS),
+        '\'' | '-' => PatternResult::Static(1, &[]),
+        _ => PatternResult::Static(1, &[]),
+    }
+}
+
+// =============================================================================
+// Hindi G2P rules (Devanagari)
+// =============================================================================
+
+/// Converts a single Hindi word (Devanagari script) to phonemes.
+///
+/// Hindi/Devanagari has a near-1:1 grapheme-to-phoneme mapping. Each
+/// consonant has an inherent schwa that is suppressed by virama (्) or
+/// at word-final position (schwa deletion rule).
+#[must_use]
+pub fn hindi_rules(word: &str) -> Vec<Phoneme> {
+    let chars: Vec<char> = word.chars().collect();
+    if chars.is_empty() {
+        return Vec::new();
+    }
+
+    let mut phonemes = Vec::new();
+    let mut i = 0;
+
+    while i < chars.len() {
+        let ch = chars[i];
+        let next = chars.get(i + 1).copied();
+
+        match ch {
+            // Independent vowels
+            'अ' => phonemes.push(Phoneme::VowelSchwa),
+            'आ' | 'ा' => phonemes.push(Phoneme::VowelOpenA),
+            'इ' | 'ि' => phonemes.push(Phoneme::VowelNearI),
+            'ई' | 'ी' => phonemes.push(Phoneme::VowelE),
+            'उ' | 'ु' => phonemes.push(Phoneme::VowelCupV),
+            'ऊ' | 'ू' => phonemes.push(Phoneme::VowelU),
+            'ए' | 'े' => phonemes.push(Phoneme::VowelOpenE),
+            'ऐ' | 'ै' => phonemes.push(Phoneme::VowelOpenA),
+            'ओ' | 'ो' => phonemes.push(Phoneme::VowelO),
+            'औ' | 'ौ' => phonemes.push(Phoneme::VowelOpenO),
+            'ऋ' | 'ृ' => {
+                phonemes.push(Phoneme::TapFlap);
+                phonemes.push(Phoneme::VowelNearI);
+            }
+
+            // Velar consonants
+            'क' => push_consonant(&mut phonemes, Phoneme::PlosiveK, next),
+            'ख' => push_consonant(&mut phonemes, Phoneme::PlosiveK, next), // aspirated
+            'ग' => push_consonant(&mut phonemes, Phoneme::PlosiveG, next),
+            'घ' => push_consonant(&mut phonemes, Phoneme::PlosiveG, next), // aspirated
+            'ङ' => push_consonant(&mut phonemes, Phoneme::NasalNg, next),
+
+            // Palatal consonants
+            'च' => push_consonant(&mut phonemes, Phoneme::AffricateCh, next),
+            'छ' => push_consonant(&mut phonemes, Phoneme::AffricateCh, next),
+            'ज' => push_consonant(&mut phonemes, Phoneme::AffricateJ, next),
+            'झ' => push_consonant(&mut phonemes, Phoneme::AffricateJ, next),
+            'ञ' => push_consonant(&mut phonemes, Phoneme::NasalN, next),
+
+            // Retroflex consonants (mapped to closest alveolar equivalents)
+            'ट' => push_consonant(&mut phonemes, Phoneme::PlosiveT, next),
+            'ठ' => push_consonant(&mut phonemes, Phoneme::PlosiveT, next),
+            'ड' => push_consonant(&mut phonemes, Phoneme::PlosiveD, next),
+            'ढ' => push_consonant(&mut phonemes, Phoneme::PlosiveD, next),
+            'ण' => push_consonant(&mut phonemes, Phoneme::NasalN, next),
+
+            // Dental consonants
+            'त' => push_consonant(&mut phonemes, Phoneme::PlosiveT, next),
+            'थ' => push_consonant(&mut phonemes, Phoneme::PlosiveT, next),
+            'द' => push_consonant(&mut phonemes, Phoneme::PlosiveD, next),
+            'ध' => push_consonant(&mut phonemes, Phoneme::PlosiveD, next),
+            'न' => push_consonant(&mut phonemes, Phoneme::NasalN, next),
+
+            // Labial consonants
+            'प' => push_consonant(&mut phonemes, Phoneme::PlosiveP, next),
+            'फ' => push_consonant(&mut phonemes, Phoneme::PlosiveP, next),
+            'ब' => push_consonant(&mut phonemes, Phoneme::PlosiveB, next),
+            'भ' => push_consonant(&mut phonemes, Phoneme::PlosiveB, next),
+            'म' => push_consonant(&mut phonemes, Phoneme::NasalM, next),
+
+            // Semi-vowels and liquids
+            'य' => push_consonant(&mut phonemes, Phoneme::ApproximantJ, next),
+            'र' => push_consonant(&mut phonemes, Phoneme::TapFlap, next),
+            'ल' => push_consonant(&mut phonemes, Phoneme::LateralL, next),
+            'व' => push_consonant(&mut phonemes, Phoneme::FricativeV, next),
+
+            // Sibilants
+            'श' => push_consonant(&mut phonemes, Phoneme::FricativeSh, next),
+            'ष' => push_consonant(&mut phonemes, Phoneme::FricativeSh, next),
+            'स' => push_consonant(&mut phonemes, Phoneme::FricativeS, next),
+            'ह' => push_consonant(&mut phonemes, Phoneme::FricativeH, next),
+
+            // Nukta (़ U+093C) — combines with preceding consonant for borrowed sounds.
+            // The base consonant was already handled above; nukta modifies it.
+            // We skip the nukta mark itself here; the base consonant match handles the sound.
+            '\u{093C}' => {}
+
+            // Virama (halant) — suppresses inherent schwa, handled by push_consonant
+            '्' => {}
+
+            // Anusvara (nasal) and visarga
+            'ं' => phonemes.push(Phoneme::NasalN),
+            'ः' => phonemes.push(Phoneme::FricativeH),
+
+            // Chandrabindu (nasalization marker) — approximate with nasal
+            'ँ' => phonemes.push(Phoneme::NasalN),
+
+            // Latin fallback for romanized Hindi
+            c if c.is_ascii_alphabetic() => {
+                let lower = c.to_lowercase().next().unwrap_or(c);
+                match lower {
+                    'a' => phonemes.push(Phoneme::VowelSchwa),
+                    'e' => phonemes.push(Phoneme::VowelOpenE),
+                    'i' => phonemes.push(Phoneme::VowelNearI),
+                    'o' => phonemes.push(Phoneme::VowelO),
+                    'u' => phonemes.push(Phoneme::VowelCupV),
+                    'k' => phonemes.push(Phoneme::PlosiveK),
+                    'g' => phonemes.push(Phoneme::PlosiveG),
+                    'c' => phonemes.push(Phoneme::AffricateCh),
+                    'j' => phonemes.push(Phoneme::AffricateJ),
+                    't' => phonemes.push(Phoneme::PlosiveT),
+                    'd' => phonemes.push(Phoneme::PlosiveD),
+                    'n' => phonemes.push(Phoneme::NasalN),
+                    'p' => phonemes.push(Phoneme::PlosiveP),
+                    'b' => phonemes.push(Phoneme::PlosiveB),
+                    'm' => phonemes.push(Phoneme::NasalM),
+                    'y' => phonemes.push(Phoneme::ApproximantJ),
+                    'r' => phonemes.push(Phoneme::TapFlap),
+                    'l' => phonemes.push(Phoneme::LateralL),
+                    'v' | 'w' => phonemes.push(Phoneme::FricativeV),
+                    's' => phonemes.push(Phoneme::FricativeS),
+                    'h' => phonemes.push(Phoneme::FricativeH),
+                    'f' => phonemes.push(Phoneme::FricativeF),
+                    'z' => phonemes.push(Phoneme::FricativeZ),
+                    _ => {}
+                }
+            }
+
+            _ => {} // skip unknown characters
+        }
+
+        i += 1;
+    }
+
+    // Hindi schwa deletion: remove word-final schwa
+    if phonemes.last() == Some(&Phoneme::VowelSchwa) && phonemes.len() > 1 {
+        phonemes.pop();
+    }
+
+    phonemes
+}
+
+/// Pushes a consonant phoneme, adding inherent schwa unless followed by
+/// a vowel matra or virama.
+fn push_consonant(phonemes: &mut Vec<Phoneme>, consonant: Phoneme, next: Option<char>) {
+    phonemes.push(consonant);
+    // Add inherent schwa unless next char is a vowel matra or virama
+    let suppress = matches!(
+        next,
+        Some(
+            'ा' | 'ि'
+                | 'ी'
+                | 'ु'
+                | 'ू'
+                | 'े'
+                | 'ै'
+                | 'ो'
+                | 'ौ'
+                | 'ृ'
+                | '्'
+                | 'ं'
+                | 'ँ'
+        )
+    );
+    if !suppress {
+        phonemes.push(Phoneme::VowelSchwa);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -750,7 +1076,101 @@ mod tests {
     #[test]
     fn test_spanish_nino() {
         let phonemes = spanish_rules("niño");
-        // n→NasalN, i→VowelNearI, ñ→NasalNg (palatal nasal), o→VowelO
         assert!(phonemes.contains(&Phoneme::NasalNg));
+    }
+
+    // --- German G2P tests ---
+
+    #[test]
+    fn test_german_hallo() {
+        let phonemes = german_rules("hallo");
+        assert_eq!(phonemes[0], Phoneme::FricativeH);
+        assert!(!phonemes.is_empty());
+    }
+
+    #[test]
+    fn test_german_sch() {
+        let phonemes = german_rules("schule");
+        assert_eq!(phonemes[0], Phoneme::FricativeSh);
+    }
+
+    #[test]
+    fn test_german_ch() {
+        let phonemes = german_rules("ich");
+        assert!(phonemes.contains(&Phoneme::FricativeSh)); // ich-Laut
+    }
+
+    #[test]
+    fn test_german_ei() {
+        let phonemes = german_rules("ein");
+        assert!(phonemes.contains(&Phoneme::DiphthongAI));
+    }
+
+    #[test]
+    fn test_german_ie() {
+        let phonemes = german_rules("die");
+        assert!(phonemes.contains(&Phoneme::VowelE)); // long /iː/
+    }
+
+    #[test]
+    fn test_german_final_devoicing() {
+        let phonemes = german_rules("hund");
+        // Final d → t
+        assert_eq!(*phonemes.last().unwrap(), Phoneme::PlosiveT);
+    }
+
+    #[test]
+    fn test_german_umlaut() {
+        let phonemes = german_rules("über");
+        assert_eq!(phonemes[0], Phoneme::VowelE); // ü → /yː/ mapped to VowelE
+    }
+
+    #[test]
+    fn test_german_z() {
+        let phonemes = german_rules("zeit");
+        // z → /ts/
+        assert_eq!(phonemes[0], Phoneme::PlosiveT);
+        assert_eq!(phonemes[1], Phoneme::FricativeS);
+    }
+
+    #[test]
+    fn test_german_empty() {
+        assert!(german_rules("").is_empty());
+    }
+
+    // --- Hindi G2P tests ---
+
+    #[test]
+    fn test_hindi_namaste() {
+        let phonemes = hindi_rules("नमस्ते");
+        // न→n+schwa, म→m+schwa, स→s (virama suppresses schwa), ते→t+e
+        assert!(!phonemes.is_empty());
+        assert!(phonemes.contains(&Phoneme::NasalN));
+        assert!(phonemes.contains(&Phoneme::NasalM));
+    }
+
+    #[test]
+    fn test_hindi_simple_ka() {
+        let phonemes = hindi_rules("क");
+        // Single consonant → k + inherent schwa (but schwa deletion removes final)
+        assert_eq!(phonemes[0], Phoneme::PlosiveK);
+    }
+
+    #[test]
+    fn test_hindi_vowels() {
+        let phonemes = hindi_rules("आ");
+        assert_eq!(phonemes[0], Phoneme::VowelOpenA);
+    }
+
+    #[test]
+    fn test_hindi_romanized() {
+        let phonemes = hindi_rules("namaste");
+        assert!(!phonemes.is_empty());
+        assert!(phonemes.contains(&Phoneme::NasalN));
+    }
+
+    #[test]
+    fn test_hindi_empty() {
+        assert!(hindi_rules("").is_empty());
     }
 }

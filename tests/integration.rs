@@ -381,6 +381,81 @@ fn test_serde_roundtrip_spanish_language() {
     assert_eq!(lang, roundtripped);
 }
 
+// --- German tests ---
+
+#[test]
+fn test_german_hallo_welt() {
+    let g2p = G2PEngine::new(Language::German);
+    let events = g2p.convert("hallo welt").unwrap();
+    assert!(!events.is_empty());
+}
+
+#[test]
+fn test_german_speak() {
+    let g2p = G2PEngine::new(Language::German);
+    let voice = svara::voice::VoiceProfile::new_male();
+    let samples = g2p.speak("guten tag", &voice, 44100.0).unwrap();
+    assert!(!samples.is_empty());
+}
+
+#[test]
+fn test_serde_roundtrip_german_language() {
+    let lang = Language::German;
+    let json = serde_json::to_string(&lang).unwrap();
+    let roundtripped: Language = serde_json::from_str(&json).unwrap();
+    assert_eq!(lang, roundtripped);
+}
+
+// --- Hindi tests ---
+
+#[test]
+fn test_hindi_namaste() {
+    let g2p = G2PEngine::new(Language::Hindi);
+    let events = g2p.convert("नमस्ते").unwrap();
+    assert!(!events.is_empty());
+}
+
+#[test]
+fn test_hindi_romanized() {
+    let g2p = G2PEngine::new(Language::Hindi);
+    let events = g2p.convert("namaste").unwrap();
+    assert!(!events.is_empty());
+}
+
+#[test]
+fn test_hindi_speak() {
+    let g2p = G2PEngine::new(Language::Hindi);
+    let voice = svara::voice::VoiceProfile::new_male();
+    let samples = g2p.speak("namaste", &voice, 44100.0).unwrap();
+    assert!(!samples.is_empty());
+}
+
+#[test]
+fn test_serde_roundtrip_hindi_language() {
+    let lang = Language::Hindi;
+    let json = serde_json::to_string(&lang).unwrap();
+    let roundtripped: Language = serde_json::from_str(&json).unwrap();
+    assert_eq!(lang, roundtripped);
+}
+
+#[cfg(feature = "varna")]
+#[test]
+fn test_phoneme_inventory_german() {
+    let g2p = G2PEngine::new(Language::German);
+    let inv = g2p.phoneme_inventory();
+    assert!(inv.has("p"));
+    assert!(inv.has("ʃ"));
+}
+
+#[cfg(feature = "varna")]
+#[test]
+fn test_phoneme_inventory_hindi() {
+    let g2p = G2PEngine::new(Language::Hindi);
+    let inv = g2p.phoneme_inventory();
+    assert!(inv.has("p"));
+    assert!(inv.has("ə"));
+}
+
 #[cfg(feature = "varna")]
 #[test]
 fn test_phoneme_inventory_english() {
