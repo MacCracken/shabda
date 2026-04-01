@@ -17,25 +17,30 @@ dhvani (audio engine), vansh (voice AI shell), and any AGNOS component needing t
 
 - **shabdakosh**: Pronunciation dictionary (10K+ entries, ARPABET/IPA, user overlay)
 - **svara**: Phoneme types, synthesis engine, voice profiles
+- **varna** (optional): Phoneme inventories, script detection, language data (50+ languages)
 
 ## Work Loop
 
 1. Read the relevant code before proposing changes
 2. Make the change
-3. `cargo fmt`
-4. `cargo clippy --all-features --all-targets -- -D warnings`
-5. `cargo test --all-features`
-6. `cargo test --doc`
-7. `cargo check --no-default-features` (no_std verification)
-8. `cargo bench` (if performance-relevant)
-9. Update CHANGELOG.md if user-facing
-10. Update docs/development/roadmap.md if completing a roadmap item
+3. Cleanliness check:
+   - `cargo fmt`
+   - `cargo clippy --all-features --all-targets -- -D warnings`
+   - `cargo audit`
+   - `cargo deny check`
+   - `RUSTDOCFLAGS="-D warnings" cargo doc --all-features --no-deps`
+4. `cargo test --all-features`
+5. `cargo test --doc`
+6. `cargo check --no-default-features` (no_std verification)
+7. `cargo bench` or `./scripts/bench-history.sh` (if performance-relevant)
+8. Update CHANGELOG.md if user-facing
+9. Update docs/development/roadmap.md if completing a roadmap item
 
 ## Task Sizing
 
 - **Small**: Single-rule addition, test fix, doc tweak
-- **Medium**: New rule pattern set (e.g., silent letters), prosody feature
-- **Large**: Syllabification algorithm, morphological awareness, new language
+- **Medium**: New rule pattern set (e.g., emphasis markers), prosody feature, varna inventory gap fixes
+- **Large**: New language G2P module, SSML parser, heteronym disambiguation
 
 ## Key Principles
 
@@ -47,13 +52,24 @@ dhvani (audio engine), vansh (voice AI shell), and any AGNOS component needing t
 - All types must have serde roundtrip tests
 - Dictionary-first, rules as fallback — accuracy over speed
 - Phoneme output must be compatible with svara's PhonemeEvent
+- When `varna` feature is active, debug assertions validate phoneme output against varna's inventory
+
+## Feature Flags
+
+- `std` (default) — Standard library; disable for `no_std` + `alloc`
+- `logging` — Structured logging via tracing-subscriber
+- `json` — JSON serialization via serde_json
+- `varna` — Phoneme inventory validation and language detection via varna
+- `full` — All of the above
 
 ## Module Structure
 
-- `engine.rs` — G2PEngine, Language, convert(), speak()
+- `engine.rs` — G2PEngine, Language, convert(), speak(), detect_language() (varna feature)
 - `rules.rs` — English letter-to-sound rules (fallback when dictionary misses)
 - `normalize.rs` — Text normalization, sentence type detection
 - `prosody.rs` — Stress assignment, intonation mapping
+- `syllable.rs` — Syllabification using Maximal Onset Principle with sonority constraints
+- `validate.rs` — Phoneme→IPA mapping, inventory validation via varna (varna feature)
 - `error.rs` — ShabdaError (wraps ShabdakoshError via From impl)
 - Re-exports from shabdakosh: `arpabet`, `dictionary`
 
