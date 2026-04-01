@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **varna integration**: Optional `varna` feature flag for phoneme inventory validation and language detection
+- **Phoneme validation**: `validate` module maps svara phonemes to IPA and validates against varna's `PhonemeInventory`; debug assertions in `convert()` catch invalid phoneme output during development
+- **Language detection**: `detect_language()` auto-detects language from text using varna's script/Unicode range data
 - **Silent letter handling**: kn, gn, wr, ps, pn, mn (word-initial), mb, bt, mn, gn (word-final), igh, eigh, augh, ough patterns
 - **Context-sensitive vowel rules**: Magic-e (CVCe), r-colored vowels (ar, er, ir, or, ur, air, ear, our)
 - **Morphological decomposition**: -tion/-sion/-cian suffixes, -ed post-processing (/t/ vs /d/ vs /ɪd/), prefix stripping (un-, re-, dis-, pre-, mis-)

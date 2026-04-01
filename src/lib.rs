@@ -41,6 +41,7 @@
 //! |---------|---------|-------------|
 //! | `std` | Yes | Standard library. Disable for `no_std` + `alloc` |
 //! | `logging` | No | Structured logging via tracing-subscriber |
+//! | `varna` | No | Phoneme inventory validation and language detection via varna |
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
@@ -54,9 +55,13 @@ pub mod normalize;
 pub mod prosody;
 pub mod rules;
 pub mod syllable;
+#[cfg(feature = "varna")]
+pub mod validate;
 
 /// Convenience re-exports for common usage.
 pub mod prelude {
+    #[cfg(feature = "varna")]
+    pub use crate::engine::detect_language;
     pub use crate::engine::{G2PEngine, Language};
     pub use crate::error::{Result, ShabdaError};
 }

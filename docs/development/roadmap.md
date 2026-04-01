@@ -33,23 +33,23 @@
 - [ ] Speaking rate control (words per minute)
 - [ ] SSML subset support (<break>, <emphasis>, <prosody>)
 
-### Multi-Language (lipi integration)
+### Multi-Language (varna integration)
 
-**Boundary**: lipi provides phoneme inventories and phonotactic constraints per language. shabda provides the G2P rules (orthography → sound). lipi never does G2P — it's the reference data, shabda is the engine, shabdakosh is the cache.
+**Boundary**: varna provides phoneme inventories and phonotactic constraints per language. shabda provides the G2P rules (orthography → sound). varna never does G2P — it's the reference data, shabda is the engine, shabdakosh is the cache.
 
-**v1.x (non-breaking, optional `lipi` feature)**:
-- [ ] Optional `lipi` feature flag — inventory validation during rule development
-- [ ] Debug assertions verify rule output phonemes exist in lipi's inventory for target language
-- [ ] Language detection (auto-detect from text using lipi's script/character set data)
+**v1.x (non-breaking, optional `varna` feature)**:
+- [x] Optional `varna` feature flag — inventory validation during rule development
+- [x] Debug assertions verify rule output phonemes exist in varna's inventory for target language
+- [x] Language detection (auto-detect from text using varna's script/character set data)
 
 **v2.0 (breaking — expand Language enum)**:
-- [ ] `Language` enum expands with variants mapped to lipi inventories + per-language rule modules
-- [ ] Spanish G2P rules — validated against `lipi::phoneme::spanish()`
-- [ ] German G2P rules — validated against `lipi::phoneme::german()`
-- [ ] Hindi/Devanagari G2P (nearly 1:1) — validated against `lipi::phoneme::hindi()`
-- [ ] Sanskrit G2P (perfectly regular Devanagari) — validated against `lipi::phoneme::sanskrit()`
-- [ ] Arabic G2P rules (consonantal root + vowel patterns) — validated against `lipi::phoneme::arabic()`
-- [ ] `G2PEngine::phoneme_inventory()` — returns lipi `PhonemeInventory` for active language
+- [ ] `Language` enum expands with variants mapped to varna inventories + per-language rule modules
+- [ ] Spanish G2P rules — validated against `varna::phoneme::spanish()`
+- [ ] German G2P rules — validated against `varna::phoneme::german()`
+- [ ] Hindi/Devanagari G2P (nearly 1:1) — validated against `varna::phoneme::hindi()`
+- [ ] Sanskrit G2P (perfectly regular Devanagari) — validated against `varna::phoneme::sanskrit()`
+- [ ] Arabic G2P rules (consonantal root + vowel patterns) — validated against `varna::phoneme::arabic()`
+- [ ] `G2PEngine::phoneme_inventory()` — returns varna `PhonemeInventory` for active language
 - [ ] Phonotactic constraint checking on rule output (reject impossible sequences per language)
 
 ## Backlog — Medium Priority

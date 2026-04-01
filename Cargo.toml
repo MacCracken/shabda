@@ -21,6 +21,7 @@ thiserror = { version = "2", default-features = false }
 tracing = { version = "0.1", default-features = false }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"], optional = true }
 serde_json = { version = "1", default-features = false, features = ["alloc"], optional = true }
+varna = { version = "1", default-features = false, optional = true }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
@@ -28,8 +29,9 @@ serde_json = "1"
 
 [features]
 default = ["std"]
-full = ["std", "logging", "json"]
+full = ["std", "logging", "json", "varna"]
 std = ["serde/std", "svara/std", "thiserror/std", "tracing/std", "shabdakosh/std"]
+varna = ["dep:varna", "std", "varna/std"]
 json = ["dep:serde_json", "shabdakosh/json"]
 logging = ["dep:tracing-subscriber"]
 

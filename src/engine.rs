@@ -21,6 +21,61 @@ pub enum Language {
     English,
 }
 
+/// Detects the most likely language for the given text based on script analysis.
+///
+/// Uses varna's script Unicode range data to identify which writing system
+/// the text uses, then maps that to a supported `Language`. Returns `None`
+/// if the text uses a script not associated with any supported language.
+///
+/// Currently only English (Latin script) is supported. As more languages are
+/// added to shabda, this function will detect them automatically.
+///
+/// # Examples
+///
+/// ```
+/// use shabda::engine::detect_language;
+///
+/// assert_eq!(detect_language("hello world"), Some(shabda::engine::Language::English));
+/// assert_eq!(detect_language(""), None);
+/// ```
+#[cfg(feature = "varna")]
+#[must_use]
+pub fn detect_language(text: &str) -> Option<Language> {
+    if text.trim().is_empty() {
+        return None;
+    }
+
+    // Count codepoints belonging to each known script
+    let scripts = [
+        ("Latn", Language::English),
+        // Future: ("Deva", Language::Hindi), ("Arab", Language::Arabic), etc.
+    ];
+
+    let mut best: Option<(Language, usize)> = None;
+
+    for (script_code, language) in &scripts {
+        if let Some(script) = varna::script::by_code(script_code) {
+            let count = text
+                .chars()
+                .filter(|c| script.contains_codepoint(u32::from(*c)))
+                .count();
+            if count > 0 {
+                match best {
+                    Some((_, best_count)) if count > best_count => {
+                        best = Some((*language, count));
+                    }
+                    None => {
+                        best = Some((*language, count));
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    best.map(|(lang, _)| lang)
+}
+
 /// The grapheme-to-phoneme engine.
 ///
 /// Converts text to svara `PhonemeEvent` sequences using dictionary lookup
@@ -91,6 +146,9 @@ impl G2PEngine {
             return Err(ShabdaError::InvalidInput("empty text".to_string()));
         }
 
+        #[cfg(feature = "varna")]
+        let varna_inventory = crate::validate::inventory_for(self.language);
+
         let intonation = normalize::detect_intonation(text);
         let normalized = normalize::normalize(text);
 
@@ -133,6 +191,16 @@ impl G2PEngine {
                     Language::English => rules::english_rules(word),
                 }
             };
+
+            // Validate phoneme output against varna inventory in debug builds
+            #[cfg(feature = "varna")]
+            {
+                let invalid = crate::validate::validate_phonemes(&phonemes, &varna_inventory);
+                debug_assert!(
+                    invalid.is_empty(),
+                    "word {word:?} produced phonemes not in varna inventory: {invalid:?}"
+                );
+            }
 
             if phonemes.is_empty() {
                 warn!(word, "no phonemes produced, skipping word");
