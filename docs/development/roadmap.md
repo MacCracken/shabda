@@ -62,9 +62,9 @@
 - [x] Foreign word detection and passthrough
 
 ### Performance
-- [ ] Dictionary trie for O(1) lookup instead of BTreeMap — shabdakosh scope
 - [x] Rule compilation (precompute pattern matching tables — static slices, zero allocation)
-- [ ] Lazy dictionary loading (load on first use, not construction) — shabdakosh scope
+- ~~Dictionary trie~~ — moved to shabdakosh v1.3 roadmap
+- ~~Lazy dictionary loading~~ — moved to shabdakosh v1.3 roadmap
 
 ### Integration
 - [x] SSML parser
