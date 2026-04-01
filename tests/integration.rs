@@ -241,3 +241,109 @@ fn test_heteronym_in_pipeline() {
     assert!(!events1.is_empty());
     assert!(!events2.is_empty());
 }
+
+// --- SSML tests ---
+
+#[test]
+fn test_ssml_basic() {
+    let g2p = G2PEngine::new(Language::English);
+    let events = g2p.convert_ssml("<speak>hello world</speak>").unwrap();
+    assert!(!events.is_empty());
+}
+
+#[test]
+fn test_ssml_break() {
+    let g2p = G2PEngine::new(Language::English);
+    let events = g2p
+        .convert_ssml("hello <break time=\"500ms\"/> world")
+        .unwrap();
+    // Should contain a 500ms silence
+    let pauses: Vec<_> = events
+        .iter()
+        .filter(|e| e.phoneme == svara::phoneme::Phoneme::Silence && e.duration > 0.4)
+        .collect();
+    assert!(!pauses.is_empty(), "should have a 500ms break");
+}
+
+#[test]
+fn test_ssml_emphasis() {
+    let g2p = G2PEngine::new(Language::English);
+    let events = g2p
+        .convert_ssml("<emphasis level=\"strong\">important</emphasis>")
+        .unwrap();
+    assert!(!events.is_empty());
+    // Strong emphasis should have primary stress
+    let has_primary = events
+        .iter()
+        .any(|e| e.stress == svara::prosody::Stress::Primary);
+    assert!(has_primary, "strong emphasis should produce primary stress");
+}
+
+#[test]
+fn test_ssml_prosody_rate() {
+    let g2p = G2PEngine::new(Language::English);
+    let normal = g2p.convert("hello world").unwrap();
+    let slow = g2p
+        .convert_ssml("<prosody rate=\"slow\">hello world</prosody>")
+        .unwrap();
+    let normal_dur: f32 = normal.iter().map(|e| e.duration).sum();
+    let slow_dur: f32 = slow.iter().map(|e| e.duration).sum();
+    assert!(
+        slow_dur > normal_dur,
+        "slow prosody should be longer than normal"
+    );
+}
+
+#[test]
+fn test_ssml_empty_errors() {
+    let g2p = G2PEngine::new(Language::English);
+    assert!(g2p.convert_ssml("").is_err());
+}
+
+// --- Timing + Streaming tests ---
+
+#[test]
+fn test_timing_profile() {
+    use shabda::engine::TimingProfile;
+    let g2p = G2PEngine::new(Language::English);
+    let normal = g2p.convert("hello").unwrap();
+    let stretched = g2p
+        .convert_with(
+            "hello",
+            &ConvertOptions::new().with_timing(TimingProfile::new(2.0, 1.0, 1.0)),
+        )
+        .unwrap();
+    let normal_dur: f32 = normal.iter().map(|e| e.duration).sum();
+    let stretched_dur: f32 = stretched.iter().map(|e| e.duration).sum();
+    assert!(
+        stretched_dur > normal_dur,
+        "2x vowel scale should increase total duration"
+    );
+}
+
+#[test]
+fn test_convert_streaming() {
+    let g2p = G2PEngine::new(Language::English);
+    let mut words_seen = Vec::new();
+    g2p.convert_streaming("hello world", |word, events| {
+        words_seen.push(String::from(word));
+        assert!(!events.is_empty());
+    })
+    .unwrap();
+    assert!(words_seen.len() >= 2);
+}
+
+#[test]
+fn test_convert_streaming_empty_errors() {
+    let g2p = G2PEngine::new(Language::English);
+    assert!(g2p.convert_streaming("", |_, _| {}).is_err());
+}
+
+#[test]
+fn test_serde_roundtrip_timing_profile() {
+    use shabda::engine::TimingProfile;
+    let profile = TimingProfile::new(1.2, 0.9, 1.5);
+    let json = serde_json::to_string(&profile).unwrap();
+    let roundtripped: TimingProfile = serde_json::from_str(&json).unwrap();
+    assert_eq!(profile, roundtripped);
+}

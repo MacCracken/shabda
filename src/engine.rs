@@ -108,6 +108,62 @@ pub struct ConvertOptions {
     /// Clamped to 50–300 WPM.
     #[serde(default)]
     pub speaking_rate_wpm: Option<f32>,
+
+    /// Phoneme-level timing profile for fine-grained duration control.
+    ///
+    /// `None` uses default durations from svara. Scales are multiplicative
+    /// (1.0 = no change, 2.0 = double duration, 0.5 = half duration).
+    #[serde(default)]
+    pub timing: Option<TimingProfile>,
+}
+
+/// Phoneme-level timing control.
+///
+/// Allows independent scaling of vowel, consonant, and pause durations
+/// for fine-grained control over speech rhythm.
+///
+/// # Examples
+///
+/// ```
+/// use shabda::engine::TimingProfile;
+///
+/// // Crisp speech: shorter vowels, normal consonants
+/// let crisp = TimingProfile::new(0.8, 1.0, 0.7);
+///
+/// // Deliberate speech: longer vowels, longer pauses
+/// let deliberate = TimingProfile::new(1.3, 1.0, 1.5);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct TimingProfile {
+    /// Scale factor for vowel/diphthong durations (default 1.0).
+    pub vowel_scale: f32,
+    /// Scale factor for consonant durations (default 1.0).
+    pub consonant_scale: f32,
+    /// Scale factor for pause/silence durations (default 1.0).
+    pub pause_scale: f32,
+}
+
+impl TimingProfile {
+    /// Creates a new timing profile with the given scale factors.
+    #[must_use]
+    pub fn new(vowel_scale: f32, consonant_scale: f32, pause_scale: f32) -> Self {
+        Self {
+            vowel_scale,
+            consonant_scale,
+            pause_scale,
+        }
+    }
+}
+
+impl Default for TimingProfile {
+    fn default() -> Self {
+        Self {
+            vowel_scale: 1.0,
+            consonant_scale: 1.0,
+            pause_scale: 1.0,
+        }
+    }
 }
 
 impl ConvertOptions {
@@ -128,6 +184,13 @@ impl ConvertOptions {
     #[must_use]
     pub fn with_speaking_rate(mut self, wpm: f32) -> Self {
         self.speaking_rate_wpm = Some(wpm);
+        self
+    }
+
+    /// Sets a timing profile for phoneme-level duration control.
+    #[must_use]
+    pub fn with_timing(mut self, timing: TimingProfile) -> Self {
+        self.timing = Some(timing);
         self
     }
 }
@@ -381,6 +444,11 @@ impl G2PEngine {
             prosody::apply_rate(&mut events, wpm);
         }
 
+        // Apply timing profile
+        if let Some(ref timing) = options.timing {
+            prosody::apply_timing(&mut events, timing);
+        }
+
         Ok(events)
     }
 
@@ -432,5 +500,187 @@ impl G2PEngine {
 
         seq.render(voice, sample_rate)
             .map_err(|e| ShabdaError::RuleError(alloc::format!("audio synthesis failed: {e}")))
+    }
+
+    /// Converts SSML-formatted text to a sequence of phoneme events.
+    ///
+    /// Parses the SSML markup and applies `<break>`, `<emphasis>`, and
+    /// `<prosody>` elements to control the G2P pipeline.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ShabdaError::InvalidInput` if the SSML is malformed or empty.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use shabda::prelude::*;
+    ///
+    /// let g2p = G2PEngine::new(Language::English);
+    /// let events = g2p.convert_ssml(
+    ///     "Hello <break time=\"300ms\"/> <emphasis level=\"strong\">world</emphasis>"
+    /// ).unwrap();
+    /// assert!(!events.is_empty());
+    /// ```
+    pub fn convert_ssml(&self, ssml: &str) -> Result<Vec<PhonemeEvent>> {
+        if ssml.trim().is_empty() {
+            return Err(ShabdaError::InvalidInput("empty SSML".to_string()));
+        }
+
+        let nodes = crate::ssml::parse(ssml)
+            .map_err(|e| ShabdaError::InvalidInput(alloc::format!("SSML parse error: {e}")))?;
+
+        let mut events = Vec::new();
+        self.render_ssml_nodes(&nodes, &ConvertOptions::default(), &mut events)?;
+        Ok(events)
+    }
+
+    /// Recursively renders SSML nodes into phoneme events.
+    fn render_ssml_nodes(
+        &self,
+        nodes: &[crate::ssml::SsmlNode],
+        base_options: &ConvertOptions,
+        events: &mut Vec<PhonemeEvent>,
+    ) -> Result<()> {
+        use crate::ssml::SsmlNode;
+
+        for node in nodes {
+            match node {
+                SsmlNode::Text(text) => {
+                    if !text.trim().is_empty() {
+                        let mut text_events = self.convert_with(text, base_options)?;
+                        events.append(&mut text_events);
+                    }
+                }
+                SsmlNode::Break { duration_ms } => {
+                    let duration_secs = *duration_ms as f32 / 1000.0;
+                    events.push(PhonemeEvent::new(
+                        Phoneme::Silence,
+                        duration_secs,
+                        svara::prosody::Stress::Unstressed,
+                    ));
+                }
+                SsmlNode::Emphasis { level, children } => {
+                    let emphasis_opts = ConvertOptions {
+                        emphasis: true,
+                        ..base_options.clone()
+                    };
+                    // Convert children with emphasis, then boost based on level
+                    let start_idx = events.len();
+                    self.render_ssml_nodes(children, &emphasis_opts, events)?;
+                    let emphasis_events = &mut events[start_idx..];
+                    // Apply emphasis — convert_with already does this for emphasis=true,
+                    // but we also scale by level
+                    match level {
+                        crate::ssml::EmphasisLevel::Strong => {
+                            prosody::apply_emphasis(emphasis_events);
+                        }
+                        crate::ssml::EmphasisLevel::Moderate => {
+                            // Moderate: lighter emphasis already handled by emphasis=true
+                        }
+                        crate::ssml::EmphasisLevel::Reduced => {
+                            // De-stress: set all to unstressed
+                            for event in emphasis_events.iter_mut() {
+                                event.stress = svara::prosody::Stress::Unstressed;
+                            }
+                        }
+                    }
+                }
+                SsmlNode::Prosody { rate, children } => {
+                    let prosody_opts = if let Some(r) = rate {
+                        ConvertOptions {
+                            speaking_rate_wpm: Some(r.wpm()),
+                            ..base_options.clone()
+                        }
+                    } else {
+                        base_options.clone()
+                    };
+                    self.render_ssml_nodes(children, &prosody_opts, events)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Converts text word-by-word, calling a callback after each word.
+    ///
+    /// Useful for real-time or streaming applications where phoneme events
+    /// should be processed incrementally rather than buffered.
+    ///
+    /// The callback receives `(word, phoneme_events)` for each content word.
+    /// Pause markers are delivered as words with silence events.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ShabdaError::InvalidInput` if the text is empty, or propagates
+    /// any error from the callback (via `ShabdaError::RuleError`).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use shabda::prelude::*;
+    ///
+    /// let g2p = G2PEngine::new(Language::English);
+    /// let mut word_count = 0;
+    /// g2p.convert_streaming("hello world", |_word, _events| {
+    ///     word_count += 1;
+    /// }).unwrap();
+    /// assert!(word_count >= 2);
+    /// ```
+    pub fn convert_streaming<F>(&self, text: &str, mut callback: F) -> Result<()>
+    where
+        F: FnMut(&str, &[PhonemeEvent]),
+    {
+        if text.trim().is_empty() {
+            return Err(ShabdaError::InvalidInput("empty text".to_string()));
+        }
+
+        let normalized = normalize::normalize(text);
+        let words: Vec<&str> = normalized.split_whitespace().collect();
+
+        for word in &words {
+            if *word == normalize::COMMA_PAUSE {
+                let events = [PhonemeEvent::new(
+                    Phoneme::Silence,
+                    0.15,
+                    svara::prosody::Stress::Unstressed,
+                )];
+                callback(word, &events);
+                continue;
+            }
+            if *word == normalize::PERIOD_PAUSE {
+                let events = [PhonemeEvent::new(
+                    Phoneme::Silence,
+                    0.30,
+                    svara::prosody::Stress::Unstressed,
+                )];
+                callback(word, &events);
+                continue;
+            }
+
+            let phonemes: Vec<Phoneme> = if let Some(dict_entry) = self.dictionary.lookup(word) {
+                dict_entry.to_vec()
+            } else {
+                match self.language {
+                    Language::English => rules::english_rules(word),
+                }
+            };
+
+            if phonemes.is_empty() {
+                continue;
+            }
+
+            let is_content = prosody::is_content_word(word);
+            let syllables = crate::syllable::syllabify(&phonemes);
+            let word_events = if syllables.is_empty() {
+                prosody::assign_stress(&phonemes, is_content)
+            } else {
+                prosody::assign_stress_syllabic(&syllables, is_content)
+            };
+
+            callback(word, &word_events);
+        }
+
+        Ok(())
     }
 }

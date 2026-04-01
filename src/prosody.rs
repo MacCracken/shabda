@@ -195,6 +195,22 @@ pub fn apply_rate(events: &mut [PhonemeEvent], target_wpm: f32) {
     }
 }
 
+/// Applies a timing profile to scale phoneme durations by category.
+///
+/// Vowels/diphthongs, consonants, and silences are each scaled independently.
+pub fn apply_timing(events: &mut [PhonemeEvent], profile: &crate::engine::TimingProfile) {
+    for event in events.iter_mut() {
+        let scale = if event.phoneme == Phoneme::Silence {
+            profile.pause_scale
+        } else if is_vowel_like(&event.phoneme) {
+            profile.vowel_scale
+        } else {
+            profile.consonant_scale
+        };
+        event.duration *= scale;
+    }
+}
+
 /// Maps sentence type to svara intonation pattern.
 #[must_use]
 pub fn sentence_intonation(sentence_type: SentenceType) -> svara::prosody::IntonationPattern {

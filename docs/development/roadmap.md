@@ -29,9 +29,9 @@
 
 ### Prosody
 - [x] Phrase-level prosody (comma = 150ms pause, period = 300ms pause)
-- [ ] Emphasis markers (CAPS = emphatic stress, *asterisks* = focus)
-- [ ] Speaking rate control (words per minute)
-- [ ] SSML subset support (<break>, <emphasis>, <prosody>)
+- [x] Emphasis markers (CAPS = emphatic stress, *asterisks* = focus)
+- [x] Speaking rate control (words per minute)
+- [x] SSML subset support (<break>, <emphasis>, <prosody>)
 
 ### Multi-Language (varna integration)
 
@@ -55,21 +55,21 @@
 ## Backlog — Medium Priority
 
 ### Accuracy
-- [ ] Heteronym disambiguation (read/read, live/live, wind/wind — needs POS tagging)
-- [ ] Abbreviation expansion (Dr., St., etc.)
+- [x] Heteronym disambiguation (read/read, live/live, wind/wind — context-based heuristic with 20-entry table)
+- [x] Abbreviation expansion (Dr., St., etc.)
 - [x] Number-to-words (42 → "forty two") — done in rule engine improvements
-- [ ] Acronym handling (NASA, FBI — spell out vs pronounce)
-- [ ] Foreign word detection and passthrough
+- [x] Acronym handling (NASA, FBI — spell out vs pronounce)
+- [x] Foreign word detection and passthrough
 
 ### Performance
-- [ ] Dictionary trie for O(1) lookup instead of BTreeMap
-- [ ] Rule compilation (precompute pattern matching tables)
-- [ ] Lazy dictionary loading (load on first use, not construction)
+- [ ] Dictionary trie for O(1) lookup instead of BTreeMap — shabdakosh scope
+- [x] Rule compilation (precompute pattern matching tables — static slices, zero allocation)
+- [ ] Lazy dictionary loading (load on first use, not construction) — shabdakosh scope
 
 ### Integration
-- [ ] SSML parser
-- [ ] Phoneme-level timing control (explicit duration overrides)
-- [ ] Callback API for streaming G2P (word-by-word for real-time)
+- [x] SSML parser
+- [x] Phoneme-level timing control (explicit duration overrides)
+- [x] Callback API for streaming G2P (word-by-word for real-time)
 
 ## v1.0 Criteria
 
@@ -82,4 +82,4 @@
 - [x] Number-to-words conversion
 - [x] All public types: Serialize + Deserialize + roundtrip tested
 - [x] Benchmarks baselined
-- [ ] Comprehensive documentation
+- [x] Comprehensive documentation

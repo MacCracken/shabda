@@ -55,6 +55,7 @@ pub mod heteronym;
 pub mod normalize;
 pub mod prosody;
 pub mod rules;
+pub mod ssml;
 pub mod syllable;
 #[cfg(feature = "varna")]
 pub mod validate;
@@ -63,7 +64,7 @@ pub mod validate;
 pub mod prelude {
     #[cfg(feature = "varna")]
     pub use crate::engine::detect_language;
-    pub use crate::engine::{ConvertOptions, G2PEngine, Language};
+    pub use crate::engine::{ConvertOptions, G2PEngine, Language, TimingProfile};
     pub use crate::error::{Result, ShabdaError};
 }
 
