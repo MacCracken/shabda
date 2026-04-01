@@ -25,6 +25,10 @@ pub enum Language {
     German,
     /// Hindi (Modern Standard Hindi, Devanagari script).
     Hindi,
+    /// Arabic (Classical/Modern Standard Arabic).
+    Arabic,
+    /// Sanskrit (Classical, Devanagari script).
+    Sanskrit,
 }
 
 /// Detects the most likely language for the given text based on script analysis.
@@ -219,7 +223,11 @@ impl G2PEngine {
     pub fn new(language: Language) -> Self {
         let dictionary = match language {
             Language::English => PronunciationDict::english(),
-            Language::Spanish | Language::German | Language::Hindi => PronunciationDict::new(),
+            Language::Spanish
+            | Language::German
+            | Language::Hindi
+            | Language::Arabic
+            | Language::Sanskrit => PronunciationDict::new(),
         };
         Self {
             language,
@@ -399,6 +407,8 @@ impl G2PEngine {
                         Language::Spanish => rules::spanish_rules(word),
                         Language::German => rules::german_rules(word),
                         Language::Hindi => rules::hindi_rules(word),
+                        Language::Arabic => rules::arabic_rules(word),
+                        Language::Sanskrit => rules::sanskrit_rules(word),
                     }
                 }
             } else if let Some(dict_entry) = self.dictionary.lookup(word) {
@@ -416,6 +426,8 @@ impl G2PEngine {
                         Language::Spanish => rules::spanish_rules(&stripped),
                         Language::German => rules::german_rules(&stripped),
                         Language::Hindi => rules::hindi_rules(&stripped),
+                        Language::Arabic => rules::arabic_rules(&stripped),
+                        Language::Sanskrit => rules::sanskrit_rules(&stripped),
                     }
                 }
             } else {
@@ -425,6 +437,8 @@ impl G2PEngine {
                     Language::Spanish => rules::spanish_rules(word),
                     Language::German => rules::german_rules(word),
                     Language::Hindi => rules::hindi_rules(word),
+                    Language::Arabic => rules::arabic_rules(word),
+                    Language::Sanskrit => rules::sanskrit_rules(word),
                 }
             };
 
@@ -712,6 +726,8 @@ impl G2PEngine {
                     Language::Spanish => rules::spanish_rules(word),
                     Language::German => rules::german_rules(word),
                     Language::Hindi => rules::hindi_rules(word),
+                    Language::Arabic => rules::arabic_rules(word),
+                    Language::Sanskrit => rules::sanskrit_rules(word),
                 }
             };
 

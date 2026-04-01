@@ -1,8 +1,5 @@
 # shabda Roadmap
 
-## Multi-Language (future)
+All planned languages are implemented. The backlog is empty.
 
-**Boundary**: varna provides phoneme inventories and phonotactic constraints per language. shabda provides the G2P rules (orthography → sound). varna never does G2P — it's the reference data, shabda is the engine, shabdakosh is the cache.
-
-- [ ] Sanskrit G2P (perfectly regular Devanagari) — validated against `varna::phoneme::sanskrit()`
-- [ ] Arabic G2P rules (consonantal root + vowel patterns) — validated against `varna::phoneme::arabic()`
+Future work may include additional languages, dictionary integration for non-English languages, and phonotactic validation as varna adds constraint profiles.

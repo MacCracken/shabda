@@ -864,6 +864,303 @@ fn push_consonant(phonemes: &mut Vec<Phoneme>, consonant: Phoneme, next: Option<
     }
 }
 
+// =============================================================================
+// Arabic G2P rules
+// =============================================================================
+
+/// Converts a single Arabic word to phonemes using letter-to-sound rules.
+///
+/// Arabic script is an abjad — consonants are written, short vowels are
+/// typically omitted. This rule engine maps each Arabic letter to its
+/// phoneme. Without diacritics, short vowels are not recoverable from
+/// text alone; the rules produce consonant-heavy output that a dictionary
+/// or diacritized input would improve.
+#[must_use]
+pub fn arabic_rules(word: &str) -> Vec<Phoneme> {
+    let chars: Vec<char> = word.chars().collect();
+    if chars.is_empty() {
+        return Vec::new();
+    }
+
+    let mut phonemes = Vec::new();
+
+    for &ch in &chars {
+        match ch {
+            // Consonants
+            'ب' => phonemes.push(Phoneme::PlosiveB),
+            'ت' => phonemes.push(Phoneme::PlosiveT),
+            'ث' => phonemes.push(Phoneme::FricativeTh),
+            'ج' => phonemes.push(Phoneme::AffricateJ),
+            'ح' => phonemes.push(Phoneme::FricativeH), // /ħ/ pharyngeal → closest
+            'خ' => phonemes.push(Phoneme::FricativeH), // /x/ velar → closest
+            'د' => phonemes.push(Phoneme::PlosiveD),
+            'ذ' => phonemes.push(Phoneme::FricativeDh),
+            'ر' => phonemes.push(Phoneme::TapFlap),
+            'ز' => phonemes.push(Phoneme::FricativeZ),
+            'س' => phonemes.push(Phoneme::FricativeS),
+            'ش' => phonemes.push(Phoneme::FricativeSh),
+            'ص' => phonemes.push(Phoneme::FricativeS), // emphatic /sˤ/ → /s/
+            'ض' => phonemes.push(Phoneme::PlosiveD),   // emphatic /dˤ/ → /d/
+            'ط' => phonemes.push(Phoneme::PlosiveT),   // emphatic /tˤ/ → /t/
+            'ظ' => phonemes.push(Phoneme::FricativeDh), // emphatic /ðˤ/ → /ð/
+            'ع' => phonemes.push(Phoneme::GlottalStop), // /ʕ/ pharyngeal → glottal stop
+            'غ' => phonemes.push(Phoneme::PlosiveG),   // /ɣ/ velar fricative → closest
+            'ف' => phonemes.push(Phoneme::FricativeF),
+            'ق' => phonemes.push(Phoneme::PlosiveK), // /q/ uvular → velar
+            'ك' => phonemes.push(Phoneme::PlosiveK),
+            'ل' => phonemes.push(Phoneme::LateralL),
+            'م' => phonemes.push(Phoneme::NasalM),
+            'ن' => phonemes.push(Phoneme::NasalN),
+            'ه' => phonemes.push(Phoneme::FricativeH),
+            'و' => phonemes.push(Phoneme::ApproximantW), // also long /uː/
+            'ي' => phonemes.push(Phoneme::ApproximantJ), // also long /iː/
+
+            // Hamza (glottal stop)
+            'ء' | 'أ' | 'إ' | 'ؤ' | 'ئ' => phonemes.push(Phoneme::GlottalStop),
+
+            // Alef (carrier for hamza or long /aː/)
+            'ا' => phonemes.push(Phoneme::VowelOpenA),
+            'آ' => {
+                phonemes.push(Phoneme::GlottalStop);
+                phonemes.push(Phoneme::VowelOpenA);
+            }
+
+            // Taa marbuta (word-final /a/ or /at/)
+            'ة' => phonemes.push(Phoneme::VowelOpenA),
+
+            // Short vowel diacritics (fatha, kasra, damma)
+            '\u{064E}' => phonemes.push(Phoneme::VowelOpenA), // fatḥa /a/
+            '\u{0650}' => phonemes.push(Phoneme::VowelNearI), // kasra /i/
+            '\u{064F}' => phonemes.push(Phoneme::VowelCupV),  // ḍamma /u/
+
+            // Tanween (nunation)
+            '\u{064B}' => {
+                phonemes.push(Phoneme::VowelOpenA);
+                phonemes.push(Phoneme::NasalN);
+            }
+            '\u{064D}' => {
+                phonemes.push(Phoneme::VowelNearI);
+                phonemes.push(Phoneme::NasalN);
+            }
+            '\u{064C}' => {
+                phonemes.push(Phoneme::VowelCupV);
+                phonemes.push(Phoneme::NasalN);
+            }
+
+            // Sukun (no vowel) and shadda (gemination) — skip
+            '\u{0652}' => {}
+            '\u{0651}' => {
+                // Shadda: repeat the previous consonant
+                if let Some(&prev) = phonemes.last() {
+                    phonemes.push(prev);
+                }
+            }
+
+            // Alef maqsura
+            'ى' => phonemes.push(Phoneme::VowelOpenA),
+
+            // Latin fallback for romanized Arabic
+            c if c.is_ascii_alphabetic() => {
+                let lower = c.to_lowercase().next().unwrap_or(c);
+                match lower {
+                    'a' => phonemes.push(Phoneme::VowelOpenA),
+                    'i' => phonemes.push(Phoneme::VowelNearI),
+                    'u' => phonemes.push(Phoneme::VowelCupV),
+                    'b' => phonemes.push(Phoneme::PlosiveB),
+                    't' => phonemes.push(Phoneme::PlosiveT),
+                    'd' => phonemes.push(Phoneme::PlosiveD),
+                    'k' => phonemes.push(Phoneme::PlosiveK),
+                    'f' => phonemes.push(Phoneme::FricativeF),
+                    's' => phonemes.push(Phoneme::FricativeS),
+                    'z' => phonemes.push(Phoneme::FricativeZ),
+                    'h' => phonemes.push(Phoneme::FricativeH),
+                    'l' => phonemes.push(Phoneme::LateralL),
+                    'm' => phonemes.push(Phoneme::NasalM),
+                    'n' => phonemes.push(Phoneme::NasalN),
+                    'r' => phonemes.push(Phoneme::TapFlap),
+                    'w' => phonemes.push(Phoneme::ApproximantW),
+                    'y' => phonemes.push(Phoneme::ApproximantJ),
+                    'j' => phonemes.push(Phoneme::AffricateJ),
+                    'q' => phonemes.push(Phoneme::PlosiveK),
+                    _ => {}
+                }
+            }
+
+            _ => {} // skip unknown
+        }
+    }
+
+    phonemes
+}
+
+// =============================================================================
+// Sanskrit G2P rules (Devanagari)
+// =============================================================================
+
+/// Converts a single Sanskrit word (Devanagari script) to phonemes.
+///
+/// Sanskrit has a perfectly regular Devanagari orthography — every letter
+/// maps to exactly one phoneme. Unlike Hindi, Sanskrit preserves all
+/// inherent schwas (no schwa deletion rule).
+#[must_use]
+pub fn sanskrit_rules(word: &str) -> Vec<Phoneme> {
+    let chars: Vec<char> = word.chars().collect();
+    if chars.is_empty() {
+        return Vec::new();
+    }
+
+    let mut phonemes = Vec::new();
+    let mut i = 0;
+
+    while i < chars.len() {
+        let ch = chars[i];
+        let next = chars.get(i + 1).copied();
+
+        match ch {
+            // Independent vowels
+            'अ' => phonemes.push(Phoneme::VowelSchwa),
+            'आ' | 'ा' => phonemes.push(Phoneme::VowelOpenA),
+            'इ' | 'ि' => phonemes.push(Phoneme::VowelNearI),
+            'ई' | 'ी' => phonemes.push(Phoneme::VowelE),
+            'उ' | 'ु' => phonemes.push(Phoneme::VowelCupV),
+            'ऊ' | 'ू' => phonemes.push(Phoneme::VowelU),
+            'ऋ' | 'ृ' => {
+                phonemes.push(Phoneme::TapFlap);
+                phonemes.push(Phoneme::VowelNearI);
+            }
+            'ॠ' | 'ॄ' => {
+                phonemes.push(Phoneme::TapFlap);
+                phonemes.push(Phoneme::VowelE);
+            }
+            'ऌ' | 'ॢ' => {
+                phonemes.push(Phoneme::LateralL);
+                phonemes.push(Phoneme::VowelNearI);
+            }
+            'ए' | 'े' => phonemes.push(Phoneme::VowelOpenE),
+            'ऐ' | 'ै' => {
+                phonemes.push(Phoneme::VowelOpenA);
+                phonemes.push(Phoneme::VowelNearI);
+            }
+            'ओ' | 'ो' => phonemes.push(Phoneme::VowelO),
+            'औ' | 'ौ' => {
+                phonemes.push(Phoneme::VowelOpenA);
+                phonemes.push(Phoneme::VowelCupV);
+            }
+
+            // Consonants — Sanskrit preserves inherent schwa (no deletion)
+            'क' => push_sanskrit_consonant(&mut phonemes, Phoneme::PlosiveK, next),
+            'ख' => push_sanskrit_consonant(&mut phonemes, Phoneme::PlosiveK, next),
+            'ग' => push_sanskrit_consonant(&mut phonemes, Phoneme::PlosiveG, next),
+            'घ' => push_sanskrit_consonant(&mut phonemes, Phoneme::PlosiveG, next),
+            'ङ' => push_sanskrit_consonant(&mut phonemes, Phoneme::NasalNg, next),
+
+            'च' => push_sanskrit_consonant(&mut phonemes, Phoneme::AffricateCh, next),
+            'छ' => push_sanskrit_consonant(&mut phonemes, Phoneme::AffricateCh, next),
+            'ज' => push_sanskrit_consonant(&mut phonemes, Phoneme::AffricateJ, next),
+            'झ' => push_sanskrit_consonant(&mut phonemes, Phoneme::AffricateJ, next),
+            'ञ' => push_sanskrit_consonant(&mut phonemes, Phoneme::NasalN, next),
+
+            'ट' => push_sanskrit_consonant(&mut phonemes, Phoneme::PlosiveT, next),
+            'ठ' => push_sanskrit_consonant(&mut phonemes, Phoneme::PlosiveT, next),
+            'ड' => push_sanskrit_consonant(&mut phonemes, Phoneme::PlosiveD, next),
+            'ढ' => push_sanskrit_consonant(&mut phonemes, Phoneme::PlosiveD, next),
+            'ण' => push_sanskrit_consonant(&mut phonemes, Phoneme::NasalN, next),
+
+            'त' => push_sanskrit_consonant(&mut phonemes, Phoneme::PlosiveT, next),
+            'थ' => push_sanskrit_consonant(&mut phonemes, Phoneme::PlosiveT, next),
+            'द' => push_sanskrit_consonant(&mut phonemes, Phoneme::PlosiveD, next),
+            'ध' => push_sanskrit_consonant(&mut phonemes, Phoneme::PlosiveD, next),
+            'न' => push_sanskrit_consonant(&mut phonemes, Phoneme::NasalN, next),
+
+            'प' => push_sanskrit_consonant(&mut phonemes, Phoneme::PlosiveP, next),
+            'फ' => push_sanskrit_consonant(&mut phonemes, Phoneme::PlosiveP, next),
+            'ब' => push_sanskrit_consonant(&mut phonemes, Phoneme::PlosiveB, next),
+            'भ' => push_sanskrit_consonant(&mut phonemes, Phoneme::PlosiveB, next),
+            'म' => push_sanskrit_consonant(&mut phonemes, Phoneme::NasalM, next),
+
+            'य' => push_sanskrit_consonant(&mut phonemes, Phoneme::ApproximantJ, next),
+            'र' => push_sanskrit_consonant(&mut phonemes, Phoneme::TapFlap, next),
+            'ल' => push_sanskrit_consonant(&mut phonemes, Phoneme::LateralL, next),
+            'व' => push_sanskrit_consonant(&mut phonemes, Phoneme::FricativeV, next),
+
+            'श' => push_sanskrit_consonant(&mut phonemes, Phoneme::FricativeSh, next),
+            'ष' => push_sanskrit_consonant(&mut phonemes, Phoneme::FricativeSh, next),
+            'स' => push_sanskrit_consonant(&mut phonemes, Phoneme::FricativeS, next),
+            'ह' => push_sanskrit_consonant(&mut phonemes, Phoneme::FricativeH, next),
+
+            // Virama — suppresses inherent schwa (handled by push_sanskrit_consonant)
+            '्' => {}
+
+            // Anusvara and visarga
+            'ं' => phonemes.push(Phoneme::NasalM),
+            'ः' => phonemes.push(Phoneme::FricativeH),
+            '\u{093C}' => {} // nukta
+
+            // Latin fallback for romanized Sanskrit (IAST-like)
+            c if c.is_ascii_alphabetic() => {
+                let lower = c.to_lowercase().next().unwrap_or(c);
+                match lower {
+                    'a' => phonemes.push(Phoneme::VowelSchwa),
+                    'e' => phonemes.push(Phoneme::VowelOpenE),
+                    'i' => phonemes.push(Phoneme::VowelNearI),
+                    'o' => phonemes.push(Phoneme::VowelO),
+                    'u' => phonemes.push(Phoneme::VowelCupV),
+                    'k' => phonemes.push(Phoneme::PlosiveK),
+                    'g' => phonemes.push(Phoneme::PlosiveG),
+                    'c' => phonemes.push(Phoneme::AffricateCh),
+                    'j' => phonemes.push(Phoneme::AffricateJ),
+                    't' => phonemes.push(Phoneme::PlosiveT),
+                    'd' => phonemes.push(Phoneme::PlosiveD),
+                    'n' => phonemes.push(Phoneme::NasalN),
+                    'p' => phonemes.push(Phoneme::PlosiveP),
+                    'b' => phonemes.push(Phoneme::PlosiveB),
+                    'm' => phonemes.push(Phoneme::NasalM),
+                    'y' => phonemes.push(Phoneme::ApproximantJ),
+                    'r' => phonemes.push(Phoneme::TapFlap),
+                    'l' => phonemes.push(Phoneme::LateralL),
+                    'v' | 'w' => phonemes.push(Phoneme::FricativeV),
+                    's' => phonemes.push(Phoneme::FricativeS),
+                    'h' => phonemes.push(Phoneme::FricativeH),
+                    _ => {}
+                }
+            }
+
+            _ => {} // skip unknown
+        }
+
+        i += 1;
+    }
+
+    phonemes
+}
+
+/// Pushes a Sanskrit consonant with inherent schwa (no schwa deletion in Sanskrit).
+fn push_sanskrit_consonant(phonemes: &mut Vec<Phoneme>, consonant: Phoneme, next: Option<char>) {
+    phonemes.push(consonant);
+    let suppress = matches!(
+        next,
+        Some(
+            'ा' | 'ि'
+                | 'ी'
+                | 'ु'
+                | 'ू'
+                | 'े'
+                | 'ै'
+                | 'ो'
+                | 'ौ'
+                | 'ृ'
+                | 'ॄ'
+                | 'ॢ'
+                | '्'
+                | 'ं'
+                | 'ँ'
+        )
+    );
+    if !suppress {
+        phonemes.push(Phoneme::VowelSchwa);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1172,5 +1469,76 @@ mod tests {
     #[test]
     fn test_hindi_empty() {
         assert!(hindi_rules("").is_empty());
+    }
+
+    // --- Arabic G2P tests ---
+
+    #[test]
+    fn test_arabic_bismillah() {
+        let phonemes = arabic_rules("بسم");
+        assert!(!phonemes.is_empty());
+        assert_eq!(phonemes[0], Phoneme::PlosiveB);
+    }
+
+    #[test]
+    fn test_arabic_kitab() {
+        let phonemes = arabic_rules("كتاب");
+        assert_eq!(phonemes[0], Phoneme::PlosiveK);
+        assert!(phonemes.contains(&Phoneme::VowelOpenA)); // alef
+    }
+
+    #[test]
+    fn test_arabic_shin() {
+        let phonemes = arabic_rules("شمس");
+        assert_eq!(phonemes[0], Phoneme::FricativeSh);
+    }
+
+    #[test]
+    fn test_arabic_romanized() {
+        let phonemes = arabic_rules("salam");
+        assert!(!phonemes.is_empty());
+        assert_eq!(phonemes[0], Phoneme::FricativeS);
+    }
+
+    #[test]
+    fn test_arabic_empty() {
+        assert!(arabic_rules("").is_empty());
+    }
+
+    // --- Sanskrit G2P tests ---
+
+    #[test]
+    fn test_sanskrit_om() {
+        let phonemes = sanskrit_rules("ओम्");
+        assert!(!phonemes.is_empty());
+        assert_eq!(phonemes[0], Phoneme::VowelO);
+    }
+
+    #[test]
+    fn test_sanskrit_dharma() {
+        let phonemes = sanskrit_rules("धर्म");
+        assert!(!phonemes.is_empty());
+        assert!(phonemes.contains(&Phoneme::TapFlap)); // र
+        assert!(phonemes.contains(&Phoneme::NasalM)); // म
+    }
+
+    #[test]
+    fn test_sanskrit_preserves_schwa() {
+        // Sanskrit does NOT delete final schwa (unlike Hindi)
+        let phonemes = sanskrit_rules("कर");
+        // क→k+schwa, र→r+schwa
+        assert_eq!(phonemes.len(), 4); // k, ə, r, ə
+        assert_eq!(phonemes[3], Phoneme::VowelSchwa);
+    }
+
+    #[test]
+    fn test_sanskrit_romanized() {
+        let phonemes = sanskrit_rules("dharma");
+        assert!(!phonemes.is_empty());
+    }
+
+    #[test]
+    fn test_sanskrit_empty() {
+        assert!(sanskrit_rules("").is_empty());
     }
 }

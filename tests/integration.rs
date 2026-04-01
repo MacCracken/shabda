@@ -456,6 +456,72 @@ fn test_phoneme_inventory_hindi() {
     assert!(inv.has("ə"));
 }
 
+// --- Arabic tests ---
+
+#[test]
+fn test_arabic_convert() {
+    let g2p = G2PEngine::new(Language::Arabic);
+    let events = g2p.convert("كتاب").unwrap();
+    assert!(!events.is_empty());
+}
+
+#[test]
+fn test_arabic_romanized() {
+    let g2p = G2PEngine::new(Language::Arabic);
+    let events = g2p.convert("salam").unwrap();
+    assert!(!events.is_empty());
+}
+
+#[test]
+fn test_serde_roundtrip_arabic_language() {
+    let lang = Language::Arabic;
+    let json = serde_json::to_string(&lang).unwrap();
+    let roundtripped: Language = serde_json::from_str(&json).unwrap();
+    assert_eq!(lang, roundtripped);
+}
+
+// --- Sanskrit tests ---
+
+#[test]
+fn test_sanskrit_convert() {
+    let g2p = G2PEngine::new(Language::Sanskrit);
+    let events = g2p.convert("धर्म").unwrap();
+    assert!(!events.is_empty());
+}
+
+#[test]
+fn test_sanskrit_romanized() {
+    let g2p = G2PEngine::new(Language::Sanskrit);
+    let events = g2p.convert("dharma").unwrap();
+    assert!(!events.is_empty());
+}
+
+#[test]
+fn test_serde_roundtrip_sanskrit_language() {
+    let lang = Language::Sanskrit;
+    let json = serde_json::to_string(&lang).unwrap();
+    let roundtripped: Language = serde_json::from_str(&json).unwrap();
+    assert_eq!(lang, roundtripped);
+}
+
+#[cfg(feature = "varna")]
+#[test]
+fn test_phoneme_inventory_arabic() {
+    let g2p = G2PEngine::new(Language::Arabic);
+    let inv = g2p.phoneme_inventory();
+    assert!(inv.has("b"));
+    assert!(inv.has("ʔ"));
+}
+
+#[cfg(feature = "varna")]
+#[test]
+fn test_phoneme_inventory_sanskrit() {
+    let g2p = G2PEngine::new(Language::Sanskrit);
+    let inv = g2p.phoneme_inventory();
+    assert!(inv.has("p"));
+    assert!(inv.has("ɐ"));
+}
+
 #[cfg(feature = "varna")]
 #[test]
 fn test_phoneme_inventory_english() {

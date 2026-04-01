@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.0] — 2026-04-01
+
+Arabic and Sanskrit G2P, completing all planned languages.
+
+- **Breaking**: `Language` enum expanded with `Arabic` and `Sanskrit` variants
+- **Feature**: Arabic G2P rules — all 28 consonants, short vowel diacritics, shadda (gemination), tanween, hamza, taa marbuta, romanized fallback
+- **Feature**: Sanskrit G2P rules — perfectly regular Devanagari (no schwa deletion), all 36 consonants + 14 vowels, virama, anusvara/visarga, romanized fallback
+- **Feature**: Arabic and Sanskrit IPA mappings for varna inventory validation
+
 ## [2.1.0] — 2026-04-01
 
 German and Hindi G2P support.

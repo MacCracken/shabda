@@ -104,6 +104,8 @@ pub fn phoneme_to_ipa_for(phoneme: Phoneme, language: Language) -> Option<&'stat
         Language::Spanish => spanish_phoneme_to_ipa(phoneme),
         Language::German => german_phoneme_to_ipa(phoneme),
         Language::Hindi => hindi_phoneme_to_ipa(phoneme),
+        Language::Arabic => arabic_phoneme_to_ipa(phoneme),
+        Language::Sanskrit => sanskrit_phoneme_to_ipa(phoneme),
     }
 }
 
@@ -232,6 +234,55 @@ fn hindi_phoneme_to_ipa(phoneme: Phoneme) -> Option<&'static str> {
     }
 }
 
+/// Maps a svara `Phoneme` to its IPA string in varna's Arabic inventory.
+fn arabic_phoneme_to_ipa(phoneme: Phoneme) -> Option<&'static str> {
+    match phoneme {
+        Phoneme::VowelOpenA => Some("a"),
+        Phoneme::VowelNearI => Some("i"),
+        Phoneme::VowelCupV => Some("u"),
+        Phoneme::PlosiveB => Some("b"),
+        Phoneme::PlosiveT => Some("t"),
+        Phoneme::PlosiveD => Some("d"),
+        Phoneme::PlosiveK => Some("k"),
+        Phoneme::PlosiveG => Some("ɣ"),
+        Phoneme::FricativeF => Some("f"),
+        Phoneme::FricativeTh => Some("θ"),
+        Phoneme::FricativeDh => Some("ð"),
+        Phoneme::FricativeS => Some("s"),
+        Phoneme::FricativeZ => Some("z"),
+        Phoneme::FricativeSh => Some("ʃ"),
+        Phoneme::FricativeH => Some("h"),
+        Phoneme::NasalM => Some("m"),
+        Phoneme::NasalN => Some("n"),
+        Phoneme::LateralL => Some("l"),
+        Phoneme::TapFlap => Some("r"),
+        Phoneme::ApproximantW => Some("w"),
+        Phoneme::ApproximantJ => Some("j"),
+        Phoneme::AffricateJ => Some("d͡ʒ"),
+        Phoneme::GlottalStop => Some("ʔ"),
+        Phoneme::Silence => None,
+        _ => None,
+    }
+}
+
+/// Maps a svara `Phoneme` to its IPA string in varna's Sanskrit inventory.
+fn sanskrit_phoneme_to_ipa(phoneme: Phoneme) -> Option<&'static str> {
+    match phoneme {
+        // Sanskrit schwa is /ɐ/ not /ə/
+        Phoneme::VowelSchwa => Some("ɐ"),
+        // Long vowels
+        Phoneme::VowelOpenA => Some("ɐː"),
+        Phoneme::VowelNearI => Some("i"),
+        Phoneme::VowelE => Some("iː"),
+        Phoneme::VowelCupV => Some("u"),
+        Phoneme::VowelU => Some("uː"),
+        Phoneme::VowelOpenE => Some("eː"),
+        Phoneme::VowelO => Some("oː"),
+        // Consonants — same as Hindi
+        other => hindi_phoneme_to_ipa(other),
+    }
+}
+
 /// Returns the varna `PhonemeInventory` for the given language.
 #[must_use]
 pub fn inventory_for(language: Language) -> PhonemeInventory {
@@ -240,6 +291,8 @@ pub fn inventory_for(language: Language) -> PhonemeInventory {
         Language::Spanish => varna::phoneme::inventories::spanish(),
         Language::German => varna::phoneme::inventories::german(),
         Language::Hindi => varna::phoneme::inventories::hindi(),
+        Language::Arabic => varna::phoneme::inventories::classical_arabic(),
+        Language::Sanskrit => varna::phoneme::sanskrit(),
     }
 }
 
@@ -250,7 +303,11 @@ pub fn inventory_for(language: Language) -> PhonemeInventory {
 pub fn phonotactics_for(language: Language) -> Option<varna::phoneme::syllable::Phonotactics> {
     match language {
         Language::English => Some(varna::phoneme::syllable::english_phonotactics()),
-        Language::Spanish | Language::German | Language::Hindi => None, // not yet defined in varna
+        Language::Spanish
+        | Language::German
+        | Language::Hindi
+        | Language::Arabic
+        | Language::Sanskrit => None, // not yet defined in varna
     }
 }
 
