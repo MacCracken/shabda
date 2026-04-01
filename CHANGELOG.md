@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0] — 2026-04-01
+
+Multi-language support and phonotactic validation.
+
+- **Breaking**: `Language` enum expanded with `Spanish` variant
+- **Feature**: Spanish G2P rules — Castilian orthography (ch, ll, rr, qu, gu digraphs, c/g/z context rules)
+- **Feature**: `G2PEngine::phoneme_inventory()` — returns varna `PhonemeInventory` for active language (varna feature)
+- **Feature**: Phonotactic constraint validation — debug assertions check consonant clusters against varna's constraints
+- **Feature**: Language-aware IPA mapping — `validate_phonemes_for()` and `phoneme_to_ipa_for()` for per-language validation
+
 ## [1.1.0] — 2026-04-01
 
 Prosody control, accuracy improvements, SSML support, and varna integration.

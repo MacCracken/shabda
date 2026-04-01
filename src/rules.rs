@@ -430,6 +430,114 @@ fn is_vowel_char(c: char) -> bool {
     matches!(c, 'a' | 'e' | 'i' | 'o' | 'u')
 }
 
+// =============================================================================
+// Spanish G2P rules
+// =============================================================================
+
+/// Converts a single Spanish word to phonemes using letter-to-sound rules.
+///
+/// Spanish orthography is highly regular — nearly 1:1 grapheme-to-phoneme.
+/// The main complexities are digraphs (ch, ll, rr, qu, gu) and a few
+/// context-sensitive consonants (c, g, h).
+#[must_use]
+pub fn spanish_rules(word: &str) -> Vec<Phoneme> {
+    let chars: Vec<char> = word.to_lowercase().chars().collect();
+    if chars.is_empty() {
+        return Vec::new();
+    }
+
+    let mut phonemes = Vec::new();
+    let mut i = 0;
+
+    while i < chars.len() {
+        let remaining = &chars[i..];
+        let result = spanish_match(remaining);
+        i += result.consumed();
+        phonemes.extend(result);
+    }
+
+    phonemes
+}
+
+// Spanish static pattern constants
+static SP_CH: &[Phoneme] = &[Phoneme::AffricateCh];
+static SP_LL: &[Phoneme] = &[Phoneme::ApproximantJ];
+static SP_RR: &[Phoneme] = &[Phoneme::ApproximantR];
+static SP_XS_ES: &[Phoneme] = &[Phoneme::PlosiveK, Phoneme::FricativeS];
+
+/// Pattern matching for Spanish grapheme-to-phoneme.
+fn spanish_match(chars: &[char]) -> PatternResult {
+    if chars.is_empty() {
+        return PatternResult::Static(1, &[]);
+    }
+
+    // 2-letter digraphs first
+    if chars.len() >= 2 {
+        match (chars[0], chars[1]) {
+            ('c', 'h') => return PatternResult::Static(2, SP_CH),
+            ('l', 'l') => return PatternResult::Static(2, SP_LL),
+            ('r', 'r') => return PatternResult::Static(2, SP_RR),
+            ('q', 'u') => return PatternResult::Static(2, &[Phoneme::PlosiveK]),
+            // gu before e/i: u is silent, g→/g/
+            ('g', 'u') if chars.len() >= 3 && matches!(chars[2], 'e' | 'i') => {
+                return PatternResult::Static(2, &[Phoneme::PlosiveG]);
+            }
+            _ => {}
+        }
+    }
+
+    // Single character rules
+    match chars[0] {
+        'a' | 'á' => PatternResult::Static(1, &[Phoneme::VowelOpenA]),
+        'e' | 'é' => PatternResult::Static(1, &[Phoneme::VowelOpenE]),
+        'i' | 'í' => PatternResult::Static(1, &[Phoneme::VowelNearI]),
+        'o' | 'ó' => PatternResult::Static(1, &[Phoneme::VowelO]),
+        'u' | 'ú' | 'ü' => PatternResult::Static(1, &[Phoneme::VowelCupV]),
+        'b' | 'v' => PatternResult::Static(1, &[Phoneme::PlosiveB]),
+        'c' => {
+            // c before e/i → /θ/ (Castilian)
+            if chars.len() > 1 && matches!(chars[1], 'e' | 'i') {
+                PatternResult::Static(1, &[Phoneme::FricativeTh])
+            } else {
+                PatternResult::Static(1, &[Phoneme::PlosiveK])
+            }
+        }
+        'd' => PatternResult::Static(1, &[Phoneme::PlosiveD]),
+        'f' => PatternResult::Static(1, &[Phoneme::FricativeF]),
+        'g' => {
+            // g before e/i → /x/ (velar fricative, mapped to FricativeH)
+            if chars.len() > 1 && matches!(chars[1], 'e' | 'i') {
+                PatternResult::Static(1, &[Phoneme::FricativeH])
+            } else {
+                PatternResult::Static(1, &[Phoneme::PlosiveG])
+            }
+        }
+        'h' => PatternResult::Static(1, &[]), // always silent
+        'j' => PatternResult::Static(1, &[Phoneme::FricativeH]), // /x/
+        'k' => PatternResult::Static(1, &[Phoneme::PlosiveK]),
+        'l' => PatternResult::Static(1, &[Phoneme::LateralL]),
+        'm' => PatternResult::Static(1, &[Phoneme::NasalM]),
+        'n' => PatternResult::Static(1, &[Phoneme::NasalN]),
+        'ñ' => PatternResult::Static(1, &[Phoneme::NasalNg]), // palatal nasal
+        'p' => PatternResult::Static(1, &[Phoneme::PlosiveP]),
+        'r' => PatternResult::Static(1, &[Phoneme::TapFlap]),
+        's' => PatternResult::Static(1, &[Phoneme::FricativeS]),
+        't' => PatternResult::Static(1, &[Phoneme::PlosiveT]),
+        'w' => PatternResult::Static(1, &[Phoneme::ApproximantW]),
+        'x' => PatternResult::Static(1, SP_XS_ES),
+        'y' => {
+            if chars.len() == 1 {
+                PatternResult::Static(1, &[Phoneme::VowelNearI])
+            } else {
+                PatternResult::Static(1, &[Phoneme::ApproximantJ])
+            }
+        }
+        'z' => PatternResult::Static(1, &[Phoneme::FricativeTh]), // Castilian /θ/
+        '\'' | '-' => PatternResult::Static(1, &[]),
+        _ => PatternResult::Static(1, &[]),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -586,5 +694,63 @@ mod tests {
         // Should start with /ʌn/
         assert_eq!(phonemes[0], Phoneme::VowelCupV);
         assert_eq!(phonemes[1], Phoneme::NasalN);
+    }
+
+    // --- Spanish G2P tests ---
+
+    #[test]
+    fn test_spanish_hola() {
+        let phonemes = spanish_rules("hola");
+        // h is silent, o→VowelO, l→LateralL, a→VowelOpenA
+        assert_eq!(phonemes[0], Phoneme::VowelO);
+        assert_eq!(phonemes[1], Phoneme::LateralL);
+        assert_eq!(phonemes[2], Phoneme::VowelOpenA);
+    }
+
+    #[test]
+    fn test_spanish_ch() {
+        let phonemes = spanish_rules("chico");
+        assert_eq!(phonemes[0], Phoneme::AffricateCh);
+    }
+
+    #[test]
+    fn test_spanish_ll() {
+        let phonemes = spanish_rules("llamar");
+        assert_eq!(phonemes[0], Phoneme::ApproximantJ);
+    }
+
+    #[test]
+    fn test_spanish_rr() {
+        let phonemes = spanish_rules("perro");
+        // p→PlosiveP, e→VowelOpenE, rr→ApproximantR (trill), o→VowelO
+        assert!(phonemes.contains(&Phoneme::ApproximantR));
+    }
+
+    #[test]
+    fn test_spanish_que() {
+        let phonemes = spanish_rules("que");
+        // qu→/k/, e→VowelOpenE
+        assert_eq!(phonemes[0], Phoneme::PlosiveK);
+        assert_eq!(phonemes[1], Phoneme::VowelOpenE);
+    }
+
+    #[test]
+    fn test_spanish_gui() {
+        let phonemes = spanish_rules("guitarra");
+        // gu before i → /g/ (u silent)
+        assert_eq!(phonemes[0], Phoneme::PlosiveG);
+    }
+
+    #[test]
+    fn test_spanish_empty() {
+        let phonemes = spanish_rules("");
+        assert!(phonemes.is_empty());
+    }
+
+    #[test]
+    fn test_spanish_nino() {
+        let phonemes = spanish_rules("niño");
+        // n→NasalN, i→VowelNearI, ñ→NasalNg (palatal nasal), o→VowelO
+        assert!(phonemes.contains(&Phoneme::NasalNg));
     }
 }

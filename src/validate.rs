@@ -11,12 +11,14 @@ use varna::phoneme::PhonemeInventory;
 
 use crate::engine::Language;
 
-/// Maps a svara `Phoneme` to its IPA string as used in varna's inventory.
+/// Maps a svara `Phoneme` to its IPA string as used in varna's English inventory.
 ///
 /// Returns `None` for phonemes that have no single-IPA equivalent in varna's
 /// current inventory system (e.g., `Silence`), or for phonemes that are valid
 /// English sounds but not yet represented in varna 1.0's English inventory
 /// (diphthongs `aɪ`, `aʊ`, `ɔɪ` and the NURSE vowel `ɜː`).
+///
+/// For non-English languages, use [`phoneme_to_ipa_for`] instead.
 #[must_use]
 pub fn phoneme_to_ipa(phoneme: Phoneme) -> Option<&'static str> {
     match phoneme {
@@ -91,29 +93,150 @@ pub const VARNA_INVENTORY_GAPS: &[Phoneme] = &[
     Phoneme::VowelBird,   // NURSE: ɜː
 ];
 
+/// Maps a svara `Phoneme` to its IPA string for the given language's inventory.
+///
+/// Different languages use different IPA symbols for the same svara phoneme.
+/// For example, `VowelO` maps to "oʊ" (diphthong) in English but "o" in Spanish.
+#[must_use]
+pub fn phoneme_to_ipa_for(phoneme: Phoneme, language: Language) -> Option<&'static str> {
+    match language {
+        Language::English => phoneme_to_ipa(phoneme),
+        Language::Spanish => spanish_phoneme_to_ipa(phoneme),
+    }
+}
+
+/// Maps a svara `Phoneme` to its IPA string in varna's Spanish inventory.
+fn spanish_phoneme_to_ipa(phoneme: Phoneme) -> Option<&'static str> {
+    match phoneme {
+        // Spanish vowels (5 pure vowels, no diphthongs in inventory)
+        Phoneme::VowelOpenA => Some("a"),
+        Phoneme::VowelOpenE => Some("e"),
+        Phoneme::VowelNearI => Some("i"),
+        Phoneme::VowelO => Some("o"),
+        Phoneme::VowelCupV => Some("u"),
+        // Plosives
+        Phoneme::PlosiveP => Some("p"),
+        Phoneme::PlosiveB => Some("b"),
+        Phoneme::PlosiveT => Some("t"),
+        Phoneme::PlosiveD => Some("d"),
+        Phoneme::PlosiveK => Some("k"),
+        Phoneme::PlosiveG => Some("ɡ"),
+        // Fricatives
+        Phoneme::FricativeF => Some("f"),
+        Phoneme::FricativeTh => Some("θ"),
+        Phoneme::FricativeS => Some("s"),
+        Phoneme::FricativeH => Some("x"), // Spanish /x/ (jota)
+        // Nasals
+        Phoneme::NasalM => Some("m"),
+        Phoneme::NasalN => Some("n"),
+        Phoneme::NasalNg => Some("ɲ"), // ñ → palatal nasal
+        // Liquids & approximants
+        Phoneme::LateralL => Some("l"),
+        Phoneme::TapFlap => Some("r"),       // Spanish tap
+        Phoneme::ApproximantR => Some("rr"), // Spanish trill
+        Phoneme::ApproximantJ => Some("j"),
+        Phoneme::ApproximantW => Some("w"),
+        // Affricate
+        Phoneme::AffricateCh => Some("t͡ʃ"),
+        // No IPA for these in Spanish
+        Phoneme::Silence => None,
+        _ => None,
+    }
+}
+
 /// Returns the varna `PhonemeInventory` for the given language.
 #[must_use]
 pub fn inventory_for(language: Language) -> PhonemeInventory {
     match language {
         Language::English => varna::phoneme::english(),
+        Language::Spanish => varna::phoneme::inventories::spanish(),
     }
+}
+
+/// Returns the varna phonotactic constraints for the given language, if available.
+///
+/// Returns `None` for languages where varna doesn't yet define phonotactics.
+#[must_use]
+pub fn phonotactics_for(language: Language) -> Option<varna::phoneme::syllable::Phonotactics> {
+    match language {
+        Language::English => Some(varna::phoneme::syllable::english_phonotactics()),
+        Language::Spanish => None, // not yet defined in varna
+    }
+}
+
+/// Validates a phoneme sequence against phonotactic constraints.
+///
+/// Checks consecutive consonant pairs in onset and coda positions against
+/// the language's phonotactic rules. Returns descriptions of violations found.
+/// An empty return means no violations detected.
+#[must_use]
+pub fn validate_phonotactics(phonemes: &[Phoneme], language: Language) -> Vec<String> {
+    let Some(constraints) = phonotactics_for(language) else {
+        return Vec::new(); // no constraints available
+    };
+
+    let mut violations = Vec::new();
+
+    // Check consecutive consonant sequences against onset constraints
+    let mut consonant_run = Vec::new();
+    for &ph in phonemes {
+        if let Some(ipa) = phoneme_to_ipa(ph) {
+            let is_vowel = matches!(
+                ph.class(),
+                svara::phoneme::PhonemeClass::Vowel | svara::phoneme::PhonemeClass::Diphthong
+            ) || ph == Phoneme::Silence;
+
+            if is_vowel {
+                // Check if consonant run exceeds max onset
+                if consonant_run.len() > constraints.syllable.max_onset as usize {
+                    violations.push(alloc::format!(
+                        "consonant cluster too long for onset: {}",
+                        consonant_run.join("")
+                    ));
+                }
+                consonant_run.clear();
+            } else {
+                consonant_run.push(String::from(ipa));
+            }
+        }
+    }
+
+    // Check final consonant run against max coda
+    if consonant_run.len() > constraints.syllable.max_coda as usize {
+        violations.push(alloc::format!(
+            "consonant cluster too long for coda: {}",
+            consonant_run.join("")
+        ));
+    }
+
+    violations
 }
 
 /// Validates that every phoneme in the slice exists in the given inventory.
 ///
-/// Returns a list of phonemes (as IPA strings) that are NOT in the inventory.
-/// An empty return means all phonemes are valid.
+/// Uses language-aware IPA mapping. Returns a list of phonemes (as IPA strings)
+/// that are NOT in the inventory. An empty return means all phonemes are valid.
 #[must_use]
-pub fn validate_phonemes(phonemes: &[Phoneme], inventory: &PhonemeInventory) -> Vec<String> {
+pub fn validate_phonemes_for(
+    phonemes: &[Phoneme],
+    inventory: &PhonemeInventory,
+    language: Language,
+) -> Vec<String> {
     let mut invalid = Vec::new();
     for &ph in phonemes {
-        if let Some(ipa) = phoneme_to_ipa(ph)
+        if let Some(ipa) = phoneme_to_ipa_for(ph, language)
             && !inventory.has(ipa)
         {
             invalid.push(String::from(ipa));
         }
     }
     invalid
+}
+
+/// Validates phonemes against the English inventory (backwards-compatible alias).
+#[must_use]
+pub fn validate_phonemes(phonemes: &[Phoneme], inventory: &PhonemeInventory) -> Vec<String> {
+    validate_phonemes_for(phonemes, inventory, Language::English)
 }
 
 #[cfg(test)]

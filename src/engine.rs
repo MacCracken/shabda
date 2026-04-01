@@ -19,6 +19,8 @@ use crate::rules;
 pub enum Language {
     /// English (General American).
     English,
+    /// Spanish (Castilian).
+    Spanish,
 }
 
 /// Detects the most likely language for the given text based on script analysis.
@@ -213,6 +215,7 @@ impl G2PEngine {
     pub fn new(language: Language) -> Self {
         let dictionary = match language {
             Language::English => PronunciationDict::english(),
+            Language::Spanish => PronunciationDict::new(),
         };
         Self {
             language,
@@ -224,6 +227,27 @@ impl G2PEngine {
     #[must_use]
     pub fn language(&self) -> Language {
         self.language
+    }
+
+    /// Returns the varna phoneme inventory for the active language.
+    ///
+    /// The inventory describes all valid phonemes for this language,
+    /// including articulatory features and stress pattern.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use shabda::prelude::*;
+    ///
+    /// let g2p = G2PEngine::new(Language::English);
+    /// let inv = g2p.phoneme_inventory();
+    /// assert!(inv.has("p"));
+    /// assert!(inv.has("ʃ"));
+    /// ```
+    #[cfg(feature = "varna")]
+    #[must_use]
+    pub fn phoneme_inventory(&self) -> varna::phoneme::PhonemeInventory {
+        crate::validate::inventory_for(self.language)
     }
 
     /// Returns a reference to the pronunciation dictionary.
@@ -368,6 +392,7 @@ impl G2PEngine {
                 } else {
                     match self.language {
                         Language::English => rules::english_rules(word),
+                        Language::Spanish => rules::spanish_rules(word),
                     }
                 }
             } else if let Some(dict_entry) = self.dictionary.lookup(word) {
@@ -382,22 +407,33 @@ impl G2PEngine {
                 } else {
                     match self.language {
                         Language::English => rules::english_rules(&stripped),
+                        Language::Spanish => rules::spanish_rules(&stripped),
                     }
                 }
             } else {
                 trace!(word, "dictionary miss, falling back to rules");
                 match self.language {
                     Language::English => rules::english_rules(word),
+                    Language::Spanish => rules::spanish_rules(word),
                 }
             };
 
             // Validate phoneme output against varna inventory in debug builds
             #[cfg(feature = "varna")]
             {
-                let invalid = crate::validate::validate_phonemes(&phonemes, &varna_inventory);
+                let invalid = crate::validate::validate_phonemes_for(
+                    &phonemes,
+                    &varna_inventory,
+                    self.language,
+                );
                 debug_assert!(
                     invalid.is_empty(),
                     "word {word:?} produced phonemes not in varna inventory: {invalid:?}"
+                );
+                let violations = crate::validate::validate_phonotactics(&phonemes, self.language);
+                debug_assert!(
+                    violations.is_empty(),
+                    "word {word:?} has phonotactic violations: {violations:?}"
                 );
             }
 
@@ -663,6 +699,7 @@ impl G2PEngine {
             } else {
                 match self.language {
                     Language::English => rules::english_rules(word),
+                    Language::Spanish => rules::spanish_rules(word),
                 }
             };
 

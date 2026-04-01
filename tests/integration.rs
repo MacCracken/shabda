@@ -347,3 +347,56 @@ fn test_serde_roundtrip_timing_profile() {
     let roundtripped: TimingProfile = serde_json::from_str(&json).unwrap();
     assert_eq!(profile, roundtripped);
 }
+
+// --- Spanish G2P tests ---
+
+#[test]
+fn test_spanish_hola_mundo() {
+    let g2p = G2PEngine::new(Language::Spanish);
+    let events = g2p.convert("hola mundo").unwrap();
+    assert!(!events.is_empty(), "Spanish G2P should produce phonemes");
+}
+
+#[test]
+fn test_spanish_convert_with_options() {
+    let g2p = G2PEngine::new(Language::Spanish);
+    let opts = ConvertOptions::new().with_speaking_rate(100.0);
+    let events = g2p.convert_with("buenos días", &opts).unwrap();
+    assert!(!events.is_empty());
+}
+
+#[test]
+fn test_spanish_speak() {
+    let g2p = G2PEngine::new(Language::Spanish);
+    let voice = svara::voice::VoiceProfile::new_male();
+    let samples = g2p.speak("hola", &voice, 44100.0).unwrap();
+    assert!(!samples.is_empty());
+}
+
+#[test]
+fn test_serde_roundtrip_spanish_language() {
+    let lang = Language::Spanish;
+    let json = serde_json::to_string(&lang).unwrap();
+    let roundtripped: Language = serde_json::from_str(&json).unwrap();
+    assert_eq!(lang, roundtripped);
+}
+
+#[cfg(feature = "varna")]
+#[test]
+fn test_phoneme_inventory_english() {
+    let g2p = G2PEngine::new(Language::English);
+    let inv = g2p.phoneme_inventory();
+    assert!(inv.has("p"));
+    assert!(inv.has("ʃ"));
+    assert!(inv.has("ə"));
+}
+
+#[cfg(feature = "varna")]
+#[test]
+fn test_phoneme_inventory_spanish() {
+    let g2p = G2PEngine::new(Language::Spanish);
+    let inv = g2p.phoneme_inventory();
+    assert!(inv.has("p"));
+    assert!(inv.has("θ"));
+    assert!(inv.has("a"));
+}

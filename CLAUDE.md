@@ -39,8 +39,8 @@ dhvani (audio engine), vansh (voice AI shell), and any AGNOS component needing t
 ## Task Sizing
 
 - **Small**: Single-rule addition, test fix, doc tweak
-- **Medium**: New rule pattern set (e.g., emphasis markers), prosody feature, varna inventory gap fixes
-- **Large**: New language G2P module, SSML parser, heteronym disambiguation
+- **Medium**: New rule pattern set, prosody feature, varna inventory gap fixes
+- **Large**: New language G2P module (German, Hindi, Sanskrit, Arabic)
 
 ## Key Principles
 
@@ -64,12 +64,14 @@ dhvani (audio engine), vansh (voice AI shell), and any AGNOS component needing t
 
 ## Module Structure
 
-- `engine.rs` — G2PEngine, Language, convert(), speak(), detect_language() (varna feature)
-- `rules.rs` — English letter-to-sound rules (fallback when dictionary misses)
-- `normalize.rs` — Text normalization, sentence type detection
-- `prosody.rs` — Stress assignment, intonation mapping
+- `engine.rs` — G2PEngine, Language, ConvertOptions, TimingProfile, convert/convert_with/convert_ssml/convert_streaming/speak/speak_with, detect_language (varna), phoneme_inventory (varna)
+- `rules.rs` — English and Spanish letter-to-sound rules (fallback when dictionary misses)
+- `normalize.rs` — Text normalization, abbreviation/acronym expansion, foreign word detection, emphasis markers
+- `prosody.rs` — Stress assignment, emphasis, speaking rate, timing profiles, intonation mapping
 - `syllable.rs` — Syllabification using Maximal Onset Principle with sonority constraints
-- `validate.rs` — Phoneme→IPA mapping, inventory validation via varna (varna feature)
+- `ssml.rs` — SSML subset parser (break, emphasis, prosody)
+- `heteronym.rs` — Heteronym disambiguation with context triggers
+- `validate.rs` — Phoneme→IPA mapping (per-language), inventory + phonotactic validation (varna feature)
 - `error.rs` — ShabdaError (wraps ShabdakoshError via From impl)
 - Re-exports from shabdakosh: `arpabet`, `dictionary`
 

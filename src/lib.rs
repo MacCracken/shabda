@@ -41,7 +41,9 @@
 //! |---------|---------|-------------|
 //! | `std` | Yes | Standard library. Disable for `no_std` + `alloc` |
 //! | `logging` | No | Structured logging via tracing-subscriber |
+//! | `json` | No | JSON serialization via serde_json |
 //! | `varna` | No | Phoneme inventory validation and language detection via varna |
+//! | `full` | No | All of the above |
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
@@ -78,6 +80,8 @@ mod assert_traits {
         _assert_send_sync::<crate::error::ShabdaError>();
         _assert_send_sync::<crate::engine::G2PEngine>();
         _assert_send_sync::<crate::engine::Language>();
+        _assert_send_sync::<crate::engine::ConvertOptions>();
+        _assert_send_sync::<crate::engine::TimingProfile>();
         _assert_send_sync::<crate::dictionary::PronunciationDict>();
     }
 }
