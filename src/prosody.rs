@@ -148,6 +148,53 @@ pub fn is_content_word(word: &str) -> bool {
     )
 }
 
+/// Default speaking rate in words per minute.
+const DEFAULT_WPM: f32 = 150.0;
+/// Minimum WPM (clamped).
+const MIN_WPM: f32 = 50.0;
+/// Maximum WPM (clamped).
+const MAX_WPM: f32 = 300.0;
+/// Minimum consonant duration in seconds (prevents unintelligible speech).
+const MIN_CONSONANT_DURATION: f32 = 0.03;
+/// Minimum vowel duration in seconds.
+const MIN_VOWEL_DURATION: f32 = 0.05;
+
+/// Emphasis duration multiplier (1.3x longer than normal).
+const EMPHASIS_DURATION_SCALE: f32 = 1.3;
+
+/// Applies emphatic stress to a word's phoneme events.
+///
+/// Boosts all vowels to `Primary` stress and scales their duration
+/// by 1.3x to create perceptible emphasis.
+pub fn apply_emphasis(events: &mut [PhonemeEvent]) {
+    for event in events.iter_mut() {
+        if is_vowel_like(&event.phoneme) {
+            event.stress = Stress::Primary;
+            event.duration *= EMPHASIS_DURATION_SCALE;
+        }
+    }
+}
+
+/// Scales phoneme event durations to match a target speaking rate.
+///
+/// Durations are scaled by `default_wpm / target_wpm`. The target WPM
+/// is clamped to 50–300. Minimum durations are enforced to prevent
+/// unintelligible output (30ms for consonants, 50ms for vowels).
+pub fn apply_rate(events: &mut [PhonemeEvent], target_wpm: f32) {
+    let clamped_wpm = target_wpm.clamp(MIN_WPM, MAX_WPM);
+    let scale = DEFAULT_WPM / clamped_wpm;
+
+    for event in events.iter_mut() {
+        let scaled = event.duration * scale;
+        let min = if is_vowel_like(&event.phoneme) {
+            MIN_VOWEL_DURATION
+        } else {
+            MIN_CONSONANT_DURATION
+        };
+        event.duration = scaled.max(min);
+    }
+}
+
 /// Maps sentence type to svara intonation pattern.
 #[must_use]
 pub fn sentence_intonation(sentence_type: SentenceType) -> svara::prosody::IntonationPattern {

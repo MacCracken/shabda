@@ -62,7 +62,7 @@ pub mod validate;
 pub mod prelude {
     #[cfg(feature = "varna")]
     pub use crate::engine::detect_language;
-    pub use crate::engine::{G2PEngine, Language};
+    pub use crate::engine::{ConvertOptions, G2PEngine, Language};
     pub use crate::error::{Result, ShabdaError};
 }
 

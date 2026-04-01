@@ -1,5 +1,6 @@
 //! Integration tests for shabda.
 
+use shabda::engine::ConvertOptions;
 use shabda::prelude::*;
 
 #[test]
@@ -148,4 +149,56 @@ fn test_number_expansion_in_pipeline() {
         events.len() > 4,
         "number should expand to words with phonemes"
     );
+}
+
+// --- ConvertOptions tests ---
+
+#[test]
+fn test_convert_with_default_matches_convert() {
+    let g2p = G2PEngine::new(Language::English);
+    let events_default = g2p.convert("hello world").unwrap();
+    let events_with = g2p
+        .convert_with("hello world", &ConvertOptions::default())
+        .unwrap();
+    assert_eq!(events_default.len(), events_with.len());
+}
+
+#[test]
+fn test_convert_with_emphasis() {
+    let g2p = G2PEngine::new(Language::English);
+    let opts = ConvertOptions::new().with_emphasis(true);
+    let events = g2p.convert_with("HELLO world", &opts).unwrap();
+    assert!(!events.is_empty());
+    // Emphasized word should have primary stress on all vowels
+    let primary_count = events
+        .iter()
+        .filter(|e| e.stress == svara::prosody::Stress::Primary)
+        .count();
+    assert!(primary_count >= 1, "emphasis should produce primary stress");
+}
+
+#[test]
+fn test_convert_with_speaking_rate() {
+    let g2p = G2PEngine::new(Language::English);
+    let normal = g2p.convert("hello world").unwrap();
+    let slow = g2p
+        .convert_with("hello world", &ConvertOptions::new().with_speaking_rate(75.0))
+        .unwrap();
+    // Slow speech should have longer total duration
+    let normal_dur: f32 = normal.iter().map(|e| e.duration).sum();
+    let slow_dur: f32 = slow.iter().map(|e| e.duration).sum();
+    assert!(
+        slow_dur > normal_dur * 1.5,
+        "75 WPM should be ~2x longer than 150 WPM default"
+    );
+}
+
+#[test]
+fn test_serde_roundtrip_convert_options() {
+    let opts = ConvertOptions::new()
+        .with_emphasis(true)
+        .with_speaking_rate(120.0);
+    let json = serde_json::to_string(&opts).unwrap();
+    let roundtripped: ConvertOptions = serde_json::from_str(&json).unwrap();
+    assert_eq!(opts, roundtripped);
 }

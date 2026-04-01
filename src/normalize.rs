@@ -7,6 +7,10 @@ use tracing::trace;
 pub const COMMA_PAUSE: &str = ",pause";
 /// Phrase boundary marker emitted for periods/semicolons (longer pause).
 pub const PERIOD_PAUSE: &str = ".pause";
+/// Emphasis start marker (precedes an emphasized word).
+pub const EMPHASIS_START: &str = "<emph>";
+/// Emphasis end marker (follows an emphasized word).
+pub const EMPHASIS_END: &str = "</emph>";
 
 /// Normalizes input text for G2P processing.
 ///
@@ -52,6 +56,92 @@ pub fn normalize(text: &str) -> String {
     }
 
     result
+}
+
+/// Normalizes input text with emphasis marker detection.
+///
+/// Like [`normalize`], but also detects emphasis patterns:
+/// - ALL-CAPS words (3+ letters) → wrapped in emphasis markers
+/// - `*asterisk-wrapped*` words → wrapped in emphasis markers
+///
+/// # Examples
+///
+/// ```
+/// use shabda::normalize::{normalize_with_emphasis, EMPHASIS_START, EMPHASIS_END};
+///
+/// let result = normalize_with_emphasis("HELLO world");
+/// assert!(result.contains(EMPHASIS_START));
+/// assert!(result.contains("hello"));
+/// assert!(result.contains(EMPHASIS_END));
+/// ```
+#[must_use]
+pub fn normalize_with_emphasis(text: &str) -> String {
+    let expanded = expand_numbers(text);
+
+    // First pass: detect emphasis patterns in the original casing
+    let tokens: alloc::vec::Vec<&str> = expanded.split_whitespace().collect();
+    let mut result = String::with_capacity(expanded.len() + tokens.len() * 8);
+
+    for (i, token) in tokens.iter().enumerate() {
+        if i > 0 && !result.is_empty() {
+            result.push(' ');
+        }
+
+        // Check for *asterisk-wrapped* emphasis
+        if token.len() >= 3 && token.starts_with('*') && token.ends_with('*') {
+            let inner = &token[1..token.len() - 1];
+            if !inner.is_empty() && inner.chars().all(|c| c.is_alphabetic()) {
+                result.push_str(EMPHASIS_START);
+                result.push(' ');
+                for ch in inner.chars() {
+                    result.push(ch.to_lowercase().next().unwrap_or(ch));
+                }
+                result.push(' ');
+                result.push_str(EMPHASIS_END);
+                continue;
+            }
+        }
+
+        // Check for ALL-CAPS emphasis (3+ alphabetic chars, all uppercase)
+        let alpha_chars: alloc::vec::Vec<char> =
+            token.chars().filter(|c| c.is_alphabetic()).collect();
+        if alpha_chars.len() >= 3 && alpha_chars.iter().all(|c| c.is_uppercase()) {
+            result.push_str(EMPHASIS_START);
+            result.push(' ');
+            // Process token through normal char rules but lowercase
+            normalize_token_into(token, &mut result);
+            result.push(' ');
+            result.push_str(EMPHASIS_END);
+            continue;
+        }
+
+        // Normal token processing
+        normalize_token_into(token, &mut result);
+    }
+
+    result
+}
+
+/// Normalizes a single token into the result buffer (lowercase, handle punctuation).
+fn normalize_token_into(token: &str, result: &mut String) {
+    let mut prev_space = false;
+    for ch in token.chars() {
+        if ch.is_alphabetic() || ch == '\'' || ch == '-' {
+            if prev_space && !result.is_empty() && !result.ends_with(' ') {
+                result.push(' ');
+            }
+            result.push(ch.to_lowercase().next().unwrap_or(ch));
+            prev_space = false;
+        } else if ch == ',' {
+            result.push_str(" ,pause");
+            prev_space = true;
+        } else if ch == '.' || ch == ';' {
+            result.push_str(" .pause");
+            prev_space = true;
+        } else if ch.is_whitespace() || ch == '!' || ch == '?' {
+            prev_space = true;
+        }
+    }
 }
 
 /// Expands digit sequences in text to English words.

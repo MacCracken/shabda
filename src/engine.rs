@@ -76,6 +76,62 @@ pub fn detect_language(text: &str) -> Option<Language> {
     best.map(|(lang, _)| lang)
 }
 
+/// Options for controlling G2P conversion behavior.
+///
+/// Used with [`G2PEngine::convert_with`] to enable emphasis detection,
+/// speaking rate control, and other prosody features. The default options
+/// produce the same output as [`G2PEngine::convert`].
+///
+/// # Examples
+///
+/// ```
+/// use shabda::engine::ConvertOptions;
+///
+/// let opts = ConvertOptions::new()
+///     .with_emphasis(true)
+///     .with_speaking_rate(120.0);
+/// ```
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct ConvertOptions {
+    /// Enable emphasis detection from CAPS and *asterisks*.
+    ///
+    /// When `true`, ALL-CAPS words (3+ chars) receive emphatic stress,
+    /// and `*wrapped*` words receive focus stress.
+    #[serde(default)]
+    pub emphasis: bool,
+
+    /// Target speaking rate in words per minute.
+    ///
+    /// `None` uses the default rate (~150 WPM). Lower values produce
+    /// slower, more deliberate speech; higher values produce faster speech.
+    /// Clamped to 50–300 WPM.
+    #[serde(default)]
+    pub speaking_rate_wpm: Option<f32>,
+}
+
+impl ConvertOptions {
+    /// Creates default conversion options.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Enables or disables emphasis detection.
+    #[must_use]
+    pub fn with_emphasis(mut self, emphasis: bool) -> Self {
+        self.emphasis = emphasis;
+        self
+    }
+
+    /// Sets the target speaking rate in words per minute.
+    #[must_use]
+    pub fn with_speaking_rate(mut self, wpm: f32) -> Self {
+        self.speaking_rate_wpm = Some(wpm);
+        self
+    }
+}
+
 /// The grapheme-to-phoneme engine.
 ///
 /// Converts text to svara `PhonemeEvent` sequences using dictionary lookup
@@ -118,15 +174,9 @@ impl G2PEngine {
         &mut self.dictionary
     }
 
-    /// Converts text to a sequence of phoneme events.
+    /// Converts text to a sequence of phoneme events with default options.
     ///
-    /// The pipeline:
-    /// 1. Expand numbers to words and normalize text
-    /// 2. Detect sentence intonation from punctuation
-    /// 3. For each word: dictionary lookup → rule-based fallback
-    /// 4. Syllabify and assign stress based on syllable weight
-    /// 5. Insert phrase pauses at commas (150ms) and periods (300ms)
-    /// 6. Insert word-boundary silence (40ms) between words
+    /// Equivalent to `convert_with(text, &ConvertOptions::default())`.
     ///
     /// # Errors
     ///
@@ -142,6 +192,38 @@ impl G2PEngine {
     /// assert!(!events.is_empty());
     /// ```
     pub fn convert(&self, text: &str) -> Result<Vec<PhonemeEvent>> {
+        self.convert_with(text, &ConvertOptions::default())
+    }
+
+    /// Converts text to a sequence of phoneme events with the given options.
+    ///
+    /// The pipeline:
+    /// 1. Expand numbers to words and normalize text
+    /// 2. Detect sentence intonation from punctuation
+    /// 3. For each word: dictionary lookup → rule-based fallback
+    /// 4. Syllabify and assign stress based on syllable weight
+    /// 5. Apply emphasis markers (if enabled)
+    /// 6. Apply speaking rate scaling (if set)
+    /// 7. Insert phrase pauses at commas (150ms) and periods (300ms)
+    /// 8. Insert word-boundary silence (40ms) between words
+    ///
+    /// # Errors
+    ///
+    /// Returns `ShabdaError::InvalidInput` if the text is empty.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use shabda::prelude::*;
+    ///
+    /// let g2p = G2PEngine::new(Language::English);
+    /// let opts = ConvertOptions::new()
+    ///     .with_emphasis(true)
+    ///     .with_speaking_rate(120.0);
+    /// let events = g2p.convert_with("HELLO world", &opts).unwrap();
+    /// assert!(!events.is_empty());
+    /// ```
+    pub fn convert_with(&self, text: &str, options: &ConvertOptions) -> Result<Vec<PhonemeEvent>> {
         if text.trim().is_empty() {
             return Err(ShabdaError::InvalidInput("empty text".to_string()));
         }
@@ -150,19 +232,36 @@ impl G2PEngine {
         let varna_inventory = crate::validate::inventory_for(self.language);
 
         let intonation = normalize::detect_intonation(text);
-        let normalized = normalize::normalize(text);
+        let normalized = if options.emphasis {
+            normalize::normalize_with_emphasis(text)
+        } else {
+            normalize::normalize(text)
+        };
 
         trace!(
             input = text,
             normalized = normalized.as_str(),
             ?intonation,
+            emphasis = options.emphasis,
+            rate = ?options.speaking_rate_wpm,
             "converting text to phonemes"
         );
 
         let words: Vec<&str> = normalized.split_whitespace().collect();
         let mut events = Vec::new();
+        let mut emphasis_active = false;
 
         for (i, word) in words.iter().enumerate() {
+            // Handle emphasis markers
+            if *word == normalize::EMPHASIS_START {
+                emphasis_active = true;
+                continue;
+            }
+            if *word == normalize::EMPHASIS_END {
+                emphasis_active = false;
+                continue;
+            }
+
             // Handle phrase boundary markers
             if *word == normalize::COMMA_PAUSE {
                 events.push(PhonemeEvent::new(
@@ -210,7 +309,7 @@ impl G2PEngine {
             // Syllabify and assign stress based on syllable weight
             let is_content = prosody::is_content_word(word);
             let syllables = crate::syllable::syllabify(&phonemes);
-            let word_events = if syllables.is_empty() {
+            let mut word_events = if syllables.is_empty() {
                 trace!(word, "no syllables (consonant-only), using simple stress");
                 prosody::assign_stress(&phonemes, is_content)
             } else {
@@ -222,6 +321,12 @@ impl G2PEngine {
                 );
                 prosody::assign_stress_syllabic(&syllables, is_content)
             };
+
+            // Apply emphasis if active
+            if emphasis_active {
+                prosody::apply_emphasis(&mut word_events);
+            }
+
             events.extend(word_events);
 
             // Insert short silence between words (not after last word)
@@ -232,6 +337,11 @@ impl G2PEngine {
                     svara::prosody::Stress::Unstressed,
                 ));
             }
+        }
+
+        // Apply speaking rate scaling
+        if let Some(wpm) = options.speaking_rate_wpm {
+            prosody::apply_rate(&mut events, wpm);
         }
 
         Ok(events)
@@ -261,7 +371,22 @@ impl G2PEngine {
         voice: &svara::voice::VoiceProfile,
         sample_rate: f32,
     ) -> Result<Vec<f32>> {
-        let events = self.convert(text)?;
+        self.speak_with(text, voice, sample_rate, &ConvertOptions::default())
+    }
+
+    /// Converts text and renders to audio samples with the given options.
+    ///
+    /// # Errors
+    ///
+    /// Returns errors from either G2P conversion or audio synthesis.
+    pub fn speak_with(
+        &self,
+        text: &str,
+        voice: &svara::voice::VoiceProfile,
+        sample_rate: f32,
+        options: &ConvertOptions,
+    ) -> Result<Vec<f32>> {
+        let events = self.convert_with(text, options)?;
 
         let mut seq = svara::sequence::PhonemeSequence::new();
         for event in events {
