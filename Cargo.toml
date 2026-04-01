@@ -14,9 +14,9 @@ categories = ["text-processing", "multimedia::audio"]
 exclude = [".claude/", ".github/", "docs/", "scripts/"]
 
 [dependencies]
-shabdakosh = { version = "1", default-features = false }
+shabdakosh = { version = "2", default-features = false }
 serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
-svara = { version = "1", default-features = false }
+svara = { version = "2", default-features = false }
 thiserror = { version = "2", default-features = false }
 tracing = { version = "0.1", default-features = false }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"], optional = true }
