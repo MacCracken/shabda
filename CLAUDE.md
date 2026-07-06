@@ -1,100 +1,69 @@
 # shabda — Claude Code Instructions
 
+> **Core rule**: this file is **preferences, process, and procedures** —
+> durable rules that change rarely. Volatile state (current version,
+> module line counts, port progress, test counts, consumers) lives in
+> [`docs/development/state.md`](docs/development/state.md).
+> Do not inline state here.
+
 ## Project Identity
 
-**shabda** (Sanskrit: word / sound) — Grapheme-to-phoneme conversion for AGNOS
+**shabda** — Cyrius port of a Rust project (5051 lines preserved at `rust-old/`).
 
-- **Type**: Flat library crate
-- **License**: GPL-3.0
-- **MSRV**: 1.89
-- **Version**: SemVer — `VERSION` file is source of truth; use `scripts/version-bump.sh <ver>` to update
+- **Type**: Port (Rust → Cyrius)
+- **License**: GPL-3.0-only
+- **Language**: Cyrius (toolchain pinned in `cyrius.cyml [package].cyrius`)
+- **Version**: `VERSION` at the project root is the source of truth — do not inline the number here
+- **Standards**: [First-Party Standards](https://github.com/MacCracken/agnosticos/blob/main/docs/development/applications/first-party-standards.md) · [First-Party Documentation](https://github.com/MacCracken/agnosticos/blob/main/docs/development/applications/first-party-documentation.md)
 
-## Consumers
+## Goal
 
-dhvani (audio engine), vansh (voice AI shell), and any AGNOS component needing text-to-speech.
+_TODO: one-or-two-sentence mission statement. What does shabda OWN in the stack? Durable — doesn't change per release._
 
-## Dependencies
+## Current State
 
-- **shabdakosh**: Pronunciation dictionary (10K+ entries, ARPABET/IPA, user overlay)
-- **svara**: Phoneme types, synthesis engine, voice profiles
-- **varna** (optional): Phoneme inventories, script detection, language data (50+ languages)
+> Volatile state lives in [`docs/development/state.md`](docs/development/state.md) —
+> port progress, surface parity, in-flight work. Refreshed every release.
 
-## Work Loop
+This file (`CLAUDE.md`) is durable rules.
 
-1. Read the relevant code before proposing changes
-2. Make the change
-3. Cleanliness check:
-   - `cargo fmt`
-   - `cargo clippy --all-features --all-targets -- -D warnings`
-   - `cargo audit`
-   - `cargo deny check`
-   - `RUSTDOCFLAGS="-D warnings" cargo doc --all-features --no-deps`
-4. `cargo test --all-features`
-5. `cargo test --doc`
-6. `cargo check --no-default-features` (no_std verification)
-7. `cargo bench` or `./scripts/bench-history.sh` (if performance-relevant)
-8. Update CHANGELOG.md if user-facing
-9. Update docs/development/roadmap.md if completing a roadmap item
+## Scaffolding
 
-## Task Sizing
+Project was scaffolded with `cyrius port`. Original Rust at `rust-old/` is the reference oracle — do not modify it; cross-check the port against it.
 
-- **Small**: Single-rule addition, test fix, doc tweak
-- **Medium**: New rule pattern set, prosody feature, varna inventory gap fixes
-- **Large**: New language G2P module (German, Hindi, Sanskrit, Arabic)
+## Quick Start
+
+```sh
+cyrius deps                              # resolve dependencies
+cyrius build src/main.cyr build/shabda    # compile
+cyrius test                              # run tests/*.tcyr
+```
 
 ## Key Principles
 
-- Never skip benchmarks
-- `#[non_exhaustive]` on ALL public enums
-- `#[must_use]` on all pure functions
-- Every type must be Serialize + Deserialize (serde)
-- Zero unwrap/panic in library code
-- All types must have serde roundtrip tests
-- Dictionary-first, rules as fallback — accuracy over speed
-- Phoneme output must be compatible with svara's PhonemeEvent
-- When `varna` feature is active, debug assertions validate phoneme output against varna's inventory
+- **Cross-check against `rust-old/`** — the port's correctness bar is "matches what Rust did". Diverge only with an ADR.
+- **Correctness over cleverness** — if the Cyrius behavior diverges silently from Rust, the bugs win
+- Test after every change, not after the feature is "done"
+- ONE change at a time — never bundle unrelated changes
+- Build with `cyrius build`, not raw `cat file | cc5` — the manifest auto-resolves deps
+- Source files only need project includes — stdlib auto-resolves from `cyrius.cyml`
+- `var buf[N]` = N **bytes**, not N entries
 
-## Feature Flags
-
-- `std` (default) — Standard library; disable for `no_std` + `alloc`
-- `logging` — Structured logging via tracing-subscriber
-- `json` — JSON serialization via serde_json
-- `varna` — Phoneme inventory validation and language detection via varna
-- `full` — All of the above
-
-## Module Structure
-
-- `engine.rs` — G2PEngine, Language, ConvertOptions, TimingProfile, convert/convert_with/convert_ssml/convert_streaming/speak/speak_with, detect_language (varna), phoneme_inventory (varna)
-- `rules.rs` — English and Spanish letter-to-sound rules (fallback when dictionary misses)
-- `normalize.rs` — Text normalization, abbreviation/acronym expansion, foreign word detection, emphasis markers
-- `prosody.rs` — Stress assignment, emphasis, speaking rate, timing profiles, intonation mapping
-- `syllable.rs` — Syllabification using Maximal Onset Principle with sonority constraints
-- `ssml.rs` — SSML subset parser (break, emphasis, prosody)
-- `heteronym.rs` — Heteronym disambiguation with context triggers
-- `validate.rs` — Phoneme→IPA mapping (per-language), inventory + phonotactic validation (varna feature)
-- `error.rs` — ShabdaError (wraps ShabdakoshError via From impl)
-- Re-exports from shabdakosh: `arpabet`, `dictionary`
-
-## DO NOT
+## Rules (Hard Constraints)
 
 - **Do not commit or push** — the user handles all git operations
-- **NEVER use `gh` CLI** — use `curl` to GitHub API only
-- Do not add unnecessary dependencies
-- Do not skip benchmarks before claiming performance improvements
+- **Never use `gh` CLI** — use `curl` to the GitHub API if needed
+- Do not modify `rust-old/` — it's the parity oracle
+- Do not skip tests before claiming changes work
+- Do not modify `lib/` files (vendored stdlib / dep symlinks)
+- Do not hardcode toolchain versions in CI YAML — `cyrius = "X.Y.Z"` in `cyrius.cyml` is the source of truth
 
 ## Documentation
 
-- CHANGELOG.md: Keep a Changelog format (Added/Changed/Fixed/Removed)
-- README.md: Quick start, feature list, architecture
-- docs/development/roadmap.md: Completed versions + backlog
+- [`docs/adr/`](docs/adr/) — Architecture Decision Records (*why X over Y?*)
+- [`docs/architecture/`](docs/architecture/) — Non-obvious constraints
+- [`docs/guides/`](docs/guides/) — Task-oriented how-tos
+- [`docs/examples/`](docs/examples/) — Runnable examples
+- [`docs/development/state.md`](docs/development/state.md) — Live state
+- [`docs/development/roadmap.md`](docs/development/roadmap.md) — Milestones through v1.0
 
-## CHANGELOG Format
-
-```
-## [version] — YYYY-MM-DD
-
-Description.
-
-- **Feature**: description
-- **Breaking**: description
-```

@@ -1,0 +1,1168 @@
+# normalize.cyr — text normalization for G2P (ports rust-old/src/normalize.rs).
+#
+# Leaf module: depends on stdlib only (string/str/vec/fmt/alloc). OWNS the
+# SentenceType surface — the SHABDA_STYPE_* tags are hoisted in error.cyr (L0);
+# the detect fn (shabda_detect_intonation) lives here.
+#
+# Ports: normalize, normalize_with_emphasis, expand_abbreviations,
+# expand_acronyms, is_foreign_word, strip_diacritics, expand_numbers,
+# detect_intonation. Plus the private helpers (match_abbreviation,
+# split_trailing_punct, is_acronym, is_pronounceable_acronym, collect_number,
+# expand_number_token, digits_to_words, number_to_words, hundreds/tens_to_words,
+# is_latin_extended, normalize_token_into).
+#
+# CYRIUS STRING MODEL: strings are cstr byte pointers (NUL-terminated). Rust's
+# `.chars()` scalar iteration is replaced by a UTF-8 decoder (_shabda_utf8_next,
+# copied from shabdakosh detect.cyr) that walks code points. Output is built into
+# a growable byte buffer (a "SB": a heap struct that owns a cstr + len + cap and
+# appends bytes / cstr literals / UTF-8-encoded code points) so we never touch the
+# Str<->cstr trap.
+#
+# SB layout (24 bytes): [0]=data ptr, [8]=len (bytes, excl NUL), [16]=cap (bytes
+# of the backing alloc, incl room for NUL).
+#
+# tracing trace! calls in the Rust are dropped (no-op).
+#
+# Dep position: included after src/error.cyr (which hoists SHABDA_STYPE_*). Never
+# includes other modules. NAMING: every top-level symbol is shabda_/SHABDA_-prefixed.
+
+# ================================================================
+# Constants — MATCH the Rust literal values in normalize.rs exactly.
+# COMMA_PAUSE=",pause"  PERIOD_PAUSE=".pause"
+# EMPHASIS_START="<emph>"  EMPHASIS_END="</emph>"
+# ================================================================
+var SHABDA_COMMA_PAUSE    = ",pause";
+var SHABDA_PERIOD_PAUSE   = ".pause";
+var SHABDA_EMPHASIS_START = "<emph>";
+var SHABDA_EMPHASIS_END   = "</emph>";
+
+# ================================================================
+# UTF-8 code-point decoder — verbatim from shabdakosh detect.cyr. Decodes one
+# code point at byte pointer p; writes the scalar to *out_cp; returns bytes
+# consumed (1..4), or 0 at the NUL terminator.
+# ================================================================
+fn _shabda_utf8_next(p, out_cp): i64 {
+    var b0 = load8(p);
+    var b1 = 0;
+    var b2 = 0;
+    var b3 = 0;
+    if (b0 == 0) { return 0; }
+    if (b0 < 128) { store64(out_cp, b0); return 1; }
+    if (b0 < 224) {
+        b1 = load8(p + 1);
+        if (b1 == 0) { store64(out_cp, b0); return 1; }
+        store64(out_cp, ((b0 & 31) << 6) | (b1 & 63));
+        return 2;
+    }
+    if (b0 < 240) {
+        b1 = load8(p + 1);
+        if (b1 == 0) { store64(out_cp, b0); return 1; }
+        b2 = load8(p + 2);
+        if (b2 == 0) { store64(out_cp, b0); return 1; }
+        store64(out_cp, ((b0 & 15) << 12) | ((b1 & 63) << 6) | (b2 & 63));
+        return 3;
+    }
+    b1 = load8(p + 1);
+    if (b1 == 0) { store64(out_cp, b0); return 1; }
+    b2 = load8(p + 2);
+    if (b2 == 0) { store64(out_cp, b0); return 1; }
+    b3 = load8(p + 3);
+    if (b3 == 0) { store64(out_cp, b0); return 1; }
+    store64(out_cp, ((b0 & 7) << 18) | ((b1 & 63) << 12) | ((b2 & 63) << 6) | (b3 & 63));
+    return 4;
+}
+
+# ================================================================
+# Growable cstr byte buffer ("SB"). Owns a NUL-terminated backing alloc.
+# ================================================================
+var SHABDA_SB_DATA = 0;
+var SHABDA_SB_LEN  = 8;
+var SHABDA_SB_CAP  = 16;
+var SHABDA_SB_SIZE = 24;
+
+fn _shabda_sb_new(): i64 {
+    var sb = alloc(SHABDA_SB_SIZE);
+    var buf = alloc(16);
+    store8(buf, 0);
+    store64(sb + SHABDA_SB_DATA, buf);
+    store64(sb + SHABDA_SB_LEN, 0);
+    store64(sb + SHABDA_SB_CAP, 16);
+    return sb;
+}
+
+# Ensure room for `extra` more bytes plus the NUL terminator.
+fn _shabda_sb_reserve(sb, extra): i64 {
+    var len = load64(sb + SHABDA_SB_LEN);
+    var cap = load64(sb + SHABDA_SB_CAP);
+    var need = len + extra + 1;
+    if (need <= cap) { return 0; }
+    var newcap = cap;
+    while (newcap < need) { newcap = newcap * 2; }
+    var old = load64(sb + SHABDA_SB_DATA);
+    var buf = alloc(newcap);
+    memcpy(buf, old, len);
+    store8(buf + len, 0);
+    store64(sb + SHABDA_SB_DATA, buf);
+    store64(sb + SHABDA_SB_CAP, newcap);
+    return 0;
+}
+
+# Append one raw byte.
+fn _shabda_sb_push_byte(sb, b): i64 {
+    _shabda_sb_reserve(sb, 1);
+    var data = load64(sb + SHABDA_SB_DATA);
+    var len = load64(sb + SHABDA_SB_LEN);
+    store8(data + len, b);
+    store8(data + len + 1, 0);
+    store64(sb + SHABDA_SB_LEN, len + 1);
+    return 0;
+}
+
+# Append a NUL-terminated cstring.
+fn _shabda_sb_push_cstr(sb, s): i64 {
+    var n = strlen(s);
+    _shabda_sb_reserve(sb, n);
+    var data = load64(sb + SHABDA_SB_DATA);
+    var len = load64(sb + SHABDA_SB_LEN);
+    memcpy(data + len, s, n);
+    store8(data + len + n, 0);
+    store64(sb + SHABDA_SB_LEN, len + n);
+    return 0;
+}
+
+# Append `n` bytes from a raw pointer.
+fn _shabda_sb_push_bytes(sb, p, n): i64 {
+    _shabda_sb_reserve(sb, n);
+    var data = load64(sb + SHABDA_SB_DATA);
+    var len = load64(sb + SHABDA_SB_LEN);
+    memcpy(data + len, p, n);
+    store8(data + len + n, 0);
+    store64(sb + SHABDA_SB_LEN, len + n);
+    return 0;
+}
+
+# UTF-8-encode a code point and append it.
+fn _shabda_sb_push_cp(sb, cp): i64 {
+    if (cp < 128) {
+        _shabda_sb_push_byte(sb, cp);
+        return 0;
+    }
+    if (cp < 2048) {
+        _shabda_sb_push_byte(sb, 192 | (cp >> 6));
+        _shabda_sb_push_byte(sb, 128 | (cp & 63));
+        return 0;
+    }
+    if (cp < 65536) {
+        _shabda_sb_push_byte(sb, 224 | (cp >> 12));
+        _shabda_sb_push_byte(sb, 128 | ((cp >> 6) & 63));
+        _shabda_sb_push_byte(sb, 128 | (cp & 63));
+        return 0;
+    }
+    _shabda_sb_push_byte(sb, 240 | (cp >> 18));
+    _shabda_sb_push_byte(sb, 128 | ((cp >> 12) & 63));
+    _shabda_sb_push_byte(sb, 128 | ((cp >> 6) & 63));
+    _shabda_sb_push_byte(sb, 128 | (cp & 63));
+    return 0;
+}
+
+# Finalize: return the cstr pointer (NUL-terminated).
+fn _shabda_sb_cstr(sb): cstring {
+    return load64(sb + SHABDA_SB_DATA);
+}
+
+fn _shabda_sb_len(sb): i64 {
+    return load64(sb + SHABDA_SB_LEN);
+}
+
+# Last byte of the buffer, or 0 if empty.
+fn _shabda_sb_last(sb): i64 {
+    var len = load64(sb + SHABDA_SB_LEN);
+    if (len == 0) { return 0; }
+    var data = load64(sb + SHABDA_SB_DATA);
+    return load8(data + len - 1);
+}
+
+# ================================================================
+# Code-point predicates (mirror Rust char methods on the paths normalize uses).
+# ================================================================
+# Rust char::is_alphabetic. Covers ASCII letters + Latin-1/Extended accented
+# letters (the block this crate actually feeds). We follow strip_diacritics /
+# is_latin_extended's scope: ASCII A-Z/a-z plus 0x00C0..0x024F letters (excluding
+# the two division/multiplication signs 0x00D7 and 0x00F7, which are Sm/So).
+fn _shabda_is_alpha(cp): i64 {
+    if (cp >= 65 && cp <= 90) { return 1; }
+    if (cp >= 97 && cp <= 122) { return 1; }
+    if (cp >= 0x00C0 && cp <= 0x024F) {
+        if (cp == 0x00D7) { return 0; }
+        if (cp == 0x00F7) { return 0; }
+        return 1;
+    }
+    return 0;
+}
+
+fn _shabda_is_ascii_alpha(cp): i64 {
+    if (cp >= 65 && cp <= 90) { return 1; }
+    if (cp >= 97 && cp <= 122) { return 1; }
+    return 0;
+}
+
+fn _shabda_is_ascii_upper(cp): i64 {
+    if (cp >= 65 && cp <= 90) { return 1; }
+    return 0;
+}
+
+fn _shabda_is_ascii_digit(cp): i64 {
+    if (cp >= 48 && cp <= 57) { return 1; }
+    return 0;
+}
+
+# Rust char::is_alphanumeric — for our inputs = alpha OR ascii digit.
+fn _shabda_is_alnum(cp): i64 {
+    if (_shabda_is_alpha(cp) == 1) { return 1; }
+    if (_shabda_is_ascii_digit(cp) == 1) { return 1; }
+    return 0;
+}
+
+# Rust char::is_whitespace on ASCII inputs: space/tab/nl/cr/ff/vt.
+fn _shabda_is_ws(cp): i64 {
+    if (cp == 32) { return 1; }
+    if (cp == 9) { return 1; }
+    if (cp == 10) { return 1; }
+    if (cp == 13) { return 1; }
+    if (cp == 12) { return 1; }
+    if (cp == 11) { return 1; }
+    return 0;
+}
+
+# Rust char::is_uppercase for our alpha inputs: ASCII A-Z (accented uppercase in
+# the Latin block are not used by expand_acronyms's ASCII-only tokens; the ALL-CAPS
+# emphasis path uses is_uppercase over alpha chars — accented uppercase counts).
+fn _shabda_is_upper(cp): i64 {
+    if (cp >= 65 && cp <= 90) { return 1; }
+    # Latin-1 uppercase 0x00C0..0x00DE excluding 0x00D7 (multiplication sign).
+    if (cp >= 0x00C0 && cp <= 0x00DE) {
+        if (cp == 0x00D7) { return 0; }
+        return 1;
+    }
+    return 0;
+}
+
+# ASCII lowercase of a code point (Rust to_lowercase().next() over the letters
+# this crate handles: ASCII upper -> ASCII lower; everything else unchanged, which
+# preserves accented letters as-is like the Rust default lowering keeps its scalar).
+fn _shabda_to_lower_cp(cp): i64 {
+    if (cp >= 65 && cp <= 90) { return cp + 32; }
+    return cp;
+}
+
+# ================================================================
+# ASCII-lowercase copy of a cstring (Rust str::to_lowercase for the ASCII-only
+# words match_abbreviation / is_pronounceable_acronym pass it — those inputs are
+# ASCII, so ASCII folding matches Rust's Unicode folding on them).
+# ================================================================
+fn _shabda_lower_cstr(s): cstring {
+    var n = strlen(s);
+    var out = alloc(n + 1);
+    var i = 0;
+    var c = 0;
+    while (i < n) {
+        c = load8(s + i);
+        if (c >= 65 && c <= 90) { c = c + 32; }
+        store8(out + i, c);
+        i = i + 1;
+    }
+    store8(out + n, 0);
+    return out;
+}
+
+# cstr starts_with(prefix): 1 if s begins with the bytes of prefix.
+fn _shabda_starts_with(s, prefix): i64 {
+    var i = 0;
+    var pc = 0;
+    var sc = 0;
+    while (1 == 1) {
+        pc = load8(prefix + i);
+        if (pc == 0) { return 1; }
+        sc = load8(s + i);
+        if (sc != pc) { return 0; }
+        i = i + 1;
+    }
+    return 0;
+}
+
+# ================================================================
+# ONES[0..20] / TENS[0..10] number-word tables (static cstrs).
+# ================================================================
+fn _shabda_ones(i): cstring {
+    if (i == 0)  { return "zero"; }
+    if (i == 1)  { return "one"; }
+    if (i == 2)  { return "two"; }
+    if (i == 3)  { return "three"; }
+    if (i == 4)  { return "four"; }
+    if (i == 5)  { return "five"; }
+    if (i == 6)  { return "six"; }
+    if (i == 7)  { return "seven"; }
+    if (i == 8)  { return "eight"; }
+    if (i == 9)  { return "nine"; }
+    if (i == 10) { return "ten"; }
+    if (i == 11) { return "eleven"; }
+    if (i == 12) { return "twelve"; }
+    if (i == 13) { return "thirteen"; }
+    if (i == 14) { return "fourteen"; }
+    if (i == 15) { return "fifteen"; }
+    if (i == 16) { return "sixteen"; }
+    if (i == 17) { return "seventeen"; }
+    if (i == 18) { return "eighteen"; }
+    if (i == 19) { return "nineteen"; }
+    return "";
+}
+
+fn _shabda_tens(i): cstring {
+    if (i == 2) { return "twenty"; }
+    if (i == 3) { return "thirty"; }
+    if (i == 4) { return "forty"; }
+    if (i == 5) { return "fifty"; }
+    if (i == 6) { return "sixty"; }
+    if (i == 7) { return "seventy"; }
+    if (i == 8) { return "eighty"; }
+    if (i == 9) { return "ninety"; }
+    return "";
+}
+
+# ================================================================
+# number_to_words / hundreds_to_words / tens_to_words — append into an SB.
+# Rust builds Vec<String> + join(" "); we append directly with " " separators.
+# ================================================================
+
+# Converts 1..99 to words, appended to sb. (Rust tens_to_words)
+fn _shabda_tens_to_words(sb, n): i64 {
+    if (n < 20) {
+        _shabda_sb_push_cstr(sb, _shabda_ones(n));
+        return 0;
+    }
+    _shabda_sb_push_cstr(sb, _shabda_tens(n / 10));
+    var one = n % 10;
+    if (one > 0) {
+        _shabda_sb_push_byte(sb, 32);
+        _shabda_sb_push_cstr(sb, _shabda_ones(one));
+    }
+    return 0;
+}
+
+# Converts 1..999 to words, appended to sb. (Rust hundreds_to_words)
+fn _shabda_hundreds_to_words(sb, n): i64 {
+    var wrote = 0;
+    if (n >= 100) {
+        _shabda_sb_push_cstr(sb, _shabda_ones(n / 100));
+        _shabda_sb_push_byte(sb, 32);
+        _shabda_sb_push_cstr(sb, "hundred");
+        wrote = 1;
+    }
+    var remainder = n % 100;
+    if (remainder > 0) {
+        if (wrote == 1) { _shabda_sb_push_byte(sb, 32); }
+        _shabda_tens_to_words(sb, remainder);
+    }
+    return 0;
+}
+
+# Converts 0..999,999,999+ to words, appended to sb. (Rust number_to_words)
+fn _shabda_number_to_words(sb, n): i64 {
+    if (n == 0) {
+        _shabda_sb_push_cstr(sb, "zero");
+        return 0;
+    }
+    var wrote = 0;
+    if (n >= 1000000000) {
+        var billions = n / 1000000000;
+        _shabda_number_to_words(sb, billions);
+        _shabda_sb_push_byte(sb, 32);
+        _shabda_sb_push_cstr(sb, "billion");
+        wrote = 1;
+    }
+    var remainder = n % 1000000000;
+    if (remainder >= 1000000) {
+        var millions = remainder / 1000000;
+        if (wrote == 1) { _shabda_sb_push_byte(sb, 32); }
+        _shabda_number_to_words(sb, millions);
+        _shabda_sb_push_byte(sb, 32);
+        _shabda_sb_push_cstr(sb, "million");
+        wrote = 1;
+    }
+    remainder = remainder % 1000000;
+    if (remainder >= 1000) {
+        var thousands = remainder / 1000;
+        if (wrote == 1) { _shabda_sb_push_byte(sb, 32); }
+        _shabda_number_to_words(sb, thousands);
+        _shabda_sb_push_byte(sb, 32);
+        _shabda_sb_push_cstr(sb, "thousand");
+        wrote = 1;
+    }
+    remainder = remainder % 1000;
+    if (remainder > 0) {
+        if (wrote == 1) { _shabda_sb_push_byte(sb, 32); }
+        _shabda_hundreds_to_words(sb, remainder);
+    }
+    return 0;
+}
+
+# ================================================================
+# Number-token parsing. `token` is a cstr of digits + optional single '.'.
+# ================================================================
+
+# Parse a cstr of ASCII digits into an i64. Returns the value; sets *ok_out to 1
+# on success (all digits, non-empty, no overflow beyond u64 range we care about).
+# Rust used str::parse::<u64>() with a digits_to_words fallback on failure.
+fn _shabda_parse_u64(s, ok_out): i64 {
+    var n = strlen(s);
+    if (n == 0) { store64(ok_out, 0); return 0; }
+    # Rust u64::MAX has 20 digits; anything longer overflows -> fallback path.
+    if (n > 19) { store64(ok_out, 0); return 0; }
+    var i = 0;
+    var v = 0;
+    var c = 0;
+    while (i < n) {
+        c = load8(s + i);
+        if (c < 48 || c > 57) { store64(ok_out, 0); return 0; }
+        v = v * 10 + (c - 48);
+        i = i + 1;
+    }
+    store64(ok_out, 1);
+    return v;
+}
+
+# Reads digits one by one as fallback for very large numbers. (Rust digits_to_words)
+fn _shabda_digits_to_words(sb, s): i64 {
+    var n = strlen(s);
+    var i = 0;
+    var c = 0;
+    var wrote = 0;
+    while (i < n) {
+        c = load8(s + i);
+        if (c >= 48 && c <= 57) {
+            if (wrote == 1) { _shabda_sb_push_byte(sb, 32); }
+            _shabda_sb_push_cstr(sb, _shabda_ones(c - 48));
+            wrote = 1;
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+# Expands a number token cstr to words, appended to sb. (Rust expand_number_token)
+fn _shabda_expand_number_token(sb, token): i64 {
+    var dot = strchr(token, 46);
+    if (dot >= 0) {
+        # Decimal: "3.14" -> "three point one four"
+        var tlen = strlen(token);
+        # integer_part = token[..dot], decimal_part = token[dot+1..]
+        var intbuf = alloc(dot + 1);
+        memcpy(intbuf, token, dot);
+        store8(intbuf + dot, 0);
+        var declen = tlen - dot - 1;
+        var decbuf = alloc(declen + 1);
+        memcpy(decbuf, token + dot + 1, declen);
+        store8(decbuf + declen, 0);
+
+        if (strlen(intbuf) == 0) {
+            _shabda_sb_push_cstr(sb, "zero");
+        } else {
+            var ok = alloc(8);
+            var v = _shabda_parse_u64(intbuf, ok);
+            if (load64(ok) == 1) {
+                _shabda_number_to_words(sb, v);
+            } else {
+                _shabda_digits_to_words(sb, intbuf);
+            }
+        }
+        _shabda_sb_push_cstr(sb, " point");
+        var i = 0;
+        var c = 0;
+        while (i < declen) {
+            c = load8(decbuf + i);
+            if (c >= 48 && c <= 57) {
+                _shabda_sb_push_byte(sb, 32);
+                _shabda_sb_push_cstr(sb, _shabda_ones(c - 48));
+            }
+            i = i + 1;
+        }
+        return 0;
+    }
+    var ok2 = alloc(8);
+    var v2 = _shabda_parse_u64(token, ok2);
+    if (load64(ok2) == 1) {
+        _shabda_number_to_words(sb, v2);
+    } else {
+        _shabda_digits_to_words(sb, token);
+    }
+    return 0;
+}
+
+# Collects a contiguous number token from a codepoint vec starting at index `start`.
+# Digits go into sb-out buffer; commas between digits skipped; one decimal point.
+# Returns bytes... actually returns count of code points consumed; the collected
+# token cstr is written via out_tok (a pointer to a cstr slot).
+fn _shabda_collect_number(cps, start, out_tok): i64 {
+    var n = vec_len(cps);
+    var sb = _shabda_sb_new();
+    var i = start;
+    var has_dot = 0;
+    var c = 0;
+    var nx = 0;
+    var brk = 0;
+    while (i < n && brk == 0) {
+        c = vec_get(cps, i);
+        if (c >= 48 && c <= 57) {
+            _shabda_sb_push_byte(sb, c);
+            i = i + 1;
+        } elif (c == 44 && i + 1 < n) {
+            nx = vec_get(cps, i + 1);
+            if (nx >= 48 && nx <= 57) {
+                i = i + 1;
+            } else {
+                brk = 1;
+            }
+        } elif (c == 46 && has_dot == 0 && i + 1 < n) {
+            nx = vec_get(cps, i + 1);
+            if (nx >= 48 && nx <= 57) {
+                _shabda_sb_push_byte(sb, 46);
+                has_dot = 1;
+                i = i + 1;
+            } else {
+                brk = 1;
+            }
+        } else {
+            brk = 1;
+        }
+    }
+    store64(out_tok, _shabda_sb_cstr(sb));
+    return i - start;
+}
+
+# ================================================================
+# Decode a whole cstring into a vec of code points (Rust `text.chars().collect()`).
+# ================================================================
+fn _shabda_decode_cps(text): i64 {
+    var cps = vec_new();
+    var p = text;
+    var cp = alloc(8);
+    var adv = _shabda_utf8_next(p, cp);
+    while (adv > 0) {
+        vec_push(cps, load64(cp));
+        p = p + adv;
+        adv = _shabda_utf8_next(p, cp);
+    }
+    return cps;
+}
+
+# ================================================================
+# expand_numbers — public. (Rust expand_numbers)
+# ================================================================
+#must_use
+fn shabda_expand_numbers(text): cstring {
+    var cps = _shabda_decode_cps(text);
+    var n = vec_len(cps);
+    var sb = _shabda_sb_new();
+    var i = 0;
+    var c = 0;
+    var nx = 0;
+    var tokslot = alloc(8);
+    var consumed = 0;
+    var last = 0;
+    while (i < n) {
+        c = vec_get(cps, i);
+        # Negative number: '-' followed by a digit.
+        if (c == 45 && i + 1 < n) {
+            nx = vec_get(cps, i + 1);
+            if (nx >= 48 && nx <= 57) {
+                i = i + 1;
+                consumed = _shabda_collect_number(cps, i, tokslot);
+                last = _shabda_sb_last(sb);
+                if (_shabda_sb_len(sb) != 0 && last != 32) {
+                    _shabda_sb_push_byte(sb, 32);
+                }
+                _shabda_sb_push_cstr(sb, "negative ");
+                _shabda_expand_number_token(sb, load64(tokslot));
+                i = i + consumed;
+                continue;
+            }
+        }
+        if (c >= 48 && c <= 57) {
+            consumed = _shabda_collect_number(cps, i, tokslot);
+            last = _shabda_sb_last(sb);
+            if (_shabda_sb_len(sb) != 0 && last != 32) {
+                _shabda_sb_push_byte(sb, 32);
+            }
+            _shabda_expand_number_token(sb, load64(tokslot));
+            i = i + consumed;
+        } else {
+            _shabda_sb_push_cp(sb, c);
+            i = i + 1;
+        }
+    }
+    return _shabda_sb_cstr(sb);
+}
+
+# ================================================================
+# Abbreviation table + match_abbreviation. (Rust match_abbreviation)
+# Ordered exactly as the Rust ABBREVIATIONS slice.
+# ================================================================
+fn _shabda_abbr_at(idx, out_expansion): cstring {
+    # Returns the abbr cstr for index idx (or 0 past the end); writes expansion.
+    if (idx == 0)  { store64(out_expansion, "approximately"); return "approx."; }
+    if (idx == 1)  { store64(out_expansion, "boulevard");     return "blvd."; }
+    if (idx == 2)  { store64(out_expansion, "captain");       return "capt."; }
+    if (idx == 3)  { store64(out_expansion, "colonel");       return "col."; }
+    if (idx == 4)  { store64(out_expansion, "corporation");   return "corp."; }
+    if (idx == 5)  { store64(out_expansion, "department");    return "dept."; }
+    if (idx == 6)  { store64(out_expansion, "government");     return "govt."; }
+    if (idx == 7)  { store64(out_expansion, "professor");     return "prof."; }
+    if (idx == 8)  { store64(out_expansion, "missus");        return "mrs."; }
+    if (idx == 9)  { store64(out_expansion, "mister");        return "mr."; }
+    if (idx == 10) { store64(out_expansion, "doctor");        return "dr."; }
+    if (idx == 11) { store64(out_expansion, "senior");        return "sr."; }
+    if (idx == 12) { store64(out_expansion, "junior");        return "jr."; }
+    if (idx == 13) { store64(out_expansion, "saint");         return "st."; }
+    if (idx == 14) { store64(out_expansion, "avenue");        return "ave."; }
+    if (idx == 15) { store64(out_expansion, "et cetera");     return "etc."; }
+    if (idx == 16) { store64(out_expansion, "versus");        return "vs."; }
+    if (idx == 17) { store64(out_expansion, "incorporated");  return "inc."; }
+    if (idx == 18) { store64(out_expansion, "limited");       return "ltd."; }
+    if (idx == 19) { store64(out_expansion, "general");       return "gen."; }
+    if (idx == 20) { store64(out_expansion, "sergeant");      return "sgt."; }
+    if (idx == 21) { store64(out_expansion, "lieutenant");    return "lt."; }
+    if (idx == 22) { store64(out_expansion, "point");         return "pt."; }
+    if (idx == 23) { store64(out_expansion, "feet");          return "ft."; }
+    if (idx == 24) { store64(out_expansion, "mount");         return "mt."; }
+    store64(out_expansion, 0);
+    return 0;
+}
+
+# Tries to match an abbreviation at the start of `text` (a cstr word).
+# Returns bytes_consumed (>0) with *out_exp set to the expansion, or 0 = no match.
+fn _shabda_match_abbreviation(text, out_exp): i64 {
+    var lower = _shabda_lower_cstr(text);
+    var idx = 0;
+    var abbr = 0;
+    var expslot = alloc(8);
+    var alen = 0;
+    var afterc = 0;
+    abbr = _shabda_abbr_at(idx, expslot);
+    while (abbr != 0) {
+        if (_shabda_starts_with(lower, abbr) == 1) {
+            alen = strlen(abbr);
+            # after = text[abbr.len()..]; must be empty OR start with ws / non-alpha.
+            afterc = load8(text + alen);
+            if (afterc == 0) {
+                store64(out_exp, load64(expslot));
+                return alen;
+            }
+            # Decode the first code point after the abbreviation.
+            var cpo = alloc(8);
+            _shabda_utf8_next(text + alen, cpo);
+            var cpa = load64(cpo);
+            if (_shabda_is_ws(cpa) == 1 || _shabda_is_alpha(cpa) == 0) {
+                store64(out_exp, load64(expslot));
+                return alen;
+            }
+        }
+        idx = idx + 1;
+        abbr = _shabda_abbr_at(idx, expslot);
+    }
+    store64(out_exp, 0);
+    return 0;
+}
+
+# ================================================================
+# split_whitespace over a cstr -> vec of cstr words (Rust str::split_whitespace:
+# collapses runs, drops leading/trailing ws, no empty tokens).
+# ================================================================
+fn _shabda_split_ws(text): i64 {
+    var words = vec_new();
+    var cps = _shabda_decode_cps(text);
+    var n = vec_len(cps);
+    var i = 0;
+    var c = 0;
+    var sb = 0;
+    var inword = 0;
+    while (i < n) {
+        c = vec_get(cps, i);
+        if (_shabda_is_ws(c) == 1) {
+            if (inword == 1) {
+                vec_push(words, _shabda_sb_cstr(sb));
+                inword = 0;
+            }
+        } else {
+            if (inword == 0) {
+                sb = _shabda_sb_new();
+                inword = 1;
+            }
+            _shabda_sb_push_cp(sb, c);
+        }
+        i = i + 1;
+    }
+    if (inword == 1) {
+        vec_push(words, _shabda_sb_cstr(sb));
+    }
+    return words;
+}
+
+# ================================================================
+# expand_abbreviations — public. (Rust expand_abbreviations)
+# ================================================================
+#must_use
+fn shabda_expand_abbreviations(text): cstring {
+    var words = _shabda_split_ws(text);
+    var n = vec_len(words);
+    var sb = _shabda_sb_new();
+    var i = 0;
+    var word = 0;
+    var expslot = alloc(8);
+    var consumed = 0;
+    while (i < n) {
+        if (i > 0) { _shabda_sb_push_byte(sb, 32); }
+        word = vec_get(words, i);
+        consumed = _shabda_match_abbreviation(word, expslot);
+        if (consumed > 0) {
+            _shabda_sb_push_cstr(sb, load64(expslot));
+            # Append remaining bytes after the abbreviation: word[consumed..].
+            _shabda_sb_push_cstr(sb, word + consumed);
+        } else {
+            _shabda_sb_push_cstr(sb, word);
+        }
+        i = i + 1;
+    }
+    return _shabda_sb_cstr(sb);
+}
+
+# ================================================================
+# Acronyms. split_trailing_punct / is_acronym / is_pronounceable_acronym.
+# ================================================================
+
+# Splits trailing (non-alphanumeric) punctuation from a word. Writes the byte
+# offset where trailing punct begins to *out_end (i.e. core = word[..end],
+# trailing = word[end..]). (Rust split_trailing_punct)
+fn _shabda_split_trailing_punct(word, out_end): i64 {
+    # Decode into (cp, byte_offset) pairs, find the last run of non-alnum at the end.
+    var cps = vec_new();
+    var offs = vec_new();
+    var p = word;
+    var cpo = alloc(8);
+    var adv = _shabda_utf8_next(p, cpo);
+    var off = 0;
+    while (adv > 0) {
+        vec_push(cps, load64(cpo));
+        vec_push(offs, off);
+        off = off + adv;
+        p = p + adv;
+        adv = _shabda_utf8_next(p, cpo);
+    }
+    var total = off;
+    var m = vec_len(cps);
+    # Rust: char_indices().rev().take_while(!alnum).last().map(|(i,_)| i)
+    #       .unwrap_or(word.len()). "end" = byte index of the FIRST char (scanning
+    # from the tail) in the maximal trailing non-alnum run; if no trailing punct,
+    # end = word.len().
+    var end = total;
+    var j = m - 1;
+    var stop = 0;
+    while (j >= 0 && stop == 0) {
+        if (_shabda_is_alnum(vec_get(cps, j)) == 0) {
+            end = vec_get(offs, j);
+            j = j - 1;
+        } else {
+            stop = 1;
+        }
+    }
+    store64(out_end, end);
+    return 0;
+}
+
+# Returns 1 if `word` (cstr) is an acronym: 3..=5 ASCII-uppercase letters.
+# NOTE: Rust checks len (byte length) in 3..=5; core is ASCII so byte==char count.
+fn _shabda_is_acronym(word): i64 {
+    var n = strlen(word);
+    if (n < 3 || n > 5) { return 0; }
+    var i = 0;
+    var c = 0;
+    while (i < n) {
+        c = load8(word + i);
+        if (c < 65 || c > 90) { return 0; }
+        i = i + 1;
+    }
+    return 1;
+}
+
+fn _shabda_is_vowel(c): i64 {
+    if (c == 97) { return 1; }
+    if (c == 101) { return 1; }
+    if (c == 105) { return 1; }
+    if (c == 111) { return 1; }
+    if (c == 117) { return 1; }
+    return 0;
+}
+
+# Valid onset cluster check: is (a,b) in the Rust valid_onsets table?
+fn _shabda_valid_onset(a, b): i64 {
+    if (a == 98 && b == 108) { return 1; }  # bl
+    if (a == 98 && b == 114) { return 1; }  # br
+    if (a == 99 && b == 108) { return 1; }  # cl
+    if (a == 99 && b == 114) { return 1; }  # cr
+    if (a == 100 && b == 114) { return 1; } # dr
+    if (a == 102 && b == 108) { return 1; } # fl
+    if (a == 102 && b == 114) { return 1; } # fr
+    if (a == 103 && b == 108) { return 1; } # gl
+    if (a == 103 && b == 114) { return 1; } # gr
+    if (a == 112 && b == 108) { return 1; } # pl
+    if (a == 112 && b == 114) { return 1; } # pr
+    if (a == 115 && b == 99)  { return 1; } # sc
+    if (a == 115 && b == 107) { return 1; } # sk
+    if (a == 115 && b == 108) { return 1; } # sl
+    if (a == 115 && b == 109) { return 1; } # sm
+    if (a == 115 && b == 110) { return 1; } # sn
+    if (a == 115 && b == 112) { return 1; } # sp
+    if (a == 115 && b == 116) { return 1; } # st
+    if (a == 115 && b == 119) { return 1; } # sw
+    if (a == 116 && b == 114) { return 1; } # tr
+    if (a == 116 && b == 119) { return 1; } # tw
+    if (a == 116 && b == 104) { return 1; } # th
+    if (a == 115 && b == 104) { return 1; } # sh
+    if (a == 99 && b == 104)  { return 1; } # ch
+    if (a == 119 && b == 104) { return 1; } # wh
+    return 0;
+}
+
+# Returns 1 if an acronym (cstr, ASCII upper) is pronounceable as a word.
+# (Rust is_pronounceable_acronym) — operates on the lowercased chars.
+fn _shabda_is_pronounceable_acronym(word): i64 {
+    var lower = _shabda_lower_cstr(word);
+    var n = strlen(lower);
+    # Must have at least one vowel.
+    var i = 0;
+    var hasv = 0;
+    while (i < n) {
+        if (_shabda_is_vowel(load8(lower + i)) == 1) { hasv = 1; }
+        i = i + 1;
+    }
+    if (hasv == 0) { return 0; }
+    var c0 = 0;
+    var c1 = 0;
+    var c2 = 0;
+    if (n >= 1) { c0 = load8(lower); }
+    # Starts with vowel -> pronounceable.
+    if (_shabda_is_vowel(c0) == 1) { return 1; }
+    # single consonant + vowel.
+    if (n >= 2) {
+        c1 = load8(lower + 1);
+        if (_shabda_is_vowel(c0) == 0 && _shabda_is_vowel(c1) == 1) { return 1; }
+    }
+    # valid onset cluster + vowel.
+    if (n >= 3) {
+        c1 = load8(lower + 1);
+        c2 = load8(lower + 2);
+        if (_shabda_is_vowel(c0) == 0 && _shabda_is_vowel(c1) == 0 && _shabda_is_vowel(c2) == 1) {
+            if (_shabda_valid_onset(c0, c1) == 1) { return 1; }
+        }
+    }
+    return 0;
+}
+
+# ================================================================
+# expand_acronyms — public. (Rust expand_acronyms)
+# ================================================================
+#must_use
+fn shabda_expand_acronyms(text): cstring {
+    var words = _shabda_split_ws(text);
+    var n = vec_len(words);
+    var sb = _shabda_sb_new();
+    var i = 0;
+    var word = 0;
+    var endslot = alloc(8);
+    while (i < n) {
+        if (i > 0) { _shabda_sb_push_byte(sb, 32); }
+        word = vec_get(words, i);
+        # Split trailing punct: core = word[..end], trailing = word[end..].
+        _shabda_split_trailing_punct(word, endslot);
+        var end = load64(endslot);
+        var core = alloc(end + 1);
+        memcpy(core, word, end);
+        store8(core + end, 0);
+        var trailing = word + end;
+
+        if (_shabda_is_acronym(core) == 1) {
+            if (_shabda_is_pronounceable_acronym(core) == 1) {
+                # lowercase it as a word.
+                var k = 0;
+                var clen = strlen(core);
+                var cc = 0;
+                while (k < clen) {
+                    cc = load8(core + k);
+                    _shabda_sb_push_byte(sb, _shabda_to_lower_cp(cc));
+                    k = k + 1;
+                }
+            } else {
+                # spell out: "FBI" -> "f b i".
+                var k2 = 0;
+                var clen2 = strlen(core);
+                var cc2 = 0;
+                while (k2 < clen2) {
+                    if (k2 > 0) { _shabda_sb_push_byte(sb, 32); }
+                    cc2 = load8(core + k2);
+                    _shabda_sb_push_byte(sb, _shabda_to_lower_cp(cc2));
+                    k2 = k2 + 1;
+                }
+            }
+            _shabda_sb_push_cstr(sb, trailing);
+        } else {
+            _shabda_sb_push_cstr(sb, word);
+        }
+        i = i + 1;
+    }
+    return _shabda_sb_cstr(sb);
+}
+
+# ================================================================
+# is_foreign_word / is_latin_extended / strip_diacritics.
+# ================================================================
+fn _shabda_is_latin_extended(cp): i64 {
+    if (cp >= 0x00C0 && cp <= 0x024F) { return 1; }
+    return 0;
+}
+
+#must_use
+fn shabda_is_foreign_word(word): i64 {
+    var p = word;
+    var cpo = alloc(8);
+    var adv = _shabda_utf8_next(p, cpo);
+    var cp = 0;
+    while (adv > 0) {
+        cp = load64(cpo);
+        if (_shabda_is_alpha(cp) == 1 && _shabda_is_ascii_alpha(cp) == 0 && _shabda_is_latin_extended(cp) == 1) {
+            return 1;
+        }
+        p = p + adv;
+        adv = _shabda_utf8_next(p, cpo);
+    }
+    return 0;
+}
+
+# Map an accented code point to its ASCII base, or return it unchanged.
+# (Rust strip_diacritics match arms.)
+fn _shabda_strip_cp(cp): i64 {
+    # a: á à â ä ã  = 0xE1 0xE0 0xE2 0xE4 0xE3
+    if (cp == 0x00E1 || cp == 0x00E0 || cp == 0x00E2 || cp == 0x00E4 || cp == 0x00E3) { return 97; }
+    # e: é è ê ë  = 0xE9 0xE8 0xEA 0xEB
+    if (cp == 0x00E9 || cp == 0x00E8 || cp == 0x00EA || cp == 0x00EB) { return 101; }
+    # i: í ì î ï  = 0xED 0xEC 0xEE 0xEF
+    if (cp == 0x00ED || cp == 0x00EC || cp == 0x00EE || cp == 0x00EF) { return 105; }
+    # o: ó ò ô ö õ = 0xF3 0xF2 0xF4 0xF6 0xF5
+    if (cp == 0x00F3 || cp == 0x00F2 || cp == 0x00F4 || cp == 0x00F6 || cp == 0x00F5) { return 111; }
+    # u: ú ù û ü  = 0xFA 0xF9 0xFB 0xFC
+    if (cp == 0x00FA || cp == 0x00F9 || cp == 0x00FB || cp == 0x00FC) { return 117; }
+    # ñ = 0xF1 -> n
+    if (cp == 0x00F1) { return 110; }
+    # ç = 0xE7 -> s
+    if (cp == 0x00E7) { return 115; }
+    return cp;
+}
+
+#must_use
+fn shabda_strip_diacritics(word): cstring {
+    var sb = _shabda_sb_new();
+    var p = word;
+    var cpo = alloc(8);
+    var adv = _shabda_utf8_next(p, cpo);
+    var cp = 0;
+    while (adv > 0) {
+        cp = load64(cpo);
+        _shabda_sb_push_cp(sb, _shabda_strip_cp(cp));
+        p = p + adv;
+        adv = _shabda_utf8_next(p, cpo);
+    }
+    return _shabda_sb_cstr(sb);
+}
+
+# ================================================================
+# normalize / normalize_token_into / normalize_with_emphasis.
+# ================================================================
+
+# Process a single token's code points into sb (Rust normalize_token_into).
+fn _shabda_normalize_token_into(token, sb): i64 {
+    var cps = _shabda_decode_cps(token);
+    var n = vec_len(cps);
+    var i = 0;
+    var ch = 0;
+    var prev_space = 0;
+    var last = 0;
+    while (i < n) {
+        ch = vec_get(cps, i);
+        if (_shabda_is_alpha(ch) == 1 || ch == 39 || ch == 45) {
+            last = _shabda_sb_last(sb);
+            if (prev_space == 1 && _shabda_sb_len(sb) != 0 && last != 32) {
+                _shabda_sb_push_byte(sb, 32);
+            }
+            _shabda_sb_push_cp(sb, _shabda_to_lower_cp(ch));
+            prev_space = 0;
+        } elif (ch == 44) {
+            _shabda_sb_push_cstr(sb, " ,pause");
+            prev_space = 1;
+        } elif (ch == 46 || ch == 59) {
+            _shabda_sb_push_cstr(sb, " .pause");
+            prev_space = 1;
+        } elif (_shabda_is_ws(ch) == 1 || ch == 33 || ch == 63) {
+            prev_space = 1;
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+#must_use
+fn shabda_normalize(text): cstring {
+    var abbr = shabda_expand_abbreviations(text);
+    var acro = shabda_expand_acronyms(abbr);
+    var expanded = shabda_expand_numbers(acro);
+
+    var cps = _shabda_decode_cps(expanded);
+    var n = vec_len(cps);
+    var sb = _shabda_sb_new();
+    var i = 0;
+    var ch = 0;
+    var prev_space = 0;
+    while (i < n) {
+        ch = vec_get(cps, i);
+        if (_shabda_is_alpha(ch) == 1 || ch == 39 || ch == 45) {
+            if (prev_space == 1 && _shabda_sb_len(sb) != 0) {
+                _shabda_sb_push_byte(sb, 32);
+            }
+            _shabda_sb_push_cp(sb, _shabda_to_lower_cp(ch));
+            prev_space = 0;
+        } elif (ch == 44) {
+            _shabda_sb_push_cstr(sb, " ,pause");
+            prev_space = 1;
+        } elif (ch == 46 || ch == 59) {
+            _shabda_sb_push_cstr(sb, " .pause");
+            prev_space = 1;
+        } elif (_shabda_is_ws(ch) == 1 || ch == 33 || ch == 63) {
+            prev_space = 1;
+        }
+        i = i + 1;
+    }
+    return _shabda_sb_cstr(sb);
+}
+
+#must_use
+fn shabda_normalize_with_emphasis(text): cstring {
+    var abbr = shabda_expand_abbreviations(text);
+    var expanded = shabda_expand_numbers(abbr);
+
+    var tokens = _shabda_split_ws(expanded);
+    var nt = vec_len(tokens);
+    var sb = _shabda_sb_new();
+    var i = 0;
+    var token = 0;
+    while (i < nt) {
+        if (i > 0 && _shabda_sb_len(sb) != 0) {
+            _shabda_sb_push_byte(sb, 32);
+        }
+        token = vec_get(tokens, i);
+        var tlen = strlen(token);
+        var handled = 0;
+
+        # *asterisk-wrapped* emphasis: token.len() >= 3, starts+ends with '*'.
+        if (tlen >= 3 && load8(token) == 42 && load8(token + tlen - 1) == 42) {
+            # inner = token[1..len-1].
+            var ilen = tlen - 2;
+            var inner = alloc(ilen + 1);
+            memcpy(inner, token + 1, ilen);
+            store8(inner + ilen, 0);
+            # inner non-empty and all chars alphabetic.
+            var icps = _shabda_decode_cps(inner);
+            var im = vec_len(icps);
+            var allalpha = 1;
+            var k = 0;
+            while (k < im) {
+                if (_shabda_is_alpha(vec_get(icps, k)) == 0) { allalpha = 0; }
+                k = k + 1;
+            }
+            if (im > 0 && allalpha == 1) {
+                _shabda_sb_push_cstr(sb, SHABDA_EMPHASIS_START);
+                _shabda_sb_push_byte(sb, 32);
+                var k2 = 0;
+                while (k2 < im) {
+                    _shabda_sb_push_cp(sb, _shabda_to_lower_cp(vec_get(icps, k2)));
+                    k2 = k2 + 1;
+                }
+                _shabda_sb_push_byte(sb, 32);
+                _shabda_sb_push_cstr(sb, SHABDA_EMPHASIS_END);
+                handled = 1;
+            }
+        }
+
+        # ALL-CAPS emphasis: >= 3 alphabetic chars, all uppercase.
+        if (handled == 0) {
+            var tcps = _shabda_decode_cps(token);
+            var tm = vec_len(tcps);
+            var alpha_count = 0;
+            var all_upper = 1;
+            var j = 0;
+            var tc = 0;
+            while (j < tm) {
+                tc = vec_get(tcps, j);
+                if (_shabda_is_alpha(tc) == 1) {
+                    alpha_count = alpha_count + 1;
+                    if (_shabda_is_upper(tc) == 0) { all_upper = 0; }
+                }
+                j = j + 1;
+            }
+            if (alpha_count >= 3 && all_upper == 1) {
+                _shabda_sb_push_cstr(sb, SHABDA_EMPHASIS_START);
+                _shabda_sb_push_byte(sb, 32);
+                _shabda_normalize_token_into(token, sb);
+                _shabda_sb_push_byte(sb, 32);
+                _shabda_sb_push_cstr(sb, SHABDA_EMPHASIS_END);
+                handled = 1;
+            }
+        }
+
+        if (handled == 0) {
+            _shabda_normalize_token_into(token, sb);
+        }
+        i = i + 1;
+    }
+    return _shabda_sb_cstr(sb);
+}
+
+# ================================================================
+# detect_intonation — public. (Rust detect_intonation) Returns a SHABDA_STYPE_* tag.
+# ================================================================
+#must_use
+fn shabda_detect_intonation(text): i64 {
+    # trim_end: find last non-ws byte.
+    var n = strlen(text);
+    var end = n;
+    var brk = 0;
+    while (end > 0 && brk == 0) {
+        var c = load8(text + end - 1);
+        # ASCII ws only for trailing trim (Rust trim_end trims Unicode ws, but our
+        # inputs use ASCII ws before the terminal '?'/'!').
+        if (c == 32 || c == 9 || c == 10 || c == 13 || c == 12 || c == 11) {
+            end = end - 1;
+        } else {
+            brk = 1;
+        }
+    }
+    if (end == 0) { return SHABDA_STYPE_STATEMENT; }
+    var lastc = load8(text + end - 1);
+    if (lastc == 63) { return SHABDA_STYPE_QUESTION; }
+    if (lastc == 33) { return SHABDA_STYPE_EXCLAMATION; }
+    return SHABDA_STYPE_STATEMENT;
+}
+
+# ================================================================
+# sentence_type alias — the spec lists shabda_sentence_type; it is the detector.
+# ================================================================
+#must_use
+fn shabda_sentence_type(text): i64 {
+    return shabda_detect_intonation(text);
+}

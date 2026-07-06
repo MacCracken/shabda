@@ -1,0 +1,734 @@
+# ssml.cyr — SSML subset parser for speech synthesis markup.
+#
+# Ports rust-old/src/ssml.rs (the hand-rolled, no_std+alloc SSML subset parser —
+# no XML crate). Parses <speak>/<break>/<emphasis>/<prosody>/<phoneme> into a
+# flat vec of SsmlNode heap blocks. Self-contained: the Rust module's only dep is
+# serde; here the codec is hand-written integer/tag round-trips (§ serde below).
+#
+# DEP POSITION: needs only src/error.cyr (L0) above it, plus the stdlib string/
+# str/vec/math/alloc modules (auto-resolved from cyrius.cyml). Modules never
+# include each other — the entry file (src/main.cyr / tests/ssml.tcyr) orders the
+# includes.
+#
+# The parser walks the raw input cstring by BYTE INDEX exactly like the Rust
+# (`input.as_bytes()[pos]`), so all offset arithmetic stays valid. '<' == 60,
+# '>' == 62, '/' == 47.
+#
+# ---------------------------------------------------------------- byte layouts
+# SsmlNode = a tagged heap block. Word [0] is the tag; payload follows.
+#   Text     : alloc(16)  [0]=SHABDA_SSML_TEXT     [8]=text (Str fat pointer)
+#   Break    : alloc(16)  [0]=SHABDA_SSML_BREAK    [8]=duration_ms (i64)
+#   Emphasis : alloc(24)  [0]=SHABDA_SSML_EMPHASIS [8]=level (EmphasisLevel tag)
+#                                                  [16]=children (vec of SsmlNode*)
+#   Prosody  : alloc(24)  [0]=SHABDA_SSML_PROSODY  [8]=rate (SpeakingRate tag or
+#                                                       SHABDA_RATE_NONE sentinel)
+#                                                  [16]=children (vec of SsmlNode*)
+# Text payload is a Str (str.cyr fat pointer {data,len}); str_cstr() yields a cstr
+# for assert_streq. EmphasisLevel + SpeakingRate are Rust Copy enums -> int tags.
+# Option<SpeakingRate> -> SHABDA_RATE_NONE (== -1) sentinel in the rate slot.
+#
+# shabda_ssml_parse(input) -> vec of SsmlNode* | 0 on parse error (Rust's Err).
+#
+# NAMING: every top-level symbol is `shabda_`/`SHABDA_`/`Shabda`-prefixed (flat
+# link namespace; coexists with shbdk_ / svara_ / varna / sakshi).
+
+# ================================================================
+# Node tags (was `enum SsmlNode`, #[non_exhaustive]). Stored at block offset 0.
+# ================================================================
+var SHABDA_SSML_TEXT     = 0;
+var SHABDA_SSML_BREAK    = 1;
+var SHABDA_SSML_EMPHASIS = 2;
+var SHABDA_SSML_PROSODY  = 3;
+
+# Node block offsets.
+var SHABDA_SSML_OFF_TAG      = 0;
+var SHABDA_SSML_OFF_TEXT     = 8;    # Text: Str payload
+var SHABDA_SSML_OFF_DURATION = 8;    # Break: duration_ms
+var SHABDA_SSML_OFF_LEVEL    = 8;    # Emphasis: level tag
+var SHABDA_SSML_OFF_RATE     = 8;    # Prosody: rate tag/sentinel
+var SHABDA_SSML_OFF_CHILDREN = 16;   # Emphasis/Prosody: children vec
+
+# EmphasisLevel (was `enum EmphasisLevel`, #[non_exhaustive], Copy). Int tags.
+var SHABDA_EMPH_STRONG   = 0;
+var SHABDA_EMPH_MODERATE = 1;
+var SHABDA_EMPH_REDUCED  = 2;
+
+# SpeakingRate (was `enum SpeakingRate`, #[non_exhaustive], Copy). Int tags.
+var SHABDA_RATE_XSLOW  = 0;
+var SHABDA_RATE_SLOW   = 1;
+var SHABDA_RATE_MEDIUM = 2;
+var SHABDA_RATE_FAST   = 3;
+var SHABDA_RATE_XFAST  = 4;
+# Option<SpeakingRate>::None sentinel (Rust `rate: Option<SpeakingRate>`).
+var SHABDA_RATE_NONE = (0 - 1);
+
+# ================================================================
+# SpeakingRate::wpm — approximate words-per-minute. Rust returns f32; promoted to
+# f64 (math is f64-only). Values match ssml.rs EXACTLY: 75/100/150/200/250.
+# Returns an f64 bit pattern.
+# ================================================================
+#must_use
+fn shabda_speaking_rate_wpm(rate): i64 {
+    if (rate == SHABDA_RATE_XSLOW)  { return f64_from(75); }
+    if (rate == SHABDA_RATE_SLOW)   { return f64_from(100); }
+    if (rate == SHABDA_RATE_MEDIUM) { return f64_from(150); }
+    if (rate == SHABDA_RATE_FAST)   { return f64_from(200); }
+    if (rate == SHABDA_RATE_XFAST)  { return f64_from(250); }
+    return f64_from(0);              # #[non_exhaustive] fallback
+}
+
+# ================================================================
+# Node constructors.
+# ================================================================
+#must_use
+fn shabda_ssml_text(text_str): i64 {
+    var p = alloc(16);
+    store64(p + SHABDA_SSML_OFF_TAG, SHABDA_SSML_TEXT);
+    store64(p + SHABDA_SSML_OFF_TEXT, text_str);
+    return p;
+}
+
+#must_use
+fn shabda_ssml_break(duration_ms): i64 {
+    var p = alloc(16);
+    store64(p + SHABDA_SSML_OFF_TAG, SHABDA_SSML_BREAK);
+    store64(p + SHABDA_SSML_OFF_DURATION, duration_ms);
+    return p;
+}
+
+#must_use
+fn shabda_ssml_emphasis(level, children): i64 {
+    var p = alloc(24);
+    store64(p + SHABDA_SSML_OFF_TAG, SHABDA_SSML_EMPHASIS);
+    store64(p + SHABDA_SSML_OFF_LEVEL, level);
+    store64(p + SHABDA_SSML_OFF_CHILDREN, children);
+    return p;
+}
+
+#must_use
+fn shabda_ssml_prosody(rate, children): i64 {
+    var p = alloc(24);
+    store64(p + SHABDA_SSML_OFF_TAG, SHABDA_SSML_PROSODY);
+    store64(p + SHABDA_SSML_OFF_RATE, rate);
+    store64(p + SHABDA_SSML_OFF_CHILDREN, children);
+    return p;
+}
+
+# ================================================================
+# Node accessors.
+# ================================================================
+#must_use
+fn shabda_ssml_node_tag(node): i64 { return load64(node + SHABDA_SSML_OFF_TAG); }
+
+#must_use
+fn shabda_ssml_node_text(node): i64 { return load64(node + SHABDA_SSML_OFF_TEXT); }
+
+#must_use
+fn shabda_ssml_node_duration(node): i64 { return load64(node + SHABDA_SSML_OFF_DURATION); }
+
+#must_use
+fn shabda_ssml_node_level(node): i64 { return load64(node + SHABDA_SSML_OFF_LEVEL); }
+
+#must_use
+fn shabda_ssml_node_rate(node): i64 { return load64(node + SHABDA_SSML_OFF_RATE); }
+
+#must_use
+fn shabda_ssml_node_children(node): i64 { return load64(node + SHABDA_SSML_OFF_CHILDREN); }
+
+# ================================================================
+# Byte-scan primitives (over a raw cstring, mirroring `input.as_bytes()`).
+# ================================================================
+# ASCII whitespace test (Rust char::is_whitespace, ASCII subset the parser hits):
+# space, tab, newline, carriage return, form feed, vertical tab.
+#must_use
+fn _shabda_is_ws(c): i64 {
+    if (c == 32)  { return 1; }
+    if (c == 9)   { return 1; }
+    if (c == 10)  { return 1; }
+    if (c == 13)  { return 1; }
+    if (c == 12)  { return 1; }
+    if (c == 11)  { return 1; }
+    return 0;
+}
+
+# find_tag_end: index of the '>' closing the tag starting at `pos` ('<'),
+# scanning from pos+1. Returns -1 when none (Rust's Option::None).
+#must_use
+fn _shabda_find_tag_end(input, len, pos): i64 {
+    var i = pos + 1;
+    while (i < len) {
+        if (load8(input + i) == 62) { return i; }   # '>'
+        i = i + 1;
+    }
+    return (0 - 1);
+}
+
+# Byte-compare bytes[a_off..a_off+n] against cstring `lit` (which must be exactly
+# n long). 1 if equal.
+#must_use
+fn _shabda_slice_eq_cstr(input, a_off, n, lit): i64 {
+    var i = 0;
+    while (i < n) {
+        if (load8(lit + i) == 0) { return 0; }
+        if (load8(input + a_off + i) != load8(lit + i)) { return 0; }
+        i = i + 1;
+    }
+    if (load8(lit + n) != 0) { return 0; }
+    return 1;
+}
+
+# Does bytes[off..] start with cstring `lit`? (Rust str::starts_with)
+#must_use
+fn _shabda_starts_with(input, len, off, lit): i64 {
+    var i = 0;
+    while (load8(lit + i) != 0) {
+        if (off + i >= len) { return 0; }
+        if (load8(input + off + i) != load8(lit + i)) { return 0; }
+        i = i + 1;
+    }
+    return 1;
+}
+
+# ================================================================
+# Attribute extraction (was extract_attr). Scans the tag's attribute region
+# [attr_start, attr_end) inside `input` for `name="..."` OR `name='...'`, and
+# copies the value into a fresh Str. Returns the Str, or 0 (Rust None).
+# Byte-index slicing offsets stay valid throughout.
+# ================================================================
+#must_use
+fn _shabda_extract_attr(input, attr_start, attr_end, name): i64 {
+    # Try double quote first, then single quote (Rust order).
+    var q = 34;                                  # '"'
+    var pass = 0;
+    while (pass < 2) {
+        # Scan for `name` followed by '=' followed by the quote char q.
+        var i = attr_start;
+        while (i < attr_end) {
+            # match `name` at i?
+            var nlen = strlen(name);
+            var matched = 0;
+            if (i + nlen < attr_end + 1) {
+                matched = _shabda_slice_eq_at(input, i, name, nlen);
+            }
+            if (matched == 1) {
+                var eq = i + nlen;
+                if (eq + 1 < attr_end + 1) {
+                    if (load8(input + eq) == 61 && load8(input + eq + 1) == q) {
+                        var vstart = eq + 2;
+                        # Find closing quote.
+                        var j = vstart;
+                        while (j < attr_end) {
+                            if (load8(input + j) == q) {
+                                return str_from_buf(input + vstart, j - vstart);
+                            }
+                            j = j + 1;
+                        }
+                    }
+                }
+            }
+            i = i + 1;
+        }
+        q = 39;                                  # '\''
+        pass = pass + 1;
+    }
+    return 0;
+}
+
+# bytes[off..off+n] == name[0..n], not requiring name to terminate (used inside
+# extract_attr where name is followed by '=').
+#must_use
+fn _shabda_slice_eq_at(input, off, name, n): i64 {
+    var i = 0;
+    while (i < n) {
+        if (load8(input + off + i) != load8(name + i)) { return 0; }
+        i = i + 1;
+    }
+    return 1;
+}
+
+# ================================================================
+# Tag-name split (was split_tag_name): given the tag-content region
+# [start, end) inside `input`, return the length of the leading tag name (up to
+# the first whitespace); the attrs region is then [start+name_len, end) trimmed.
+# ================================================================
+#must_use
+fn _shabda_tag_name_len(input, start, end): i64 {
+    var i = start;
+    while (i < end) {
+        if (_shabda_is_ws(load8(input + i)) == 1) { return i - start; }
+        i = i + 1;
+    }
+    return end - start;
+}
+
+# Compare the tag name region [start, start+n) to cstring `lit` (exact).
+#must_use
+fn _shabda_name_eq(input, start, n, lit): i64 {
+    return _shabda_slice_eq_cstr(input, start, n, lit);
+}
+
+# ================================================================
+# break duration parsing (was parse_break_duration). Packs a status+value: on
+# success returns duration_ms >= 0; on error returns SHABDA_SSML_PARSE_ERR.
+# attrs region is [astart, aend).
+# ================================================================
+var SHABDA_SSML_PARSE_ERR = (0 - 1);
+
+#must_use
+fn _shabda_parse_break_duration(input, astart, aend): i64 {
+    var time_str = _shabda_extract_attr(input, astart, aend, "time");
+    if (time_str != 0) {
+        var tcstr = str_cstr(time_str);
+        var tlen = strlen(tcstr);
+        # strip_suffix("ms")
+        if (tlen >= 2 && load8(tcstr + tlen - 2) == 109 && load8(tcstr + tlen - 1) == 115) {
+            # ms_str = tcstr[..tlen-2]; parse::<u32>. Must be all digits.
+            if (_shabda_all_digits(tcstr, tlen - 2) == 1) {
+                return _shabda_atoi_n(tcstr, tlen - 2);
+            }
+            return SHABDA_SSML_PARSE_ERR;        # invalid break time
+        }
+        # strip_suffix('s')
+        if (tlen >= 1 && load8(tcstr + tlen - 1) == 115) {
+            # s_str = tcstr[..tlen-1]; parse::<f32>. (secs * 1000.0) as u32.
+            var sbuf = alloc(tlen);
+            memcpy(sbuf, tcstr, tlen - 1);
+            store8(sbuf + tlen - 1, 0);
+            var fout = alloc(8);
+            var ok = f64_parse_ok(sbuf, fout);
+            if (ok == 0) { return SHABDA_SSML_PARSE_ERR; }
+            var secs = load64(fout);
+            var ms = f64_to(f64_mul(secs, f64_from(1000)));
+            return ms;
+        }
+        # unknown time unit
+        return SHABDA_SSML_PARSE_ERR;
+    }
+    var strength = _shabda_extract_attr(input, astart, aend, "strength");
+    if (strength != 0) {
+        var scstr = str_cstr(strength);
+        if (streq(scstr, "none") == 1)     { return 0; }
+        if (streq(scstr, "x-weak") == 1)   { return 100; }
+        if (streq(scstr, "weak") == 1)     { return 200; }
+        if (streq(scstr, "medium") == 1)   { return 400; }
+        if (streq(scstr, "strong") == 1)   { return 600; }
+        if (streq(scstr, "x-strong") == 1) { return 1000; }
+        return 300;
+    }
+    return 300;                                  # default break duration
+}
+
+# All of the first n bytes of cstr are ASCII digits (n>0 required for validity).
+#must_use
+fn _shabda_all_digits(s, n): i64 {
+    if (n <= 0) { return 0; }
+    var i = 0;
+    while (i < n) {
+        var c = load8(s + i);
+        if (c < 48 || c > 57) { return 0; }
+        i = i + 1;
+    }
+    return 1;
+}
+
+# atoi over the first n bytes only.
+#must_use
+fn _shabda_atoi_n(s, n): i64 {
+    var v = 0;
+    var i = 0;
+    while (i < n) {
+        var c = load8(s + i);
+        if (c < 48 || c > 57) { return v; }
+        v = v * 10 + (c - 48);
+        i = i + 1;
+    }
+    return v;
+}
+
+# ================================================================
+# emphasis level parsing (was parse_emphasis_level). Default = Moderate.
+# ================================================================
+#must_use
+fn _shabda_parse_emphasis_level(input, astart, aend): i64 {
+    var lvl = _shabda_extract_attr(input, astart, aend, "level");
+    if (lvl != 0) {
+        var s = str_cstr(lvl);
+        if (streq(s, "strong") == 1)   { return SHABDA_EMPH_STRONG; }
+        if (streq(s, "moderate") == 1) { return SHABDA_EMPH_MODERATE; }
+        if (streq(s, "reduced") == 1)  { return SHABDA_EMPH_REDUCED; }
+    }
+    return SHABDA_EMPH_MODERATE;
+}
+
+# ================================================================
+# prosody rate parsing (was parse_prosody_rate). Default = None (sentinel).
+# ================================================================
+#must_use
+fn _shabda_parse_prosody_rate(input, astart, aend): i64 {
+    var r = _shabda_extract_attr(input, astart, aend, "rate");
+    if (r != 0) {
+        var s = str_cstr(r);
+        if (streq(s, "x-slow") == 1) { return SHABDA_RATE_XSLOW; }
+        if (streq(s, "slow") == 1)   { return SHABDA_RATE_SLOW; }
+        if (streq(s, "medium") == 1) { return SHABDA_RATE_MEDIUM; }
+        if (streq(s, "fast") == 1)   { return SHABDA_RATE_FAST; }
+        if (streq(s, "x-fast") == 1) { return SHABDA_RATE_XFAST; }
+    }
+    return SHABDA_RATE_NONE;
+}
+
+# ================================================================
+# children_to_text (was children_to_text): concat all Text children's text with
+# single-space joins. Returns a Str.
+# ================================================================
+#must_use
+fn _shabda_children_to_text(children): i64 {
+    var sb = str_builder_new();
+    var n = vec_len(children);
+    var i = 0;
+    var wrote = 0;
+    while (i < n) {
+        var child = vec_get(children, i);
+        if (shabda_ssml_node_tag(child) == SHABDA_SSML_TEXT) {
+            if (wrote == 1) { str_builder_putc(sb, 32); }
+            str_builder_add(sb, shabda_ssml_node_text(child));
+            wrote = 1;
+        }
+        i = i + 1;
+    }
+    return str_builder_build(sb);
+}
+
+# ================================================================
+# Push a trimmed text run bytes[start..end) as a Text node if non-empty (mirrors
+# the Rust text-run branch shared by parse() and parse_until()).
+# ================================================================
+fn _shabda_push_text(nodes, input, start, end): i64 {
+    # Trim ASCII whitespace both ends.
+    var s = start;
+    var e = end;
+    while (s < e && _shabda_is_ws(load8(input + s)) == 1) { s = s + 1; }
+    while (e > s && _shabda_is_ws(load8(input + e - 1)) == 1) { e = e - 1; }
+    if (e > s) {
+        var ts = str_from_buf(input + s, e - s);
+        vec_push(nodes, shabda_ssml_text(ts));
+    }
+    return 0;
+}
+
+# ================================================================
+# parse_tag (was parse_tag): parse the single tag/element starting at `pos` (a
+# '<'). Writes the produced node* (0 == "no node", Rust None) to *node_out and
+# returns the new position, OR returns SHABDA_SSML_PARSE_ERR on malformed input.
+# ================================================================
+#must_use
+fn _shabda_parse_tag(input, len, pos, node_out): i64 {
+    store64(node_out, 0);
+    var tag_end = _shabda_find_tag_end(input, len, pos);
+    if (tag_end < 0) { return SHABDA_SSML_PARSE_ERR; }   # unclosed tag bracket
+
+    # tag_content = input[pos+1..tag_end]
+    var cstart = pos + 1;
+    var cend = tag_end;
+
+    # self-closing? content ends with '/'
+    var self_closing = 0;
+    if (cend > cstart && load8(input + cend - 1) == 47) {
+        self_closing = 1;
+        cend = cend - 1;                          # drop trailing '/'
+    }
+    # trim the (possibly '/'-stripped) content
+    while (cstart < cend && _shabda_is_ws(load8(input + cstart)) == 1) { cstart = cstart + 1; }
+    while (cend > cstart && _shabda_is_ws(load8(input + cend - 1)) == 1) { cend = cend - 1; }
+
+    # split tag name / attrs
+    var name_len = _shabda_tag_name_len(input, cstart, cend);
+    var astart = cstart + name_len;
+    var aend = cend;
+    while (astart < aend && _shabda_is_ws(load8(input + astart)) == 1) { astart = astart + 1; }
+    while (aend > astart && _shabda_is_ws(load8(input + aend - 1)) == 1) { aend = aend - 1; }
+
+    # break
+    if (_shabda_name_eq(input, cstart, name_len, "break") == 1) {
+        var dur = _shabda_parse_break_duration(input, astart, aend);
+        if (dur == SHABDA_SSML_PARSE_ERR) { return SHABDA_SSML_PARSE_ERR; }
+        store64(node_out, shabda_ssml_break(dur));
+        return tag_end + 1;
+    }
+    # emphasis
+    if (_shabda_name_eq(input, cstart, name_len, "emphasis") == 1) {
+        var level = _shabda_parse_emphasis_level(input, astart, aend);
+        if (self_closing == 1) {
+            store64(node_out, shabda_ssml_emphasis(level, vec_new()));
+            return tag_end + 1;
+        }
+        var kids = vec_new();
+        var np = _shabda_parse_until(input, len, tag_end + 1, "emphasis", kids);
+        if (np == SHABDA_SSML_PARSE_ERR) { return SHABDA_SSML_PARSE_ERR; }
+        store64(node_out, shabda_ssml_emphasis(level, kids));
+        return np;
+    }
+    # prosody
+    if (_shabda_name_eq(input, cstart, name_len, "prosody") == 1) {
+        var rate = _shabda_parse_prosody_rate(input, astart, aend);
+        if (self_closing == 1) {
+            store64(node_out, shabda_ssml_prosody(rate, vec_new()));
+            return tag_end + 1;
+        }
+        var pkids = vec_new();
+        var pnp = _shabda_parse_until(input, len, tag_end + 1, "prosody", pkids);
+        if (pnp == SHABDA_SSML_PARSE_ERR) { return SHABDA_SSML_PARSE_ERR; }
+        store64(node_out, shabda_ssml_prosody(rate, pkids));
+        return pnp;
+    }
+    # phoneme
+    if (_shabda_name_eq(input, cstart, name_len, "phoneme") == 1) {
+        if (self_closing == 1) {
+            var ph = _shabda_extract_attr(input, astart, aend, "ph");
+            if (ph != 0) {
+                store64(node_out, shabda_ssml_text(ph));
+            }
+            return tag_end + 1;
+        }
+        var phkids = vec_new();
+        var phnp = _shabda_parse_until(input, len, tag_end + 1, "phoneme", phkids);
+        if (phnp == SHABDA_SSML_PARSE_ERR) { return SHABDA_SSML_PARSE_ERR; }
+        store64(node_out, shabda_ssml_text(_shabda_children_to_text(phkids)));
+        return phnp;
+    }
+    # unknown tag
+    if (self_closing == 1) {
+        return tag_end + 1;
+    }
+    var ukids = vec_new();
+    # parse_until with the unknown tag name (as a fresh cstr for the closer match)
+    var uname = _shabda_dup_name(input, cstart, name_len);
+    var unp = _shabda_parse_until(input, len, tag_end + 1, uname, ukids);
+    if (unp == SHABDA_SSML_PARSE_ERR) { return SHABDA_SSML_PARSE_ERR; }
+    if (vec_len(ukids) == 0) {
+        return unp;
+    }
+    # pass through first child as if the tag wasn't there
+    store64(node_out, vec_get(ukids, 0));
+    return unp;
+}
+
+# Copy the tag name [start, start+n) to a fresh NUL-terminated cstr.
+#must_use
+fn _shabda_dup_name(input, start, n): i64 {
+    var buf = alloc(n + 1);
+    memcpy(buf, input + start, n);
+    store8(buf + n, 0);
+    return buf;
+}
+
+# ================================================================
+# parse_until (was parse_until): parse content into `nodes` until a matching
+# </tag_name> closer. Returns position after the closer, OR the end-of-input
+# position if no closer (Rust "return what we have"), OR SHABDA_SSML_PARSE_ERR.
+# tag_name is a cstr.
+# ================================================================
+#must_use
+fn _shabda_parse_until(input, len, start, tag_name, nodes): i64 {
+    var pos = start;
+    while (pos < len) {
+        if (load8(input + pos) == 60) {          # '<'
+            var tag_end = _shabda_find_tag_end(input, len, pos);
+            if (tag_end < 0) { return SHABDA_SSML_PARSE_ERR; }
+            var cstart = pos + 1;
+            # closing tag? content starts with '/'
+            if (cstart < tag_end && load8(input + cstart) == 47) {
+                # close_name = content[1..].trim()
+                var ns = cstart + 1;
+                var ne = tag_end;
+                while (ns < ne && _shabda_is_ws(load8(input + ns)) == 1) { ns = ns + 1; }
+                while (ne > ns && _shabda_is_ws(load8(input + ne - 1)) == 1) { ne = ne - 1; }
+                if (_shabda_name_eq(input, ns, ne - ns, tag_name) == 1) {
+                    return tag_end + 1;
+                }
+                # mismatched close — skip it
+                pos = tag_end + 1;
+            } else {
+                var node_out = alloc(8);
+                var np = _shabda_parse_tag(input, len, pos, node_out);
+                if (np == SHABDA_SSML_PARSE_ERR) { return SHABDA_SSML_PARSE_ERR; }
+                var node = load64(node_out);
+                if (node != 0) { vec_push(nodes, node); }
+                pos = np;
+            }
+        } else {
+            var text_end = _shabda_next_lt(input, len, pos);
+            _shabda_push_text(nodes, input, pos, text_end);
+            pos = text_end;
+        }
+    }
+    return pos;
+}
+
+# Index of the next '<' at or after `pos`, or `len` (Rust find('<').map_or(len)).
+#must_use
+fn _shabda_next_lt(input, len, pos): i64 {
+    var i = pos;
+    while (i < len) {
+        if (load8(input + i) == 60) { return i; }
+        i = i + 1;
+    }
+    return len;
+}
+
+# ================================================================
+# parse (was parse): top-level. Returns a vec of SsmlNode* on success, or 0 on
+# parse error (Rust Err). The <speak> wrapper is optional and its children are
+# flattened into the top-level vec.
+# ================================================================
+#must_use
+fn shabda_ssml_parse(input): i64 {
+    var nodes = vec_new();
+    var len = strlen(input);
+    var pos = 0;
+    while (pos < len) {
+        if (load8(input + pos) == 60) {          # '<'
+            var tag_end = _shabda_find_tag_end(input, len, pos);
+            if (tag_end < 0) { return 0; }        # unclosed tag bracket -> Err
+            var cstart = pos + 1;
+            if (cstart < tag_end && load8(input + cstart) == 47) {
+                # closing tag at top level — skip
+                pos = tag_end + 1;
+            } elif (_shabda_is_speak(input, len, cstart) == 1) {
+                pos = tag_end + 1;
+                var kids = vec_new();
+                var np = _shabda_parse_until(input, len, pos, "speak", kids);
+                if (np == SHABDA_SSML_PARSE_ERR) { return 0; }
+                var kn = vec_len(kids);
+                var ki = 0;
+                while (ki < kn) {
+                    vec_push(nodes, vec_get(kids, ki));
+                    ki = ki + 1;
+                }
+                pos = np;
+            } else {
+                var node_out = alloc(8);
+                var tnp = _shabda_parse_tag(input, len, pos, node_out);
+                if (tnp == SHABDA_SSML_PARSE_ERR) { return 0; }
+                var node = load64(node_out);
+                if (node != 0) { vec_push(nodes, node); }
+                pos = tnp;
+            }
+        } else {
+            var text_end = _shabda_next_lt(input, len, pos);
+            _shabda_push_text(nodes, input, pos, text_end);
+            pos = text_end;
+        }
+    }
+    return nodes;
+}
+
+# tag_content.starts_with("speak") || starts_with("speak ") — the Rust guard.
+# Since "speak " implies "speak", a single prefix check suffices, matching Rust.
+#must_use
+fn _shabda_is_speak(input, len, cstart): i64 {
+    return _shabda_starts_with(input, len, cstart, "speak");
+}
+
+# ================================================================
+# serde codec (Rust `derive(Serialize, Deserialize)`). Self-contained: no bayan
+# dependency — the port encodes each Copy enum via its stable integer tag, and an
+# SsmlNode is (de)serialized structurally through the constructors/accessors. The
+# roundtrip identity is exercised in the tests. These are the "codec" surface a
+# format layer would call.
+# ================================================================
+# EmphasisLevel <-> code (identity; tags are the wire form).
+#must_use
+fn shabda_emphasis_level_encode(level): i64 { return level; }
+#must_use
+fn shabda_emphasis_level_decode(code): i64 {
+    if (code == SHABDA_EMPH_STRONG)   { return SHABDA_EMPH_STRONG; }
+    if (code == SHABDA_EMPH_MODERATE) { return SHABDA_EMPH_MODERATE; }
+    if (code == SHABDA_EMPH_REDUCED)  { return SHABDA_EMPH_REDUCED; }
+    return SHABDA_EMPH_MODERATE;                  # #[non_exhaustive] fallback
+}
+
+# SpeakingRate <-> code (identity; tags are the wire form).
+#must_use
+fn shabda_speaking_rate_encode(rate): i64 { return rate; }
+#must_use
+fn shabda_speaking_rate_decode(code): i64 {
+    if (code == SHABDA_RATE_XSLOW)  { return SHABDA_RATE_XSLOW; }
+    if (code == SHABDA_RATE_SLOW)   { return SHABDA_RATE_SLOW; }
+    if (code == SHABDA_RATE_MEDIUM) { return SHABDA_RATE_MEDIUM; }
+    if (code == SHABDA_RATE_FAST)   { return SHABDA_RATE_FAST; }
+    if (code == SHABDA_RATE_XFAST)  { return SHABDA_RATE_XFAST; }
+    return SHABDA_RATE_NONE;                       # unknown/None fallback
+}
+
+# SsmlNode deep-clone as a serde round-trip proxy: reconstructs an equal node
+# tree via the public constructors (mirrors serialize -> deserialize identity).
+#must_use
+fn shabda_ssml_node_clone(node): i64 {
+    var tag = shabda_ssml_node_tag(node);
+    if (tag == SHABDA_SSML_TEXT) {
+        return shabda_ssml_text(str_clone(shabda_ssml_node_text(node)));
+    }
+    if (tag == SHABDA_SSML_BREAK) {
+        return shabda_ssml_break(shabda_ssml_node_duration(node));
+    }
+    if (tag == SHABDA_SSML_EMPHASIS) {
+        return shabda_ssml_emphasis(shabda_ssml_node_level(node),
+        _shabda_clone_children(shabda_ssml_node_children(node)));
+    }
+    if (tag == SHABDA_SSML_PROSODY) {
+        return shabda_ssml_prosody(shabda_ssml_node_rate(node),
+        _shabda_clone_children(shabda_ssml_node_children(node)));
+    }
+    return 0;                                      # #[non_exhaustive] fallback
+}
+
+#must_use
+fn _shabda_clone_children(children): i64 {
+    var out = vec_new();
+    var n = vec_len(children);
+    var i = 0;
+    while (i < n) {
+        vec_push(out, shabda_ssml_node_clone(vec_get(children, i)));
+        i = i + 1;
+    }
+    return out;
+}
+
+# Structural equality of two SsmlNode trees (Rust derive(PartialEq)) — used by
+# tests to assert parse results and serde round-trips.
+#must_use
+fn shabda_ssml_node_eq(a, b): i64 {
+    var ta = shabda_ssml_node_tag(a);
+    var tb = shabda_ssml_node_tag(b);
+    if (ta != tb) { return 0; }
+    if (ta == SHABDA_SSML_TEXT) {
+        return str_eq(shabda_ssml_node_text(a), shabda_ssml_node_text(b));
+    }
+    if (ta == SHABDA_SSML_BREAK) {
+        if (shabda_ssml_node_duration(a) == shabda_ssml_node_duration(b)) { return 1; }
+        return 0;
+    }
+    if (ta == SHABDA_SSML_EMPHASIS) {
+        if (shabda_ssml_node_level(a) != shabda_ssml_node_level(b)) { return 0; }
+        return _shabda_children_eq(shabda_ssml_node_children(a), shabda_ssml_node_children(b));
+    }
+    if (ta == SHABDA_SSML_PROSODY) {
+        if (shabda_ssml_node_rate(a) != shabda_ssml_node_rate(b)) { return 0; }
+        return _shabda_children_eq(shabda_ssml_node_children(a), shabda_ssml_node_children(b));
+    }
+    return 0;
+}
+
+#must_use
+fn _shabda_children_eq(a, b): i64 {
+    var na = vec_len(a);
+    var nb = vec_len(b);
+    if (na != nb) { return 0; }
+    var i = 0;
+    while (i < na) {
+        if (shabda_ssml_node_eq(vec_get(a, i), vec_get(b, i)) == 0) { return 0; }
+        i = i + 1;
+    }
+    return 1;
+}

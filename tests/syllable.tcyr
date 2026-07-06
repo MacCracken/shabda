@@ -1,0 +1,110 @@
+# syllable.tcyr — tests for src/syllable.cyr (ports rust-old/src/syllable.rs).
+# Ports the Rust module's 8 #[test] blocks 1:1 (the serde-roundtrip test becomes
+# a struct field-preservation check, since Cyrius serde lives in a format layer).
+
+include "lib/hisab.cyr"
+include "lib/goonj.cyr"
+include "lib/naad.cyr"
+include "lib/svara.cyr"
+include "src/error.cyr"
+include "src/syllable.cyr"
+
+alloc_init();
+
+# Helper: build a vec from up to a handful of phoneme ordinals.
+fn _mk1(a): i64 { var v = vec_new(); vec_push(v, a); return v; }
+fn _mk2(a, b): i64 { var v = vec_new(); vec_push(v, a); vec_push(v, b); return v; }
+fn _mk3(a, b, c): i64 {
+    var v = vec_new(); vec_push(v, a); vec_push(v, b); vec_push(v, c); return v;
+}
+fn _mk4(a, b, c, d): i64 {
+    var v = vec_new();
+    vec_push(v, a); vec_push(v, b); vec_push(v, c); vec_push(v, d);
+    return v;
+}
+
+# ================================================================
+# test_syllabify_monosyllable — "cat" = k + æ + t -> 1 syllable, onset [k],
+# nucleus æ, coda [t], heavy (has coda).
+test_group("syllabify monosyllable (cat)");
+var cat = _mk3(SVARA_PH_PLOSIVE_K, SVARA_PH_VOWEL_ASH, SVARA_PH_PLOSIVE_T);
+var syls = shabda_syllabify(cat);
+assert_eq(vec_len(syls), 1, "cat -> 1 syllable");
+var s0 = vec_get(syls, 0);
+assert_eq(vec_len(shabda_syllable_onset(s0)), 1, "cat onset len 1");
+assert_eq(vec_get(shabda_syllable_onset(s0), 0), SVARA_PH_PLOSIVE_K, "cat onset = K");
+assert_eq(shabda_syllable_nucleus(s0), SVARA_PH_VOWEL_ASH, "cat nucleus = Ash");
+assert_eq(vec_len(shabda_syllable_coda(s0)), 1, "cat coda len 1");
+assert_eq(vec_get(shabda_syllable_coda(s0), 0), SVARA_PH_PLOSIVE_T, "cat coda = T");
+assert_eq(shabda_syllable_is_heavy(s0), 1, "cat is heavy (has coda)");
+
+# ================================================================
+# test_syllabify_two_syllables — "hello" = h + ɛ + l + oʊ -> 2 syllables.
+# MOP gives l to the onset of the second syllable: hɛ.loʊ.
+test_group("syllabify two syllables (hello)");
+var hello = _mk4(SVARA_PH_FRIC_H, SVARA_PH_VOWEL_OPEN_E, SVARA_PH_LATERAL_L, SVARA_PH_DIPH_OU);
+var hsyls = shabda_syllabify(hello);
+assert_eq(vec_len(hsyls), 2, "hello -> 2 syllables");
+var h0 = vec_get(hsyls, 0);
+var h1 = vec_get(hsyls, 1);
+assert_eq(shabda_syllable_nucleus(h0), SVARA_PH_VOWEL_OPEN_E, "hello syl0 nucleus = OpenE");
+assert_eq(shabda_syllable_nucleus(h1), SVARA_PH_DIPH_OU, "hello syl1 nucleus = DiphOU");
+# l goes to onset of second syllable (MOP), coda of first is empty.
+assert_eq(vec_len(shabda_syllable_coda(h0)), 0, "hello syl0 coda empty");
+assert_eq(vec_len(shabda_syllable_onset(h1)), 1, "hello syl1 onset len 1");
+assert_eq(vec_get(shabda_syllable_onset(h1), 0), SVARA_PH_LATERAL_L, "hello syl1 onset = L");
+
+# ================================================================
+# test_syllabify_empty — empty input -> empty vec.
+test_group("syllabify empty");
+var empty = vec_new();
+assert_eq(vec_len(shabda_syllabify(empty)), 0, "empty -> no syllables");
+
+# ================================================================
+# test_syllabify_no_vowels — [k, t] -> empty vec.
+test_group("syllabify no vowels");
+var novowel = _mk2(SVARA_PH_PLOSIVE_K, SVARA_PH_PLOSIVE_T);
+assert_eq(vec_len(shabda_syllabify(novowel)), 0, "no vowels -> no syllables");
+
+# ================================================================
+# test_heavy_syllable_with_coda — onset [k], nucleus æ, coda [t] -> heavy.
+test_group("heavy syllable with coda");
+var heavy_c = shabda_syllable_new(_mk1(SVARA_PH_PLOSIVE_K), SVARA_PH_VOWEL_ASH, _mk1(SVARA_PH_PLOSIVE_T));
+assert_eq(shabda_syllable_is_heavy(heavy_c), 1, "coda syllable is heavy");
+
+# ================================================================
+# test_light_syllable — onset [k], nucleus æ, coda [] -> light.
+test_group("light syllable");
+var light = shabda_syllable_new(_mk1(SVARA_PH_PLOSIVE_K), SVARA_PH_VOWEL_ASH, vec_new());
+assert_eq(shabda_syllable_is_heavy(light), 0, "no-coda vowel syllable is light");
+
+# ================================================================
+# test_heavy_with_diphthong — onset [], nucleus AI, coda [] -> heavy (diphthong).
+test_group("heavy with diphthong");
+var heavy_d = shabda_syllable_new(vec_new(), SVARA_PH_DIPH_AI, vec_new());
+assert_eq(shabda_syllable_is_heavy(heavy_d), 1, "diphthong nucleus is heavy");
+
+# ================================================================
+# test_serde_roundtrip — Cyrius has no serde in this layer; assert the struct
+# preserves its fields (onset/nucleus/coda) as constructed, matching the Rust
+# post-roundtrip equality.
+test_group("struct field preservation (serde analog)");
+var rt = shabda_syllable_new(_mk1(SVARA_PH_PLOSIVE_K), SVARA_PH_VOWEL_ASH, _mk1(SVARA_PH_PLOSIVE_T));
+assert_eq(vec_len(shabda_syllable_onset(rt)), 1, "rt onset len 1");
+assert_eq(vec_get(shabda_syllable_onset(rt), 0), SVARA_PH_PLOSIVE_K, "rt onset = K");
+assert_eq(shabda_syllable_nucleus(rt), SVARA_PH_VOWEL_ASH, "rt nucleus = Ash");
+assert_eq(vec_len(shabda_syllable_coda(rt)), 1, "rt coda len 1");
+assert_eq(vec_get(shabda_syllable_coda(rt), 0), SVARA_PH_PLOSIVE_T, "rt coda = T");
+
+# ================================================================
+# test_syllable_phonemes — onset [k], nucleus æ, coda [t] -> [k, æ, t] flattened.
+test_group("syllable phonemes flatten");
+var ph_syl = shabda_syllable_new(_mk1(SVARA_PH_PLOSIVE_K), SVARA_PH_VOWEL_ASH, _mk1(SVARA_PH_PLOSIVE_T));
+var flat = shabda_syllable_phonemes(ph_syl);
+assert_eq(vec_len(flat), 3, "phonemes len 3");
+assert_eq(vec_get(flat, 0), SVARA_PH_PLOSIVE_K, "phonemes[0] = K");
+assert_eq(vec_get(flat, 1), SVARA_PH_VOWEL_ASH, "phonemes[1] = Ash");
+assert_eq(vec_get(flat, 2), SVARA_PH_PLOSIVE_T, "phonemes[2] = T");
+
+var rc = assert_summary();
+syscall(60, rc);

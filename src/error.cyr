@@ -1,0 +1,132 @@
+# error.cyr — shabda error codes + shared L0 constants, built on sakshi's
+# packed-i64 error model.
+#
+# L0 base module: included FIRST by every build/test entry. Modules never
+# `include` each other — the entry file (src/main.cyr / tests/*.tcyr) orders
+# includes; the stdlib (incl. sakshi) auto-resolves from cyrius.cyml [deps].
+#
+# Ports rust-old/src/error.rs (the `ShabdaError` enum — #[non_exhaustive], 5
+# variants). Rust carried a String payload per variant + a thiserror Display; the
+# Cyrius port drops the payloads and builds on sakshi (साक्षी — the AGNOS
+# error/tracing substrate): each error is a packed i64 `[ctx][category][code]`.
+# 0 == ok, non-zero == error. Diagnostic text lives in shabda_err_name().
+#
+# CONVENTION: a fallible fn returns a packed shabda error (0 == ok) and writes any
+# payload to an out-param, OR returns a payload pointer with 0 meaning "none" —
+# disambiguate with shabda_is_err().
+#
+# This module also hoists the shared integer tags used across the crate
+# (Language, SentenceType, TimingProfile layout, the phoneme sentinel). They live
+# in the L0 base so later modules (prosody, validate, engine) reference them
+# regardless of include order — mirrors how shabdakosh put SHBDK_PH_NONE in L0.
+#
+# NAMING: every top-level symbol is `shabda_`/`SHABDA_`-prefixed (flat link
+# namespace; coexists with shbdk_ / svara_ / varna / sakshi).
+
+# ================================================================
+# Error codes (was `enum ShabdaError`). One per Rust variant, in order. Stored in
+# bits 0-15 of a sakshi packed error; kept above sakshi's common ErrCode block
+# (0..7) and clear of shabdakosh's 0x01xx block to avoid collision.
+# ================================================================
+var SHABDA_ERR_INVALID_INPUT        = 0x0201;   # InvalidInput(String)
+var SHABDA_ERR_UNKNOWN_WORD         = 0x0202;   # UnknownWord(String)
+var SHABDA_ERR_UNSUPPORTED_LANGUAGE = 0x0203;   # UnsupportedLanguage(String)
+var SHABDA_ERR_RULE_ERROR           = 0x0204;   # RuleError(String)
+var SHABDA_ERR_DICT_PARSE           = 0x0205;   # DictParseError(String)
+
+# ================================================================
+# Shared L0 constants (hoisted here so every module sees ONE definition — flat
+# namespace, no forward-declare needed for later includes).
+# ================================================================
+# "No phoneme" sentinel — a svara phoneme is an ordinal 0..N; this is Rust's
+# Option::None on a phoneme lookup.
+var SHABDA_PH_NONE = (0 - 1);
+
+# Language tags (was `enum Language`, #[non_exhaustive]). Ctor/name fns in engine.cyr.
+var SHABDA_LANG_ENGLISH  = 0;
+var SHABDA_LANG_SPANISH  = 1;
+var SHABDA_LANG_GERMAN   = 2;
+var SHABDA_LANG_HINDI    = 3;
+var SHABDA_LANG_ARABIC   = 4;
+var SHABDA_LANG_SANSKRIT = 5;
+
+# SentenceType tags (owned by normalize; detect fns there). Statement/Question/
+# Exclamation.
+var SHABDA_STYPE_STATEMENT   = 0;
+var SHABDA_STYPE_QUESTION    = 1;
+var SHABDA_STYPE_EXCLAMATION = 2;
+
+# TimingProfile layout (24 bytes): three f64-bit scale factors. Ctor/accessors in
+# engine.cyr; prosody reads the offsets directly.
+var SHABDA_TIMING_VOWEL     = 0;    # [0]  vowel_scale     (f64 bits)
+var SHABDA_TIMING_CONSONANT = 8;    # [8]  consonant_scale (f64 bits)
+var SHABDA_TIMING_PAUSE     = 16;   # [16] pause_scale     (f64 bits)
+var SHABDA_TIMING_SIZE      = 24;
+
+# "No primary stress" sentinel for the syllabic stress rule (Rust's usize::MAX).
+var SHABDA_NO_STRESS_IDX = (0 - 1);
+
+# ================================================================
+# Constructors — pack the shabda code + a sakshi category into an i64 error.
+# ================================================================
+#must_use
+fn shabda_err_invalid_input(): i64 {
+    return sakshi_err_new(SHABDA_ERR_INVALID_INPUT, ERR_CAT_PARSE);
+}
+
+#must_use
+fn shabda_err_unknown_word(): i64 {
+    return sakshi_err_new(SHABDA_ERR_UNKNOWN_WORD, ERR_CAT_RUNTIME);
+}
+
+#must_use
+fn shabda_err_unsupported_language(): i64 {
+    return sakshi_err_new(SHABDA_ERR_UNSUPPORTED_LANGUAGE, ERR_CAT_CONFIG);
+}
+
+#must_use
+fn shabda_err_rule_error(): i64 {
+    return sakshi_err_new(SHABDA_ERR_RULE_ERROR, ERR_CAT_RUNTIME);
+}
+
+#must_use
+fn shabda_err_dict_parse(): i64 {
+    return sakshi_err_new(SHABDA_ERR_DICT_PARSE, ERR_CAT_PARSE);
+}
+
+# From<ShabdakoshError> — Rust folds every shabdakosh error into DictParseError.
+# Takes a packed shbdk error, returns a packed shabda DictParse error.
+#must_use
+fn shabda_from_shabdakosh_err(shbdk_err): i64 {
+    return sakshi_err_new(SHABDA_ERR_DICT_PARSE, ERR_CAT_PARSE);
+}
+
+# ================================================================
+# Predicates + diagnostics (thin over sakshi, prefixed for the shabda surface).
+# ================================================================
+# 1 if `err` is an error (non-zero), 0 otherwise.
+#must_use
+fn shabda_is_err(err): i64 {
+    return sakshi_is_err(err);
+}
+
+# 1 if `err` is ok (zero), 0 otherwise.
+#must_use
+fn shabda_is_ok(err): i64 {
+    return sakshi_is_ok(err);
+}
+
+# Static diagnostic text for a shabda error (was thiserror's Display, minus the
+# dropped String payload). Matches on the code field; final arm is the
+# #[non_exhaustive] fallback. Returns `cstring` so println/fmt print the text.
+#must_use
+fn shabda_err_name(err): cstring {
+    var code = sakshi_err_code(err);
+    if (code == SHABDA_ERR_INVALID_INPUT)        { return "invalid input"; }
+    if (code == SHABDA_ERR_UNKNOWN_WORD)         { return "unknown word"; }
+    if (code == SHABDA_ERR_UNSUPPORTED_LANGUAGE) { return "unsupported language"; }
+    if (code == SHABDA_ERR_RULE_ERROR)           { return "rule error"; }
+    if (code == SHABDA_ERR_DICT_PARSE)           { return "dictionary parse error"; }
+    if (code == 0)                                { return "ok"; }
+    return "unknown error";
+}

@@ -1,0 +1,125 @@
+# heteronym.tcyr — tests for src/heteronym.cyr (ports rust-old/src/heteronym.rs).
+#
+# Ports the module's 6 #[test] blocks 1:1, plus the serde-twin roundtrip
+# (HeteronymRuleOwned clone + PartialEq) and a select_phonemes behavior check.
+
+include "lib/hisab.cyr"
+include "lib/goonj.cyr"
+include "lib/naad.cyr"
+include "lib/svara.cyr"
+include "lib/varna.cyr"
+include "lib/shabdakosh.cyr"
+include "src/error.cyr"
+include "src/heteronym.cyr"
+
+alloc_init();
+
+# local helper: build a vec of cstr words
+fn _words2(a, b): i64 { var v = vec_new(); vec_push(v, a); vec_push(v, b); return v; }
+fn _words4(a, b, c, d): i64 {
+    var v = vec_new();
+    vec_push(v, a); vec_push(v, b); vec_push(v, c); vec_push(v, d);
+    return v;
+}
+fn _words1(a): i64 { var v = vec_new(); vec_push(v, a); return v; }
+
+# ================================================================
+# test_lookup_known_heteronym
+test_group("lookup known heteronym");
+assert_neq(shabda_heteronym_lookup("read"), 0, "read is known");
+assert_neq(shabda_heteronym_lookup("lead"), 0, "lead is known");
+assert_neq(shabda_heteronym_lookup("live"), 0, "live is known");
+
+# ================================================================
+# test_lookup_unknown_word
+test_group("lookup unknown word");
+assert_eq(shabda_heteronym_lookup("hello"), 0, "hello is unknown");
+assert_eq(shabda_heteronym_lookup("world"), 0, "world is unknown");
+
+# ================================================================
+# test_select_variant_default — no trigger words → default variant (0)
+test_group("select variant default");
+var r_read = shabda_heteronym_lookup("read");
+assert_eq(shabda_select_variant(r_read, _words2("the", "book")), 0, "default variant");
+
+# ================================================================
+# test_select_variant_triggered — "to" triggers non-default variant (1)
+test_group("select variant triggered");
+assert_eq(shabda_select_variant(r_read, _words2("want", "to")), 1, "triggered variant");
+
+# ================================================================
+# test_select_variant_trigger_in_window — "will" within the 3-word lookback
+test_group("select variant trigger in window");
+assert_eq(shabda_select_variant(r_read, _words2("i", "will")), 1, "will triggers");
+
+# ================================================================
+# case-insensitive triggering — Rust lowercases each preceding word
+# (prev.to_lowercase()) before matching the (lowercase) trigger table.
+test_group("select variant case insensitive");
+assert_eq(shabda_select_variant(r_read, _words2("want", "TO")), 1, "uppercase TO triggers");
+assert_eq(shabda_select_variant(r_read, _words2("I", "Will")), 1, "mixed-case Will triggers");
+
+# ================================================================
+# 3-word lookback window boundary — a trigger farther back than the last
+# 3 preceding words must NOT trigger (Rust .rev().take(3)). Here "to" is the
+# 4th-from-end word, so only ["b","c","d"] are examined → default (0).
+test_group("select variant window boundary");
+assert_eq(shabda_select_variant(r_read, _words4("to", "b", "c", "d")), 0, "trigger outside 3-window is default");
+# trigger exactly at the 3rd-from-end position IS examined → context (1).
+assert_eq(shabda_select_variant(r_read, _words4("x", "to", "c", "d")), 1, "trigger at edge of 3-window triggers");
+
+# ================================================================
+# single preceding word that is a trigger → context variant.
+test_group("select variant single word");
+assert_eq(shabda_select_variant(r_read, _words1("to")), 1, "single trigger word");
+assert_eq(shabda_select_variant(r_read, _words1("book")), 0, "single non-trigger word");
+
+# ================================================================
+# serde roundtrip — HeteronymRuleOwned clone + PartialEq (field equality).
+test_group("serde roundtrip");
+var owned = shabda_heteronym_rule_clone(r_read);
+var roundtripped = shabda_heteronym_rule_clone(owned);
+assert_eq(shabda_heteronym_rule_eq(owned, roundtripped), 1, "clone roundtrip equal");
+assert_eq(shabda_heteronym_rule_eq(owned, r_read), 1, "clone equals source");
+
+# ================================================================
+# test_all_heteronyms_have_triggers
+test_group("all heteronyms have triggers");
+var rules = _shabda_het_rules();
+var i = 0;
+var n = vec_len(rules);
+var all_have = 1;
+while (i < n) {
+    var rule = vec_get(rules, i);
+    if (vec_len(load64(rule + SHABDA_HET_TRIGGERS)) == 0) { all_have = 0; }
+    i = i + 1;
+}
+assert_eq(all_have, 1, "every heteronym has triggers");
+assert_eq(n, 20, "20 heteronym rules");
+
+# ================================================================
+# select_phonemes — bounds-checked variant selection over Pronunciations.
+# variant 0 = default, variant 1 = context-triggered.
+test_group("select phonemes");
+var pv0 = vec_new(); vec_push(pv0, 10); vec_push(pv0, 11);
+var pv1 = vec_new(); vec_push(pv1, 20); vec_push(pv1, 21);
+var prons = vec_new();
+vec_push(prons, shbdk_pronunciation_new(pv0));
+vec_push(prons, shbdk_pronunciation_new(pv1));
+
+# default context ("the","book") → variant 0 → pv0
+var def_ph = shabda_select_phonemes(r_read, _words2("the", "book"), prons);
+assert_eq(vec_get(def_ph, 0), 10, "default phonemes[0]");
+
+# triggered context ("want","to") → variant 1 → pv1
+var trig_ph = shabda_select_phonemes(r_read, _words2("want", "to"), prons);
+assert_eq(vec_get(trig_ph, 0), 20, "triggered phonemes[0]");
+
+# out-of-range fallback: single-pronunciation dict, triggered → falls back to prons[0]
+var prons1 = vec_new();
+vec_push(prons1, shbdk_pronunciation_new(pv0));
+var fb_ph = shabda_select_phonemes(r_read, _words2("want", "to"), prons1);
+assert_eq(vec_get(fb_ph, 0), 10, "fallback to prons[0]");
+
+var rc = assert_summary();
+syscall(60, rc);

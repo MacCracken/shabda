@@ -1,49 +1,36 @@
-# shabda Roadmap
+# shabda — Roadmap
 
-## v2.1.0 — Romance & Regular Latin
+> Milestone plan through v1.0. State lives in [`state.md`](state.md);
+> this file is the sequencing — what ships, in what order, against
+> what dependency gates.
 
-- [ ] Italian G2P rules
-- [ ] Portuguese G2P rules (nasal vowels)
-- [ ] French G2P rules (silent letters, liaison, nasals)
+## v1.0 criteria
 
-## v2.2.0 — Agglutinative & Regular Latin
+_Define before tagging v0.1.0:_
 
-- [ ] Indonesian G2P rules
-- [ ] Turkish G2P rules
-- [ ] Finnish G2P rules
-- [ ] Swahili G2P rules
+- [ ] Rust → Cyrius surface parity verified (function-level diff against `rust-old/`)
+- [ ] Test coverage adequate for the surface area
+- [ ] Benchmarks captured in `docs/benchmarks.md`
+- [ ] At least one downstream consumer green
+- [ ] CHANGELOG complete from v0.1.0 onward
+- [ ] Security audit pass (`docs/audit/YYYY-MM-DD-audit.md`)
 
-## v2.3.0 — East Asian
+## Milestones
 
-- [ ] Japanese G2P rules (kana; kanji needs dictionary)
-- [ ] Korean G2P rules (Hangul jamo decomposition)
-- [ ] Mandarin G2P rules (pinyin; characters need annotation)
+### M0 — Port scaffold (v0.1.0) — ✅ shipped 2026-07-06
 
-## v2.4.0 — Cyrillic & Slavic
+- `cyrius port` scaffold landed
+- Rust source moved to `rust-old/`
+- Doc-tree per [first-party-documentation.md](https://github.com/MacCracken/agnosticos/blob/main/docs/development/applications/first-party-documentation.md)
 
-- [ ] Russian G2P rules (vowel reduction, palatalization)
+### M1 — Surface parity (v0.2.0)
 
-## v2.5.0 — Classical & Historical
+_Pick a parseable Rust subset and verify the Cyrius port matches it function-for-function. Specify the dep gates and the acceptance criteria._
 
-- [ ] Latin G2P rules (classical pronunciation)
-- [ ] Koine Greek G2P rules
-- [ ] Hawaiian G2P rules
-- [ ] Nahuatl G2P rules
+### M2 — _Title_ (v0.3.0)
 
-## v3.0 — Varna-Driven Enhancements
+_…_
 
-Depends on varna completing its post-1.0 phases.
+## Out of scope (for v1.0)
 
-### After varna P1 (Phonological Depth)
-- [ ] Distinctive feature-based phonological rules (generalize across language families)
-- [ ] Aspirated/labialized/palatalized consonant support in svara Phoneme mapping
-
-### After varna P3 (Coverage Scale)
-- [ ] Phonotactic validation for all supported languages (currently only English)
-- [ ] Allophone-aware G2P (use varna allophone rules for surface pronunciation)
-- [ ] Expanded transliteration input (Cyrillic↔Latin, Arabic↔Latin, Pinyin)
-- [ ] PHOIBLE-sourced inventories for 2000+ languages (data-driven G2P)
-
-### After varna P4 (Differentiators)
-- [ ] Prosody patterns per language (stress-timed vs syllable-timed vs mora-timed)
-- [ ] Historical phonology mode (Proto-IE reconstructions, sound change chains)
+_Capture what's deliberately NOT in scope for v1.0._

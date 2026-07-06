@@ -1,0 +1,352 @@
+# heteronym.cyr — heteronym disambiguation via preceding-word context.
+#
+# Ports rust-old/src/heteronym.rs. Heteronyms are words spelled the same but
+# pronounced differently by meaning/part-of-speech ("read" /riːd/ vs /rɛd/).
+# Heuristic: if a trigger word appears in the last <=3 preceding words, pick the
+# context (non-default) variant; else the default variant.
+#
+# Depends on svara (phoneme ordinals) + shabdakosh (Pronunciation = a struct
+# whose phonemes are a vec of svara ordinals, read via shbdk_pronunciation_phonemes).
+# Include position: after src/error.cyr, after the vendored dep chain
+# (hisab/goonj/naad/svara/varna/shabdakosh). Modules never include each other.
+#
+# Rust `struct HeteronymRule { word:&'static str, default_variant:usize,
+# context_variant:usize, triggers:&'static [&'static str] }` → an alloc'd block.
+#
+# HeteronymRule layout (32 bytes):
+#   [0]  word            (cstr)
+#   [8]  default_variant (i64 index)
+#   [16] context_variant (i64 index)
+#   [24] triggers        (vec of cstr)
+#
+# The rule table (Rust's `static HETERONYMS`) is built once via a cached
+# lazy-init fn _shabda_het_rules() returning a vec of HeteronymRule*.
+#
+# The serde twin `HeteronymRuleOwned` (Serialize/Deserialize/PartialEq) has no
+# distinct heap shape here — a HeteronymRule already owns cstr/vec fields, so the
+# "owned" clone is shabda_heteronym_rule_clone (deep copy) and PartialEq is
+# shabda_heteronym_rule_eq (struct-field equality). Their roundtrip lives in the
+# test file.
+#
+# NAMING: every top-level symbol is `shabda_`/`SHABDA_`/`Shabda`-prefixed.
+
+# ================================================================
+# HeteronymRule layout constants.
+# ================================================================
+var SHABDA_HET_WORD    = 0;
+var SHABDA_HET_DEFAULT = 8;
+var SHABDA_HET_CONTEXT = 16;
+var SHABDA_HET_TRIGGERS = 24;
+var SHABDA_HET_SIZE    = 32;
+
+# ================================================================
+# Constructor + accessors.
+# ================================================================
+#must_use
+fn shabda_heteronym_rule_new(word, default_variant, context_variant, triggers): i64 {
+    var r = alloc(SHABDA_HET_SIZE);
+    store64(r + SHABDA_HET_WORD, word);
+    store64(r + SHABDA_HET_DEFAULT, default_variant);
+    store64(r + SHABDA_HET_CONTEXT, context_variant);
+    store64(r + SHABDA_HET_TRIGGERS, triggers);
+    return r;
+}
+
+#must_use
+fn shabda_heteronym_rule_word(r): cstring {
+    return load64(r + SHABDA_HET_WORD);
+}
+
+#must_use
+fn shabda_heteronym_rule_default_variant(r): i64 {
+    return load64(r + SHABDA_HET_DEFAULT);
+}
+
+#must_use
+fn shabda_heteronym_rule_context_variant(r): i64 {
+    return load64(r + SHABDA_HET_CONTEXT);
+}
+
+#must_use
+fn shabda_heteronym_rule_triggers(r): i64 {
+    return load64(r + SHABDA_HET_TRIGGERS);
+}
+
+# Small helper: build a vec of cstr from a NUL-terminated-list is awkward; instead
+# each rule's trigger list is built explicitly in the table init below.
+
+# ================================================================
+# Serde twin: HeteronymRuleOwned → a deep clone + struct-field equality.
+# clone: fresh block, fresh triggers vec (same cstr contents; cstrs are static).
+# ================================================================
+#must_use
+fn shabda_heteronym_rule_clone(r): i64 {
+    var trig = load64(r + SHABDA_HET_TRIGGERS);
+    var out_trig = vec_new();
+    var i = 0;
+    var n = vec_len(trig);
+    while (i < n) {
+        vec_push(out_trig, vec_get(trig, i));
+        i = i + 1;
+    }
+    return shabda_heteronym_rule_new(
+        load64(r + SHABDA_HET_WORD),
+        load64(r + SHABDA_HET_DEFAULT),
+        load64(r + SHABDA_HET_CONTEXT),
+        out_trig);
+}
+
+# PartialEq — every field equal (word cstr, both indices, trigger cstr lists).
+#must_use
+fn shabda_heteronym_rule_eq(a, b): i64 {
+    if (streq(load64(a + SHABDA_HET_WORD), load64(b + SHABDA_HET_WORD)) == 0) { return 0; }
+    if (load64(a + SHABDA_HET_DEFAULT) != load64(b + SHABDA_HET_DEFAULT)) { return 0; }
+    if (load64(a + SHABDA_HET_CONTEXT) != load64(b + SHABDA_HET_CONTEXT)) { return 0; }
+    var ta = load64(a + SHABDA_HET_TRIGGERS);
+    var tb = load64(b + SHABDA_HET_TRIGGERS);
+    if (vec_len(ta) != vec_len(tb)) { return 0; }
+    var i = 0;
+    var n = vec_len(ta);
+    while (i < n) {
+        if (streq(vec_get(ta, i), vec_get(tb, i)) == 0) { return 0; }
+        i = i + 1;
+    }
+    return 1;
+}
+
+# ================================================================
+# Heteronym table — Rust's `static HETERONYMS`. Built once, cached.
+#
+# Convention: variant 0 = default/most-common; variant 1 = context-triggered.
+# ================================================================
+var _SHABDA_HET_TABLE = 0;
+
+# Build a vec of cstr triggers from a helper; each call takes the words inline.
+# (No variadic; we push in the table builder directly.)
+
+fn _shabda_het_build(): i64 {
+    var rules = vec_new();
+
+    # read: default = past /rɛd/, triggers = present /riːd/
+    var t_read = vec_new();
+    vec_push(t_read, "to");     vec_push(t_read, "will");   vec_push(t_read, "can");
+    vec_push(t_read, "could");  vec_push(t_read, "should"); vec_push(t_read, "would");
+    vec_push(t_read, "may");    vec_push(t_read, "might");  vec_push(t_read, "must");
+    vec_push(t_read, "please"); vec_push(t_read, "let's");  vec_push(t_read, "shall");
+    vec_push(rules, shabda_heteronym_rule_new("read", 0, 1, t_read));
+
+    # lead: default = metal /lɛd/, triggers = verb /liːd/
+    var t_lead = vec_new();
+    vec_push(t_lead, "to");     vec_push(t_lead, "will");   vec_push(t_lead, "can");
+    vec_push(t_lead, "could");  vec_push(t_lead, "should"); vec_push(t_lead, "would");
+    vec_push(t_lead, "may");    vec_push(t_lead, "might");  vec_push(t_lead, "must");
+    vec_push(t_lead, "shall");
+    vec_push(rules, shabda_heteronym_rule_new("lead", 0, 1, t_lead));
+
+    # live: default = verb /lɪv/, triggers = adjective /laɪv/
+    var t_live = vec_new();
+    vec_push(t_live, "a");    vec_push(t_live, "the");  vec_push(t_live, "is");
+    vec_push(t_live, "was");  vec_push(t_live, "go");   vec_push(t_live, "went");
+    vec_push(t_live, "broadcast"); vec_push(t_live, "on");
+    vec_push(rules, shabda_heteronym_rule_new("live", 0, 1, t_live));
+
+    # wind: default = air /wɪnd/, triggers = verb /waɪnd/
+    var t_wind = vec_new();
+    vec_push(t_wind, "to");    vec_push(t_wind, "will");  vec_push(t_wind, "can");
+    vec_push(t_wind, "could"); vec_push(t_wind, "should"); vec_push(t_wind, "would");
+    vec_push(t_wind, "must");
+    vec_push(rules, shabda_heteronym_rule_new("wind", 0, 1, t_wind));
+
+    # tear: default = eye /tɪər/, triggers = rip /tɛər/
+    var t_tear = vec_new();
+    vec_push(t_tear, "to");    vec_push(t_tear, "will");  vec_push(t_tear, "can");
+    vec_push(t_tear, "could"); vec_push(t_tear, "don't"); vec_push(t_tear, "didn't");
+    vec_push(rules, shabda_heteronym_rule_new("tear", 0, 1, t_tear));
+
+    # bow: default = weapon /boʊ/, triggers = bend /baʊ/
+    var t_bow = vec_new();
+    vec_push(t_bow, "to");   vec_push(t_bow, "will"); vec_push(t_bow, "take");
+    vec_push(t_bow, "took"); vec_push(t_bow, "a");
+    vec_push(rules, shabda_heteronym_rule_new("bow", 0, 1, t_bow));
+
+    # close: default = verb /kloʊz/, triggers = adjective /kloʊs/
+    var t_close = vec_new();
+    vec_push(t_close, "a");   vec_push(t_close, "the"); vec_push(t_close, "too");
+    vec_push(t_close, "very"); vec_push(t_close, "so"); vec_push(t_close, "how");
+    vec_push(t_close, "is");  vec_push(t_close, "was"); vec_push(t_close, "get");
+    vec_push(rules, shabda_heteronym_rule_new("close", 0, 1, t_close));
+
+    # record: default = noun /rɛkərd/, triggers = verb /rɪkɔːrd/
+    var t_record = vec_new();
+    vec_push(t_record, "to");     vec_push(t_record, "will");   vec_push(t_record, "can");
+    vec_push(t_record, "could");  vec_push(t_record, "should"); vec_push(t_record, "would");
+    vec_push(t_record, "must");   vec_push(t_record, "please");
+    vec_push(rules, shabda_heteronym_rule_new("record", 0, 1, t_record));
+
+    # present: default = noun /prɛzənt/, triggers = verb /prɪzɛnt/
+    var t_present = vec_new();
+    vec_push(t_present, "to");     vec_push(t_present, "will");   vec_push(t_present, "can");
+    vec_push(t_present, "could");  vec_push(t_present, "should"); vec_push(t_present, "would");
+    vec_push(t_present, "must");   vec_push(t_present, "shall");
+    vec_push(rules, shabda_heteronym_rule_new("present", 0, 1, t_present));
+
+    # refuse: default = noun /rɛfjuːs/, triggers = verb /rɪfjuːz/
+    var t_refuse = vec_new();
+    vec_push(t_refuse, "to");     vec_push(t_refuse, "will");   vec_push(t_refuse, "can");
+    vec_push(t_refuse, "could");  vec_push(t_refuse, "should"); vec_push(t_refuse, "would");
+    vec_push(t_refuse, "must");   vec_push(t_refuse, "i");
+    vec_push(rules, shabda_heteronym_rule_new("refuse", 0, 1, t_refuse));
+
+    # produce: default = noun /proʊduːs/, triggers = verb /prədjuːs/
+    var t_produce = vec_new();
+    vec_push(t_produce, "to");     vec_push(t_produce, "will");   vec_push(t_produce, "can");
+    vec_push(t_produce, "could");  vec_push(t_produce, "should"); vec_push(t_produce, "would");
+    vec_push(t_produce, "must");
+    vec_push(rules, shabda_heteronym_rule_new("produce", 0, 1, t_produce));
+
+    # object: default = noun /ɒbdʒɛkt/, triggers = verb /əbdʒɛkt/
+    var t_object = vec_new();
+    vec_push(t_object, "to");     vec_push(t_object, "will");   vec_push(t_object, "can");
+    vec_push(t_object, "could");  vec_push(t_object, "should"); vec_push(t_object, "would");
+    vec_push(t_object, "must");   vec_push(t_object, "i");      vec_push(t_object, "we");
+    vec_push(t_object, "they");
+    vec_push(rules, shabda_heteronym_rule_new("object", 0, 1, t_object));
+
+    # project: default = noun /prɒdʒɛkt/, triggers = verb /prədʒɛkt/
+    var t_project = vec_new();
+    vec_push(t_project, "to");     vec_push(t_project, "will");   vec_push(t_project, "can");
+    vec_push(t_project, "could");  vec_push(t_project, "should"); vec_push(t_project, "would");
+    vec_push(t_project, "must");
+    vec_push(rules, shabda_heteronym_rule_new("project", 0, 1, t_project));
+
+    # permit: default = noun /pɜːrmɪt/, triggers = verb /pərmɪt/
+    var t_permit = vec_new();
+    vec_push(t_permit, "to");     vec_push(t_permit, "will");   vec_push(t_permit, "can");
+    vec_push(t_permit, "could");  vec_push(t_permit, "should"); vec_push(t_permit, "would");
+    vec_push(t_permit, "must");   vec_push(t_permit, "not");
+    vec_push(rules, shabda_heteronym_rule_new("permit", 0, 1, t_permit));
+
+    # desert: default = noun /dɛzərt/, triggers = verb /dɪzɜːrt/
+    var t_desert = vec_new();
+    vec_push(t_desert, "to");     vec_push(t_desert, "will");   vec_push(t_desert, "can");
+    vec_push(t_desert, "could");  vec_push(t_desert, "should"); vec_push(t_desert, "would");
+    vec_push(t_desert, "must");   vec_push(t_desert, "don't");
+    vec_push(rules, shabda_heteronym_rule_new("desert", 0, 1, t_desert));
+
+    # minute: default = time /mɪnɪt/, triggers = adjective /maɪnjuːt/
+    var t_minute = vec_new();
+    vec_push(t_minute, "a");   vec_push(t_minute, "the");  vec_push(t_minute, "very");
+    vec_push(t_minute, "most"); vec_push(t_minute, "so");  vec_push(t_minute, "how");
+    vec_push(t_minute, "extremely");
+    vec_push(rules, shabda_heteronym_rule_new("minute", 0, 1, t_minute));
+
+    # bass: default = music /beɪs/, triggers = fish /bæs/
+    var t_bass = vec_new();
+    vec_push(t_bass, "a");     vec_push(t_bass, "the");    vec_push(t_bass, "caught");
+    vec_push(t_bass, "fishing"); vec_push(t_bass, "lake"); vec_push(t_bass, "sea");
+    vec_push(t_bass, "striped"); vec_push(t_bass, "largemouth");
+    vec_push(rules, shabda_heteronym_rule_new("bass", 0, 1, t_bass));
+
+    # wound: default = injury /wuːnd/, triggers = past of wind /waʊnd/
+    var t_wound = vec_new();
+    vec_push(t_wound, "he");  vec_push(t_wound, "she"); vec_push(t_wound, "they");
+    vec_push(t_wound, "i");   vec_push(t_wound, "we");  vec_push(t_wound, "had");
+    vec_push(t_wound, "was"); vec_push(t_wound, "were");
+    vec_push(rules, shabda_heteronym_rule_new("wound", 0, 1, t_wound));
+
+    # dove: default = bird /dʌv/, triggers = past of dive /doʊv/
+    var t_dove = vec_new();
+    vec_push(t_dove, "he");  vec_push(t_dove, "she"); vec_push(t_dove, "they");
+    vec_push(t_dove, "i");   vec_push(t_dove, "we");  vec_push(t_dove, "then");
+    vec_push(t_dove, "and");
+    vec_push(rules, shabda_heteronym_rule_new("dove", 0, 1, t_dove));
+
+    # sow: default = verb plant /soʊ/, triggers = female pig /saʊ/
+    var t_sow = vec_new();
+    vec_push(t_sow, "a");   vec_push(t_sow, "the"); vec_push(t_sow, "old");
+    vec_push(t_sow, "fat");
+    vec_push(rules, shabda_heteronym_rule_new("sow", 0, 1, t_sow));
+
+    return rules;
+}
+
+# Cached lazy-init accessor for the rule table (vec of HeteronymRule*).
+#must_use
+fn _shabda_het_rules(): i64 {
+    if (_SHABDA_HET_TABLE == 0) {
+        _SHABDA_HET_TABLE = _shabda_het_build();
+    }
+    return _SHABDA_HET_TABLE;
+}
+
+# ================================================================
+# lookup(word) -> rule* | 0  (Rust Option::None → 0).
+# ================================================================
+#must_use
+fn shabda_heteronym_lookup(word): i64 {
+    var rules = _shabda_het_rules();
+    var i = 0;
+    var n = vec_len(rules);
+    while (i < n) {
+        var r = vec_get(rules, i);
+        if (streq(load64(r + SHABDA_HET_WORD), word) == 1) {
+            return r;
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+# 1 if `word` (cstr) is present in the trigger vec, else 0.
+#must_use
+fn _shabda_het_triggers_contain(triggers, word): i64 {
+    var i = 0;
+    var n = vec_len(triggers);
+    while (i < n) {
+        if (streq(vec_get(triggers, i), word) == 1) { return 1; }
+        i = i + 1;
+    }
+    return 0;
+}
+
+# ================================================================
+# select_variant(rule, preceding_words) -> variant index.
+#
+# Rust: scan the LAST <=3 preceding words (reverse .take(3)), lowercased; if any
+# matches a trigger, return context_variant, else default_variant.
+# preceding_words is a vec of cstr.
+# ================================================================
+#must_use
+fn shabda_select_variant(rule, preceding_words): i64 {
+    var triggers = load64(rule + SHABDA_HET_TRIGGERS);
+    var len = vec_len(preceding_words);
+    # last <=3, iterated from the nearest preceding word backwards
+    var count = 0;
+    var i = len - 1;
+    while (i >= 0) {
+        if (count >= 3) { return load64(rule + SHABDA_HET_DEFAULT); }
+        var lower = str_lower_cstr(vec_get(preceding_words, i));
+        if (_shabda_het_triggers_contain(triggers, lower) == 1) {
+            return load64(rule + SHABDA_HET_CONTEXT);
+        }
+        count = count + 1;
+        i = i - 1;
+    }
+    return load64(rule + SHABDA_HET_DEFAULT);
+}
+
+# ================================================================
+# select_phonemes(rule, preceding_words, pronunciations) -> phonemes vec.
+#
+# pronunciations = a vec of shabdakosh Pronunciation* (each read via
+# shbdk_pronunciation_phonemes). Bounds-checked: if the selected variant index is
+# out of range, fall back to pronunciations[0] (matches Rust).
+# ================================================================
+#must_use
+fn shabda_select_phonemes(rule, preceding_words, pronunciations): i64 {
+    var idx = shabda_select_variant(rule, preceding_words);
+    if (idx < vec_len(pronunciations)) {
+        return shbdk_pronunciation_phonemes(vec_get(pronunciations, idx));
+    }
+    return shbdk_pronunciation_phonemes(vec_get(pronunciations, 0));
+}

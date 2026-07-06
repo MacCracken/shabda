@@ -1,0 +1,255 @@
+# syllable.cyr — syllabification of phoneme sequences (Maximal Onset Principle).
+#
+# Ports rust-old/src/syllable.rs. Splits a phoneme sequence into syllables using
+# the Maximal Onset Principle with sonority-based constraints. Each syllable has
+# an onset (consonants), a nucleus (vowel/diphthong), and a coda (consonants).
+#
+# DEP POSITION: svara only. The entry file includes svara.cyr (for
+# svara_phoneme_class + SVARA_CLASS_VOWEL/DIPHTHONG + the SVARA_PH_* ordinals)
+# and src/error.cyr ABOVE this module. Modules never include each other.
+#
+# Shabda Syllable layout (24 bytes):
+#   [0]  onset   — vec of phoneme ordinals (i64)
+#   [8]  nucleus — i64 phoneme ordinal
+#   [16] coda    — vec of phoneme ordinals (i64)
+#
+# NAMING: every top-level symbol is `shabda_`/`SHABDA_`/`Shabda`-prefixed (flat
+# link namespace; coexists with shbdk_ / svara_ / varna / sakshi). Private
+# helpers use a leading `_shabda_`.
+
+var SHABDA_SYLLABLE_ONSET   = 0;
+var SHABDA_SYLLABLE_NUCLEUS = 8;
+var SHABDA_SYLLABLE_CODA    = 16;
+var SHABDA_SYLLABLE_SIZE    = 24;
+
+# ---- Syllable constructor / accessors ----------------------------------------
+# Build a syllable from an onset vec, a nucleus ordinal, and a coda vec.
+#must_use
+fn shabda_syllable_new(onset, nucleus, coda): i64 {
+    var s = alloc(SHABDA_SYLLABLE_SIZE);
+    store64(s + SHABDA_SYLLABLE_ONSET, onset);
+    store64(s + SHABDA_SYLLABLE_NUCLEUS, nucleus);
+    store64(s + SHABDA_SYLLABLE_CODA, coda);
+    return s;
+}
+
+#must_use
+fn shabda_syllable_onset(s): i64 {
+    return load64(s + SHABDA_SYLLABLE_ONSET);
+}
+
+#must_use
+fn shabda_syllable_nucleus(s): i64 {
+    return load64(s + SHABDA_SYLLABLE_NUCLEUS);
+}
+
+#must_use
+fn shabda_syllable_coda(s): i64 {
+    return load64(s + SHABDA_SYLLABLE_CODA);
+}
+
+# A syllable is "heavy" if it has a non-empty coda OR a diphthong nucleus.
+# Heavy syllables attract stress in English.
+#must_use
+fn shabda_syllable_is_heavy(s): i64 {
+    if (vec_len(load64(s + SHABDA_SYLLABLE_CODA)) > 0) { return 1; }
+    if (svara_phoneme_class(load64(s + SHABDA_SYLLABLE_NUCLEUS)) == SVARA_CLASS_DIPHTHONG) {
+        return 1;
+    }
+    return 0;
+}
+
+# All phonemes in this syllable (onset ++ [nucleus] ++ coda) as a fresh vec.
+#must_use
+fn shabda_syllable_phonemes(s): i64 {
+    var out = vec_new();
+    var onset = load64(s + SHABDA_SYLLABLE_ONSET);
+    var coda = load64(s + SHABDA_SYLLABLE_CODA);
+    var i = 0;
+    var n = vec_len(onset);
+    while (i < n) {
+        vec_push(out, vec_get(onset, i));
+        i = i + 1;
+    }
+    vec_push(out, load64(s + SHABDA_SYLLABLE_NUCLEUS));
+    i = 0;
+    n = vec_len(coda);
+    while (i < n) {
+        vec_push(out, vec_get(coda, i));
+        i = i + 1;
+    }
+    return out;
+}
+
+# ---- Private helpers ---------------------------------------------------------
+# True if a phoneme can serve as a syllable nucleus (Vowel or Diphthong).
+fn _shabda_is_nucleus(ph): i64 {
+    var c = svara_phoneme_class(ph);
+    if (c == SVARA_CLASS_VOWEL) { return 1; }
+    if (c == SVARA_CLASS_DIPHTHONG) { return 1; }
+    return 0;
+}
+
+# Sonority level of a phoneme (higher = more sonorous).
+#   Vowel/Diphthong = 6
+#   ApproximantR/W/J = 5
+#   LateralL = 4
+#   NasalM/N/Ng = 3
+#   FricativeF/V/S/Z/Sh/Zh/Th/Dh/H = 2
+#   else (plosives, affricates, glottal stop, tap, ...) = 1
+fn _shabda_sonority(ph): i64 {
+    var c = svara_phoneme_class(ph);
+    if (c == SVARA_CLASS_VOWEL) { return 6; }
+    if (c == SVARA_CLASS_DIPHTHONG) { return 6; }
+    if (ph == SVARA_PH_APPROX_R) { return 5; }
+    if (ph == SVARA_PH_APPROX_W) { return 5; }
+    if (ph == SVARA_PH_APPROX_J) { return 5; }
+    if (ph == SVARA_PH_LATERAL_L) { return 4; }
+    if (ph == SVARA_PH_NASAL_M) { return 3; }
+    if (ph == SVARA_PH_NASAL_N) { return 3; }
+    if (ph == SVARA_PH_NASAL_NG) { return 3; }
+    if (ph == SVARA_PH_FRIC_F) { return 2; }
+    if (ph == SVARA_PH_FRIC_V) { return 2; }
+    if (ph == SVARA_PH_FRIC_S) { return 2; }
+    if (ph == SVARA_PH_FRIC_Z) { return 2; }
+    if (ph == SVARA_PH_FRIC_SH) { return 2; }
+    if (ph == SVARA_PH_FRIC_ZH) { return 2; }
+    if (ph == SVARA_PH_FRIC_TH) { return 2; }
+    if (ph == SVARA_PH_FRIC_DH) { return 2; }
+    if (ph == SVARA_PH_FRIC_H) { return 2; }
+    return 1;
+}
+
+# Copy v[start..end] into a fresh vec (guarded: empty if start >= end).
+fn _shabda_slice(v, start, end): i64 {
+    var out = vec_new();
+    var i = start;
+    while (i < end) {
+        vec_push(out, vec_get(v, i));
+        i = i + 1;
+    }
+    return out;
+}
+
+# Checks if a consonant cluster (vec) is a legal English onset: sonority rises
+# left-to-right. Exception: /s/ + plosive clusters (sp, st, sk, spl, spr, str,
+# skr) where cluster[0] == FricativeS and sonority(next) <= 2.
+fn _shabda_is_legal_onset(cluster): i64 {
+    var len = vec_len(cluster);
+    if (len == 0) { return 1; }
+    if (len == 1) { return 1; }
+
+    var first = vec_get(cluster, 0);
+    var i = 1;
+    while (i < len) {
+        var son_cur = _shabda_sonority(vec_get(cluster, i));
+        var son_prev = _shabda_sonority(vec_get(cluster, i - 1));
+        if (son_cur <= son_prev) {
+            # Exception: /s/ + plosive clusters.
+            if (first == SVARA_PH_FRIC_S) {
+                if (son_cur <= 2) {
+                    i = i + 1;
+                    continue;
+                }
+            }
+            return 0;
+        }
+        i = i + 1;
+    }
+    return 1;
+}
+
+# Maximum number of consonants from the END of a cluster (vec) that form a legal
+# English onset (rising sonority toward the nucleus). Returns a count.
+fn _shabda_max_legal_onset(cluster): i64 {
+    var len = vec_len(cluster);
+    if (len == 0) { return 0; }
+
+    # Try from the full cluster down to 1 consonant.
+    var start = 0;
+    while (start < len) {
+        var candidate = _shabda_slice(cluster, start, len);
+        if (_shabda_is_legal_onset(candidate) == 1) {
+            return len - start;
+        }
+        start = start + 1;
+    }
+
+    # Single consonant is always a legal onset.
+    return 1;
+}
+
+# ---- Syllabification ---------------------------------------------------------
+# Syllabify a phoneme sequence (vec of ordinals) using the Maximal Onset
+# Principle. Returns a vec of Syllable*. Empty input -> empty vec; no vowels ->
+# empty vec; else one syllable per nucleus.
+#must_use
+fn shabda_syllabify(phonemes): i64 {
+    var out = vec_new();
+    var n = vec_len(phonemes);
+    if (n == 0) { return out; }
+
+    # Find indices of all nuclei (vowels and diphthongs).
+    var nuclei = vec_new();
+    var i = 0;
+    while (i < n) {
+        if (_shabda_is_nucleus(vec_get(phonemes, i)) == 1) {
+            vec_push(nuclei, i);
+        }
+        i = i + 1;
+    }
+    var nn = vec_len(nuclei);
+    if (nn == 0) { return out; }
+
+    var syl_idx = 0;
+    while (syl_idx < nn) {
+        var nucleus_idx = vec_get(nuclei, syl_idx);
+
+        # onset_start
+        var onset_start = 0;
+        if (syl_idx == 0) {
+            onset_start = 0;
+        } else {
+            var prev_nucleus = vec_get(nuclei, syl_idx - 1);
+            var cluster_start = prev_nucleus + 1;
+            var cluster = _shabda_slice(phonemes, cluster_start, nucleus_idx);
+            var onset_len = _shabda_max_legal_onset(cluster);
+            # PORT-RISK: nucleus_idx - onset_len must not go negative. The cluster
+            # spans [cluster_start, nucleus_idx), so onset_len <= that span length,
+            # which is <= nucleus_idx; guard anyway.
+            if (nucleus_idx >= onset_len) {
+                onset_start = nucleus_idx - onset_len;
+            } else {
+                onset_start = 0;
+            }
+        }
+
+        var onset = _shabda_slice(phonemes, onset_start, nucleus_idx);
+        var nucleus = vec_get(phonemes, nucleus_idx);
+
+        # coda
+        var coda = vec_new();
+        if (syl_idx < nn - 1) {
+            var next_nucleus = vec_get(nuclei, syl_idx + 1);
+            var gap = _shabda_slice(phonemes, nucleus_idx + 1, next_nucleus);
+            var next_onset_len = _shabda_max_legal_onset(gap);
+            # PORT-RISK: next_nucleus - next_onset_len must not go negative. The
+            # gap spans [nucleus_idx+1, next_nucleus); next_onset_len <= gap len,
+            # so next_nucleus - next_onset_len >= nucleus_idx+1; guard anyway.
+            var coda_end = next_nucleus;
+            if (next_nucleus >= next_onset_len) {
+                coda_end = next_nucleus - next_onset_len;
+            } else {
+                coda_end = nucleus_idx + 1;
+            }
+            coda = _shabda_slice(phonemes, nucleus_idx + 1, coda_end);
+        } else {
+            coda = _shabda_slice(phonemes, nucleus_idx + 1, n);
+        }
+
+        vec_push(out, shabda_syllable_new(onset, nucleus, coda));
+        syl_idx = syl_idx + 1;
+    }
+
+    return out;
+}

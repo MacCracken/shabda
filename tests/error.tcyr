@@ -1,0 +1,54 @@
+# error.tcyr — tests for src/error.cyr (ports rust-old/src/error.rs).
+# The Rust enum carried no #[test] blocks; these are the parity-meaningful
+# behavioural checks for the sakshi-backed error codes + shared L0 tags.
+
+include "src/error.cyr"
+
+alloc_init();
+
+# ================================================================
+test_group("construction + packing");
+var e_invalid = shabda_err_invalid_input();
+assert_eq(sakshi_err_code(e_invalid), SHABDA_ERR_INVALID_INPUT, "invalid_input code");
+assert_eq(sakshi_err_category(e_invalid), ERR_CAT_PARSE, "invalid_input category");
+assert_eq(sakshi_err_code(shabda_err_unknown_word()), SHABDA_ERR_UNKNOWN_WORD, "unknown_word code");
+assert_eq(sakshi_err_code(shabda_err_unsupported_language()), SHABDA_ERR_UNSUPPORTED_LANGUAGE, "unsupported_language code");
+assert_eq(sakshi_err_code(shabda_err_rule_error()), SHABDA_ERR_RULE_ERROR, "rule_error code");
+assert_eq(sakshi_err_code(shabda_err_dict_parse()), SHABDA_ERR_DICT_PARSE, "dict_parse code");
+assert_eq(sakshi_err_category(shabda_err_unsupported_language()), ERR_CAT_CONFIG, "unsupported_language category");
+assert_eq(sakshi_err_category(shabda_err_unknown_word()), ERR_CAT_RUNTIME, "unknown_word category");
+
+# ================================================================
+test_group("predicates");
+assert_eq(shabda_is_err(shabda_err_dict_parse()), 1, "dict_parse is an error");
+assert_eq(shabda_is_ok(shabda_err_dict_parse()), 0, "dict_parse is not ok");
+assert_eq(shabda_is_err(0), 0, "0 is not an error");
+assert_eq(shabda_is_ok(0), 1, "0 is ok");
+
+# ================================================================
+# From<ShabdakoshError> folds every shabdakosh error into DictParseError. The fn
+# ignores its input's specifics; any packed shbdk error maps to shabda DictParse.
+test_group("from shabdakosh error");
+assert_eq(sakshi_err_code(shabda_from_shabdakosh_err(42)), SHABDA_ERR_DICT_PARSE, "from shbdk -> dict parse code");
+assert_eq(shabda_is_err(shabda_from_shabdakosh_err(42)), 1, "folded error is an error");
+
+# ================================================================
+test_group("diagnostics (shabda_err_name)");
+assert_streq(shabda_err_name(shabda_err_invalid_input()), "invalid input", "invalid input name");
+assert_streq(shabda_err_name(shabda_err_unknown_word()), "unknown word", "unknown word name");
+assert_streq(shabda_err_name(shabda_err_unsupported_language()), "unsupported language", "unsupported language name");
+assert_streq(shabda_err_name(shabda_err_rule_error()), "rule error", "rule error name");
+assert_streq(shabda_err_name(shabda_err_dict_parse()), "dictionary parse error", "dict parse name");
+assert_streq(shabda_err_name(0), "ok", "ok name");
+
+# ================================================================
+# Shared L0 tags (hoisted here for later modules).
+test_group("shared L0 tags");
+assert_eq(SHABDA_LANG_ENGLISH, 0, "english tag");
+assert_eq(SHABDA_LANG_SANSKRIT, 5, "sanskrit tag");
+assert_eq(SHABDA_STYPE_QUESTION, 1, "question tag");
+assert_eq(SHABDA_TIMING_SIZE, 24, "timing struct size");
+assert_eq(SHABDA_PH_NONE, (0 - 1), "phoneme none sentinel");
+
+var rc = assert_summary();
+syscall(60, rc);

@@ -1,0 +1,29 @@
+# shabda — Cyrius port of a ~5,000-line Rust library (preserved at rust-old/).
+# Smoke entry: grows one include + one smoke line per ported module; builds +
+# links at every step. Modules never include each other — this entry orders them
+# (stdlib + sakshi auto-resolve from cyrius.cyml [deps]).
+#
+# Dependency bundles first, in dependency-chain order. svara's chain
+# (hisab/goonj/naad → svara) and varna come before shabdakosh (which consumes
+# both). Named deps need explicit includes; hashmap/bayan/sakshi auto-resolve.
+include "lib/hisab.cyr"
+include "lib/goonj.cyr"
+include "lib/naad.cyr"
+include "lib/svara.cyr"
+include "lib/varna.cyr"
+include "lib/shabdakosh.cyr"
+
+include "src/error.cyr"
+
+fn main() {
+    alloc_init();
+    println("shabda ready");
+    # L0 smoke — sakshi-backed error surface (the 5 Display strings + ok)
+    println(shabda_err_name(shabda_err_invalid_input()));
+    println(shabda_err_name(shabda_err_dict_parse()));
+    println(shabda_err_name(0));
+    return 0;
+}
+
+var r = main();
+syscall(SYS_EXIT, r);

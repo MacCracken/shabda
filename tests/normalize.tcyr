@@ -1,0 +1,74 @@
+# normalize.tcyr — tests for src/normalize.cyr (ports rust-old/src/normalize.rs).
+# Ports the ~25 inline #[test] blocks 1:1 into assert_streq/assert_eq checks.
+
+include "src/error.cyr"
+include "src/normalize.cyr"
+
+alloc_init();
+
+# ================================================================
+test_group("normalize basic + punctuation + spaces");
+assert_streq(shabda_normalize("Hello World!"), "hello world", "normalize basic");
+assert_streq(shabda_normalize("it's a test."), "it's a test .pause", "normalize period");
+assert_streq(shabda_normalize("too   many   spaces"), "too many spaces", "normalize multi-space");
+
+# ================================================================
+test_group("detect_intonation");
+assert_eq(shabda_detect_intonation("hello?"), SHABDA_STYPE_QUESTION, "question");
+assert_eq(shabda_detect_intonation("wow!"), SHABDA_STYPE_EXCLAMATION, "exclamation");
+assert_eq(shabda_detect_intonation("ok."), SHABDA_STYPE_STATEMENT, "statement");
+assert_eq(shabda_sentence_type("hello?"), SHABDA_STYPE_QUESTION, "sentence_type alias");
+
+# ================================================================
+test_group("number expansion");
+assert_streq(shabda_expand_numbers("0"), "zero", "expand zero");
+assert_streq(shabda_expand_numbers("42"), "forty two", "expand small");
+assert_streq(shabda_expand_numbers("100"), "one hundred", "expand hundred");
+assert_streq(shabda_expand_numbers("1000"), "one thousand", "expand thousand");
+assert_streq(shabda_expand_numbers("1234"), "one thousand two hundred thirty four", "expand complex");
+assert_streq(shabda_expand_numbers("1,000"), "one thousand", "expand comma");
+assert_streq(shabda_expand_numbers("3.14"), "three point one four", "expand decimal");
+assert_streq(shabda_expand_numbers("-5"), "negative five", "expand negative");
+assert_streq(shabda_expand_numbers("I have 42 cats"), "I have forty two cats", "expand in sentence");
+assert_streq(shabda_expand_numbers("no numbers here"), "no numbers here", "expand no numbers");
+
+# ================================================================
+test_group("normalize with numbers + pauses");
+assert_streq(shabda_normalize("I have 42 cats!"), "i have forty two cats", "normalize with numbers");
+# comma pause: result contains ",pause"
+assert_eq(strstr(shabda_normalize("hello, world"), SHABDA_COMMA_PAUSE) >= 0, 1, "comma pause present");
+assert_eq(strstr(shabda_normalize("first. second"), SHABDA_PERIOD_PAUSE) >= 0, 1, "period pause present");
+
+# ================================================================
+test_group("abbreviations");
+assert_streq(shabda_expand_abbreviations("Dr. Smith"), "doctor Smith", "abbr dr");
+assert_streq(shabda_expand_abbreviations("Mr. Jones"), "mister Jones", "abbr mr");
+assert_streq(shabda_expand_abbreviations("test."), "test.", "abbr not mid-word");
+assert_eq(strstr(shabda_normalize("Dr. Smith is here"), "doctor") >= 0, 1, "abbr in normalize");
+
+# ================================================================
+test_group("acronyms");
+assert_streq(shabda_expand_acronyms("FBI"), "f b i", "acronym spell out");
+assert_streq(shabda_expand_acronyms("NASA"), "nasa", "acronym pronounceable");
+assert_streq(shabda_expand_acronyms("I am OK"), "I am OK", "acronym short not matched");
+assert_streq(shabda_expand_acronyms("the FBI and NASA"), "the f b i and nasa", "acronym in sentence");
+
+# ================================================================
+test_group("foreign words + diacritics");
+assert_eq(shabda_is_foreign_word("café"), 1, "foreign café");
+assert_eq(shabda_is_foreign_word("naïve"), 1, "foreign naïve");
+assert_eq(shabda_is_foreign_word("hello"), 0, "not foreign hello");
+assert_streq(shabda_strip_diacritics("café"), "cafe", "strip café");
+assert_streq(shabda_strip_diacritics("naïve"), "naive", "strip naïve");
+assert_streq(shabda_strip_diacritics("résumé"), "resume", "strip résumé");
+
+# ================================================================
+# Emphasis (from the doctest on normalize_with_emphasis).
+test_group("normalize_with_emphasis");
+var emres = shabda_normalize_with_emphasis("HELLO world");
+assert_eq(strstr(emres, SHABDA_EMPHASIS_START) >= 0, 1, "emph start present");
+assert_eq(strstr(emres, "hello") >= 0, 1, "emph lowercased word present");
+assert_eq(strstr(emres, SHABDA_EMPHASIS_END) >= 0, 1, "emph end present");
+
+var rc = assert_summary();
+syscall(60, rc);

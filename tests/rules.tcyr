@@ -1,0 +1,136 @@
+# rules.tcyr — tests for src/rules.cyr (ports rust-old/src/rules.rs #[test] blocks).
+# One test_group per Rust test; same assertions. Grows one language at a time.
+
+include "lib/hisab.cyr"
+include "lib/goonj.cyr"
+include "lib/naad.cyr"
+include "lib/svara.cyr"
+include "src/error.cyr"
+include "src/rules.cyr"
+
+alloc_init();
+
+# ---- helper: does vec `v` contain value `x`? (Rust .contains) ----
+fn _has(v, x): i64 {
+    if (vec_find(v, x) == (0 - 1)) { return 0; }
+    return 1;
+}
+fn _last(v): i64 {
+    var n = vec_len(v);
+    if (n == 0) { return (0 - 1); }
+    return vec_get(v, n - 1);
+}
+
+# =============================================================================
+# English
+# =============================================================================
+test_group("english basic");
+var cat = shabda_english_rules("cat");
+assert_neq(vec_len(cat), 0, "cat non-empty");
+assert_eq(vec_get(cat, 0), SVARA_PH_PLOSIVE_K, "cat[0] = k");
+
+var she = shabda_english_rules("she");
+assert_eq(vec_get(she, 0), SVARA_PH_FRIC_SH, "she[0] = sh");
+
+var the = shabda_english_rules("the");
+assert_eq(vec_get(the, 0), SVARA_PH_FRIC_DH, "the[0] = dh");
+
+var chat = shabda_english_rules("chat");
+assert_eq(vec_get(chat, 0), SVARA_PH_AFFR_CH, "chat[0] = ch");
+
+var empty = shabda_english_rules("");
+assert_eq(vec_len(empty), 0, "empty is empty");
+
+test_group("english silent letters");
+var knight = shabda_english_rules("knight");
+assert_neq(vec_get(knight, 0), SVARA_PH_PLOSIVE_K, "knight[0] != k");
+assert_eq(vec_get(knight, 0), SVARA_PH_NASAL_N, "knight[0] = n");
+
+var gnome = shabda_english_rules("gnome");
+assert_eq(vec_get(gnome, 0), SVARA_PH_NASAL_N, "gnome[0] = n");
+
+var write = shabda_english_rules("write");
+assert_eq(vec_get(write, 0), SVARA_PH_APPROX_R, "write[0] = r");
+
+var psalm = shabda_english_rules("psalm");
+assert_eq(vec_get(psalm, 0), SVARA_PH_FRIC_S, "psalm[0] = s");
+
+var lamb = shabda_english_rules("lamb");
+assert_eq(_has(lamb, SVARA_PH_PLOSIVE_B), 0, "lamb has no b");
+
+var go = shabda_english_rules("go");
+assert_eq(vec_get(go, 0), SVARA_PH_PLOSIVE_G, "go[0] = g");
+
+var high = shabda_english_rules("high");
+assert_eq(_has(high, SVARA_PH_DIPH_AI), 1, "high has AI");
+
+test_group("english magic-e + r-colored");
+var make = shabda_english_rules("make");
+assert_eq(_has(make, SVARA_PH_DIPH_EI), 1, "make has EI");
+
+var time = shabda_english_rules("time");
+assert_eq(_has(time, SVARA_PH_DIPH_AI), 1, "time has AI");
+
+var home = shabda_english_rules("home");
+assert_eq(_has(home, SVARA_PH_DIPH_OU), 1, "home has OU");
+
+var car = shabda_english_rules("car");
+assert_eq(_has(car, SVARA_PH_VOWEL_OPEN_A), 1, "car has OpenA");
+assert_eq(_has(car, SVARA_PH_APPROX_R), 1, "car has R");
+
+var bird = shabda_english_rules("bird");
+assert_eq(_has(bird, SVARA_PH_VOWEL_BIRD), 1, "bird has Bird");
+
+test_group("english morphology");
+var nation = shabda_english_rules("nation");
+assert_eq(_has(nation, SVARA_PH_FRIC_SH), 1, "nation has Sh");
+
+var walked = shabda_english_rules("walked");
+assert_eq(_last(walked), SVARA_PH_PLOSIVE_T, "walked ends t");
+
+var wanted = shabda_english_rules("wanted");
+var wl = vec_len(wanted);
+assert_eq(wl >= 2, 1, "wanted len >= 2");
+assert_eq(vec_get(wanted, wl - 2), SVARA_PH_VOWEL_NEAR_I, "wanted[-2] = NearI");
+assert_eq(vec_get(wanted, wl - 1), SVARA_PH_PLOSIVE_D, "wanted[-1] = d");
+
+var played = shabda_english_rules("played");
+assert_eq(_last(played), SVARA_PH_PLOSIVE_D, "played ends d");
+
+var unhappy = shabda_english_rules("unhappy");
+assert_eq(vec_get(unhappy, 0), SVARA_PH_VOWEL_CUP_V, "unhappy[0] = CupV");
+assert_eq(vec_get(unhappy, 1), SVARA_PH_NASAL_N, "unhappy[1] = n");
+
+# =============================================================================
+# Spanish
+# =============================================================================
+test_group("spanish");
+var hola = shabda_spanish_rules("hola");
+assert_eq(vec_get(hola, 0), SVARA_PH_VOWEL_O, "hola[0] = O");
+assert_eq(vec_get(hola, 1), SVARA_PH_LATERAL_L, "hola[1] = L");
+assert_eq(vec_get(hola, 2), SVARA_PH_VOWEL_OPEN_A, "hola[2] = OpenA");
+
+var chico = shabda_spanish_rules("chico");
+assert_eq(vec_get(chico, 0), SVARA_PH_AFFR_CH, "chico[0] = ch");
+
+var llamar = shabda_spanish_rules("llamar");
+assert_eq(vec_get(llamar, 0), SVARA_PH_APPROX_J, "llamar[0] = j");
+
+var perro = shabda_spanish_rules("perro");
+assert_eq(_has(perro, SVARA_PH_APPROX_R), 1, "perro has R (rr)");
+
+var que = shabda_spanish_rules("que");
+assert_eq(vec_get(que, 0), SVARA_PH_PLOSIVE_K, "que[0] = k");
+assert_eq(vec_get(que, 1), SVARA_PH_VOWEL_OPEN_E, "que[1] = OpenE");
+
+var guitarra = shabda_spanish_rules("guitarra");
+assert_eq(vec_get(guitarra, 0), SVARA_PH_PLOSIVE_G, "guitarra[0] = g");
+
+var sp_empty = shabda_spanish_rules("");
+assert_eq(vec_len(sp_empty), 0, "spanish empty");
+
+var nino = shabda_spanish_rules("niño");
+assert_eq(_has(nino, SVARA_PH_NASAL_NG), 1, "niño has NG");
+
+var rc = assert_summary();
+syscall(60, rc);

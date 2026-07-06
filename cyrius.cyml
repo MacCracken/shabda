@@ -1,0 +1,69 @@
+[package]
+name = "shabda"
+version = "${file:VERSION}"
+description = "shabda — grapheme-to-phoneme (G2P) conversion for AGNOS text-to-speech: normalize → dictionary/rules → syllabify → prosody → svara PhonemeEvents. English/Spanish/German/Hindi/Arabic/Sanskrit, SSML subset, heteronym disambiguation, varna inventory validation. Cyrius port of a ~5,000-line Rust library."
+license = "GPL-3.0-only"
+repository = "https://github.com/MacCracken/shabda"
+language = "cyrius"
+cyrius = "6.4.10"
+
+[build]
+entry = "src/main.cyr"
+output = "build/shabda"
+
+# `[lib]` is the distlib bundle `cyrius distlib` writes to dist/shabda.cyr —
+# modules concatenated in dependency order (deps before dependents). MUST stay in
+# lockstep with src/main.cyr's include order and the leaf-first port order.
+[lib]
+modules = [
+    "src/error.cyr",
+    "src/normalize.cyr",
+    "src/syllable.cyr",
+    "src/heteronym.cyr",
+    "src/ssml.cyr",
+    "src/rules.cyr",
+    "src/prosody.cyr",
+    "src/validate.cyr",
+    "src/engine.cyr",
+]
+
+# stdlib grows as modules arrive. Mirrors the shabdakosh reference port's proven
+# set. sakshi = packed-i64 errors. math/ganita = f64 prosody/rate scaling. tagged =
+# Option/Result-shaped returns. fnptr = the convert_streaming callback. hashmap +
+# bayan are transitive folds required by the svara dist bundle (svara.deps). NOTE:
+# hisab/goonj/naad are NOT stdlib — they are shabdakosh's transitive folds
+# (shabdakosh.deps), auto-vendored by `cyrius deps` and `include`d in src/main.cyr.
+[deps]
+stdlib = ["syscalls", "string", "alloc", "str", "fmt", "vec", "io", "args", "assert", "fnptr", "atomic", "sakshi", "math", "ganita", "tagged", "hashmap", "bayan", "mmap", "bench"]
+
+# shabdakosh — the pronunciation dictionary (shbdk_* symbols). Re-exported by the
+# Rust crate as shabda::arpabet and shabda::dictionary; shabda calls shbdk_arpabet_*
+# / shbdk_dict_* directly. Consumed by engine.cyr (dict lookup), heteronym.cyr
+# (Pronunciation), error.cyr (SHBDK_ERR_* codes for the From<ShabdakoshError> map).
+# Its dist bundle folds hisab/goonj/naad (shabdakosh.deps sidecar). BOTH path (local
+# dev) AND git+tag (CI).
+[deps.shabdakosh]
+git = "https://github.com/MacCracken/shabdakosh.git"
+path = "../shabdakosh"
+tag = "3.0.1"
+modules = ["dist/shabdakosh.cyr"]
+
+# svara — SVARA_PH_* phoneme identities (the PhonemeEvent-compat contract),
+# phoneme class/duration, Stress, IntonationPattern, and the sequence/voice/render
+# surface for speak(). Its dist bundle needs the hashmap + bayan folds (svara.deps).
+[deps.svara]
+git = "https://github.com/MacCracken/svara.git"
+path = "../svara"
+tag = "3.0.1"
+modules = ["dist/svara.cyr"]
+
+# varna — phoneme inventories (phoneme_english/spanish/german/hindi/
+# classical_arabic/sanskrit + phoneme_has/phoneme_ipa), phonotactics, and script
+# detection (script_by_code). Consumed by validate.cyr and engine::detect_language.
+# Symbols are bare module-prefixed (phoneme_*/script_*/phonotactics_*). No .deps
+# sidecar — self-contained on alloc/string/vec (already declared).
+[deps.varna]
+git = "https://github.com/MacCracken/varna.git"
+path = "../varna"
+tag = "2.0.0"
+modules = ["dist/varna.cyr"]
