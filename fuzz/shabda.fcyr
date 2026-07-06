@@ -1,0 +1,59 @@
+# shabda.fcyr — fuzz harness. Feeds arbitrary bytes into the text-parsing entry
+# points (normalize, SSML parser, the full convert pipeline). None may crash,
+# over-read, or loop forever on hostile input — robustness, not correctness.
+
+include "lib/hisab.cyr"
+include "lib/goonj.cyr"
+include "lib/naad.cyr"
+include "lib/svara.cyr"
+include "lib/varna.cyr"
+include "lib/shabdakosh.cyr"
+
+include "src/error.cyr"
+include "src/normalize.cyr"
+include "src/syllable.cyr"
+include "src/heteronym.cyr"
+include "src/ssml.cyr"
+include "src/rules.cyr"
+include "src/prosody.cyr"
+include "src/validate.cyr"
+include "src/engine.cyr"
+
+# NUL-terminate `len` bytes from `data` into a fresh cstring the shabda_* text
+# fns expect.
+fn _shabda_fuzz_cstr(data, len): i64 {
+    var s = alloc(len + 1);
+    var i = 0;
+    while (i < len) {
+        store8(s + i, load8(data + i));
+        i = i + 1;
+    }
+    store8(s + len, 0);
+    return s;
+}
+
+fn fuzz_main(data, len) {
+    if (len == 0) { return 0; }
+    var s = _shabda_fuzz_cstr(data, len);
+    # Each parser must return without crashing on the arbitrary input.
+    var sink = shabda_normalize(s);
+    sink = shabda_normalize_with_emphasis(s);
+    sink = shabda_expand_numbers(s);
+    sink = shabda_ssml_parse(s);
+    var g = shabda_g2p_new(SHABDA_LANG_ENGLISH);
+    var slot = alloc(8);
+    sink = shabda_convert(g, s, slot);
+    sink = shabda_convert_ssml(g, s, slot);
+    return 0;
+}
+
+fn main() {
+    alloc_init();
+    fuzz_main("hello, world.", 13);
+    fuzz_main("42 <emph>CATS</emph>", 20);
+    println("fuzz: ok");
+    return 0;
+}
+
+var r = main();
+syscall(60, r);

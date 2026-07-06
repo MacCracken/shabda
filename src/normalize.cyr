@@ -23,6 +23,13 @@
 #
 # tracing trace! calls in the Rust are dropped (no-op).
 #
+# DIVERGENCE (number parsing): Rust parses integer tokens with str::parse::<u64>()
+# (range 0..=u64::MAX). Cyrius is i64-only, so _shabda_parse_u64 accepts 0..=i64::MAX
+# and falls back to digit-by-digit (Rust digits_to_words) on i64 overflow. This is
+# faithful for every value <= i64::MAX; values in (i64::MAX, u64::MAX] parse in Rust
+# but overflow here. Rust's own number_to_words only handles up to billions, so it
+# renders those huge values as garbage anyway; no ported test covers that range.
+#
 # Dep position: included after src/error.cyr (which hoists SHABDA_STYPE_*). Never
 # includes other modules. NAMING: every top-level symbol is shabda_/SHABDA_-prefixed.
 
@@ -185,18 +192,38 @@ fn _shabda_sb_last(sb): i64 {
 # ================================================================
 # Code-point predicates (mirror Rust char methods on the paths normalize uses).
 # ================================================================
-# Rust char::is_alphabetic. Covers ASCII letters + Latin-1/Extended accented
-# letters (the block this crate actually feeds). We follow strip_diacritics /
-# is_latin_extended's scope: ASCII A-Z/a-z plus 0x00C0..0x024F letters (excluding
-# the two division/multiplication signs 0x00D7 and 0x00F7, which are Sm/So).
+# Rust char::is_alphabetic. Covers the scripts this crate feeds: ASCII letters,
+# Latin-1/Extended accented letters, and — for the Hindi/Sanskrit (Devanagari) and
+# Arabic G2P engines — those scripts' letters + alphabetic combining marks. Rust's
+# is_alphabetic() = Lu+Ll+Lt+Lm+Lo+Nl+Other_Alphabetic, so Devanagari matras /
+# anusvara / visarga and Arabic harakat / shadda (Other_Alphabetic) COUNT, while
+# nukta (093C), virama (094D), Vedic tone marks (0951..0954), Arabic tatweel (0640)
+# and sukun (0652) do NOT. normalize keeps exactly the alphabetic code points, so
+# matching this is load-bearing for native-script convert (regression: dropping
+# Devanagari/Arabic here made "नमस्ते"/"كتاب" normalize to empty -> 0 events).
 fn _shabda_is_alpha(cp): i64 {
     if (cp >= 65 && cp <= 90) { return 1; }
     if (cp >= 97 && cp <= 122) { return 1; }
     if (cp >= 0x00C0 && cp <= 0x024F) {
-        if (cp == 0x00D7) { return 0; }
-        if (cp == 0x00F7) { return 0; }
+        if (cp == 0x00D7) { return 0; }   # multiplication sign (Sm)
+        if (cp == 0x00F7) { return 0; }   # division sign (Sm)
         return 1;
     }
+    # Devanagari (U+0900..U+0963): letters + matras + anusvara/visarga/chandrabindu.
+    if (cp >= 0x0900 && cp <= 0x0963) {
+        if (cp == 0x093C) { return 0; }                  # nukta (Mn, not alphabetic)
+        if (cp == 0x094D) { return 0; }                  # virama / halant (Mn)
+        if (cp >= 0x0951 && cp <= 0x0954) { return 0; }  # Vedic tone/accent marks (Mn)
+        return 1;
+    }
+    # Arabic (U+0620..U+0651): letters + harakat (fatha/kasra/damma/tanween) + shadda.
+    if (cp >= 0x0620 && cp <= 0x0651) {
+        if (cp == 0x0640) { return 0; }                  # tatweel / kashida (Lm join, not alphabetic)
+        return 1;
+    }
+    # Arabic extended letters (superscript alef .. ha with small tah) — skips the
+    # sukun (0652), Arabic-Indic digits (0660..0669) and punctuation in between.
+    if (cp >= 0x0671 && cp <= 0x06D3) { return 1; }
     return 0;
 }
 
@@ -410,21 +437,30 @@ fn _shabda_number_to_words(sb, n): i64 {
 # Number-token parsing. `token` is a cstr of digits + optional single '.'.
 # ================================================================
 
-# Parse a cstr of ASCII digits into an i64. Returns the value; sets *ok_out to 1
-# on success (all digits, non-empty, no overflow beyond u64 range we care about).
-# Rust used str::parse::<u64>() with a digits_to_words fallback on failure.
+# Parse a cstr of ASCII digits into an integer. Returns the value; sets *ok_out to
+# 1 on success (all digits, non-empty, no overflow), 0 on failure -> Rust's
+# digits_to_words fallback. Rust used str::parse::<u64>() (accepts up to u64::MAX);
+# Cyrius is i64-only, so we accept up to i64::MAX (9223372036854775807) and treat
+# genuine i64 overflow as the failure/fallback path. See the DIVERGENCE note in the
+# header: values in (i64::MAX, u64::MAX] parse in Rust but overflow here — Rust
+# itself renders those as garbage via its billions-only number_to_words, and no
+# ported test exercises that range. Bound check: v*10+d overflows i64 when
+# v > 922337203685477580, or v == 922337203685477580 && d > 7.
 fn _shabda_parse_u64(s, ok_out): i64 {
     var n = strlen(s);
     if (n == 0) { store64(ok_out, 0); return 0; }
-    # Rust u64::MAX has 20 digits; anything longer overflows -> fallback path.
-    if (n > 19) { store64(ok_out, 0); return 0; }
     var i = 0;
     var v = 0;
     var c = 0;
+    var d = 0;
     while (i < n) {
         c = load8(s + i);
         if (c < 48 || c > 57) { store64(ok_out, 0); return 0; }
-        v = v * 10 + (c - 48);
+        d = c - 48;
+        # i64 overflow guard (i64::MAX = 9223372036854775807).
+        if (v > 922337203685477580) { store64(ok_out, 0); return 0; }
+        if (v == 922337203685477580 && d > 7) { store64(ok_out, 0); return 0; }
+        v = v * 10 + d;
         i = i + 1;
     }
     store64(ok_out, 1);

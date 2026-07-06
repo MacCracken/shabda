@@ -106,5 +106,71 @@ assert_eq(vec_get(flat, 0), SVARA_PH_PLOSIVE_K, "phonemes[0] = K");
 assert_eq(vec_get(flat, 1), SVARA_PH_VOWEL_ASH, "phonemes[1] = Ash");
 assert_eq(vec_get(flat, 2), SVARA_PH_PLOSIVE_T, "phonemes[2] = T");
 
+# ================================================================
+# ADVERSARIAL PARITY: cluster-splitting via Maximal Onset Principle. The Rust
+# #[test]s never exercise a 3-consonant onset, the /s/+plosive exception, or a
+# falling-sonority split. These trace the Rust algorithm by hand and pin the
+# split shape so silent divergence in max_legal_onset/is_legal_onset is caught.
+
+# "extra" = ɛ k s t r ə : intervocalic cluster [k s t r]. MOP + /s/+plosive
+# exception -> onset of syl2 = [s t r] (legal via the /s/ exception), coda of
+# syl1 = [k]. This is the ONLY test that exercises the /s/ exception path.
+fn _mk6(a, b, c, d, e, f): i64 {
+    var v = vec_new();
+    vec_push(v, a); vec_push(v, b); vec_push(v, c);
+    vec_push(v, d); vec_push(v, e); vec_push(v, f);
+    return v;
+}
+test_group("MOP: extra (s-cluster onset)");
+var extra = _mk6(
+    SVARA_PH_VOWEL_OPEN_E, SVARA_PH_PLOSIVE_K, SVARA_PH_FRIC_S,
+    SVARA_PH_PLOSIVE_T, SVARA_PH_APPROX_R, SVARA_PH_VOWEL_A);
+var esyls = shabda_syllabify(extra);
+assert_eq(vec_len(esyls), 2, "extra -> 2 syllables");
+var e0 = vec_get(esyls, 0);
+var e1 = vec_get(esyls, 1);
+assert_eq(vec_len(shabda_syllable_coda(e0)), 1, "extra syl0 coda len 1");
+assert_eq(vec_get(shabda_syllable_coda(e0), 0), SVARA_PH_PLOSIVE_K, "extra syl0 coda = K");
+assert_eq(vec_len(shabda_syllable_onset(e1)), 3, "extra syl1 onset len 3");
+assert_eq(vec_get(shabda_syllable_onset(e1), 0), SVARA_PH_FRIC_S, "extra syl1 onset0 = S");
+assert_eq(vec_get(shabda_syllable_onset(e1), 1), SVARA_PH_PLOSIVE_T, "extra syl1 onset1 = T");
+assert_eq(vec_get(shabda_syllable_onset(e1), 2), SVARA_PH_APPROX_R, "extra syl1 onset2 = R");
+
+# falling/flat sonority split: æ p k ə : [p k] both sonority 1, not rising and
+# not an /s/ cluster -> onset illegal at len 2, falls back to 1. So coda1 = [p],
+# onset2 = [k].
+test_group("MOP: pk (flat sonority split)");
+var pk = _mk4(SVARA_PH_VOWEL_ASH, SVARA_PH_PLOSIVE_P, SVARA_PH_PLOSIVE_K, SVARA_PH_VOWEL_A);
+var pksyls = shabda_syllabify(pk);
+var pk0 = vec_get(pksyls, 0);
+var pk1 = vec_get(pksyls, 1);
+assert_eq(vec_len(shabda_syllable_coda(pk0)), 1, "pk syl0 coda len 1");
+assert_eq(vec_get(shabda_syllable_coda(pk0), 0), SVARA_PH_PLOSIVE_P, "pk syl0 coda = P");
+assert_eq(vec_len(shabda_syllable_onset(pk1)), 1, "pk syl1 onset len 1");
+assert_eq(vec_get(shabda_syllable_onset(pk1), 0), SVARA_PH_PLOSIVE_K, "pk syl1 onset = K");
+
+# rising sonority whole-cluster onset: æ t l ə : [t l] sonority 1,4 rises ->
+# whole cluster is a legal onset, so coda1 empty, onset2 = [t l].
+test_group("MOP: tl (rising cluster to onset)");
+var tl = _mk4(SVARA_PH_VOWEL_ASH, SVARA_PH_PLOSIVE_T, SVARA_PH_LATERAL_L, SVARA_PH_VOWEL_A);
+var tlsyls = shabda_syllabify(tl);
+var tl0 = vec_get(tlsyls, 0);
+var tl1 = vec_get(tlsyls, 1);
+assert_eq(vec_len(shabda_syllable_coda(tl0)), 0, "tl syl0 coda empty");
+assert_eq(vec_len(shabda_syllable_onset(tl1)), 2, "tl syl1 onset len 2");
+assert_eq(vec_get(shabda_syllable_onset(tl1), 0), SVARA_PH_PLOSIVE_T, "tl syl1 onset0 = T");
+assert_eq(vec_get(shabda_syllable_onset(tl1), 1), SVARA_PH_LATERAL_L, "tl syl1 onset1 = L");
+
+# phonemes() round-trip on a multi-consonant syllable: onset [s t r] ++ [i] ++
+# coda [] flattens in order.
+test_group("phonemes flatten multi-onset");
+var mo = shabda_syllable_new(_mk3(SVARA_PH_FRIC_S, SVARA_PH_PLOSIVE_T, SVARA_PH_APPROX_R), SVARA_PH_VOWEL_A, vec_new());
+var moflat = shabda_syllable_phonemes(mo);
+assert_eq(vec_len(moflat), 4, "multi-onset phonemes len 4");
+assert_eq(vec_get(moflat, 0), SVARA_PH_FRIC_S, "moflat[0] = S");
+assert_eq(vec_get(moflat, 1), SVARA_PH_PLOSIVE_T, "moflat[1] = T");
+assert_eq(vec_get(moflat, 2), SVARA_PH_APPROX_R, "moflat[2] = R");
+assert_eq(vec_get(moflat, 3), SVARA_PH_VOWEL_A, "moflat[3] = nucleus A");
+
 var rc = assert_summary();
 syscall(60, rc);

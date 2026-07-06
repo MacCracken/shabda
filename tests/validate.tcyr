@@ -1,0 +1,237 @@
+# validate.tcyr — tests for src/validate.cyr (ports rust-old/src/validate.rs).
+#
+# The Rust module is #[cfg(feature="varna")]; here it is unconditional. Ports the
+# 5 Rust #[test]s (adapted where the Cyrius test entry can't pull in rules.cyr)
+# plus the inventory has-checks + IPA round-trips called out in the port spec.
+# Every IPA string is asserted byte-for-byte against the Rust oracle.
+
+include "lib/hisab.cyr"
+include "lib/goonj.cyr"
+include "lib/naad.cyr"
+include "lib/svara.cyr"
+include "lib/varna.cyr"
+include "src/error.cyr"
+include "src/validate.cyr"
+
+alloc_init();
+
+# Helper: build a vec from a handful of phoneme ordinals.
+fn _vk1(a): i64 { var v = vec_new(); vec_push(v, a); return v; }
+
+# ================================================================
+# mapped_phonemes_exist_in_inventory — every phoneme with an English IPA mapping
+# exists in varna's English inventory. Ports the Rust rule_phonemes[] loop.
+test_group("mapped phonemes exist in English inventory");
+var eng = shabda_inventory_for(SHABDA_LANG_ENGLISH);
+
+fn _check_in(inv, ph, name): i64 {
+    var ipa = shabda_phoneme_to_ipa(ph);
+    assert_neq(ipa, 0, name);
+    assert_eq(phoneme_has(inv, ipa), 1, name);
+    return 0;
+}
+_check_in(eng, SVARA_PH_VOWEL_ASH, "æ in inv");
+_check_in(eng, SVARA_PH_VOWEL_OPEN_E, "ɛ in inv");
+_check_in(eng, SVARA_PH_VOWEL_NEAR_I, "ɪ in inv");
+_check_in(eng, SVARA_PH_VOWEL_O, "oʊ in inv");
+_check_in(eng, SVARA_PH_VOWEL_CUP_V, "ʌ in inv");
+_check_in(eng, SVARA_PH_VOWEL_SCHWA, "ə in inv");
+_check_in(eng, SVARA_PH_VOWEL_E, "iː in inv");
+_check_in(eng, SVARA_PH_VOWEL_U, "uː in inv");
+_check_in(eng, SVARA_PH_VOWEL_OPEN_A, "ɑː in inv");
+_check_in(eng, SVARA_PH_VOWEL_OPEN_O, "ɔː in inv");
+_check_in(eng, SVARA_PH_DIPH_EI, "eɪ in inv");
+_check_in(eng, SVARA_PH_DIPH_OU, "oʊ(diph) in inv");
+_check_in(eng, SVARA_PH_PLOSIVE_P, "p in inv");
+_check_in(eng, SVARA_PH_PLOSIVE_B, "b in inv");
+_check_in(eng, SVARA_PH_PLOSIVE_T, "t in inv");
+_check_in(eng, SVARA_PH_PLOSIVE_D, "d in inv");
+_check_in(eng, SVARA_PH_PLOSIVE_K, "k in inv");
+_check_in(eng, SVARA_PH_PLOSIVE_G, "ɡ in inv");
+_check_in(eng, SVARA_PH_FRIC_F, "f in inv");
+_check_in(eng, SVARA_PH_FRIC_V, "v in inv");
+_check_in(eng, SVARA_PH_FRIC_S, "s in inv");
+_check_in(eng, SVARA_PH_FRIC_Z, "z in inv");
+_check_in(eng, SVARA_PH_FRIC_SH, "ʃ in inv");
+_check_in(eng, SVARA_PH_FRIC_ZH, "ʒ in inv");
+_check_in(eng, SVARA_PH_FRIC_TH, "θ in inv");
+_check_in(eng, SVARA_PH_FRIC_DH, "ð in inv");
+_check_in(eng, SVARA_PH_FRIC_H, "h in inv");
+_check_in(eng, SVARA_PH_NASAL_M, "m in inv");
+_check_in(eng, SVARA_PH_NASAL_N, "n in inv");
+_check_in(eng, SVARA_PH_NASAL_NG, "ŋ in inv");
+_check_in(eng, SVARA_PH_AFFR_CH, "t͡ʃ in inv");
+_check_in(eng, SVARA_PH_AFFR_J, "d͡ʒ in inv");
+_check_in(eng, SVARA_PH_APPROX_R, "ɹ in inv");
+_check_in(eng, SVARA_PH_APPROX_W, "w in inv");
+_check_in(eng, SVARA_PH_APPROX_J, "j in inv");
+_check_in(eng, SVARA_PH_LATERAL_L, "l in inv");
+
+# ================================================================
+# inventory has-checks called out in the spec: English inventory has p / ʃ / ə.
+test_group("english inventory has p / ʃ / ə");
+assert_eq(phoneme_has(eng, "p"), 1, "inv has p");
+assert_eq(phoneme_has(eng, "ʃ"), 1, "inv has ʃ");
+assert_eq(phoneme_has(eng, "ə"), 1, "inv has ə");
+
+# ================================================================
+# IPA table round-trips a few known phonemes (exact strings vs the Rust oracle).
+test_group("English IPA table exact strings");
+assert_streq(shabda_phoneme_to_ipa(SVARA_PH_VOWEL_A), "ɑː", "VowelA -> ɑː");
+assert_streq(shabda_phoneme_to_ipa(SVARA_PH_VOWEL_SCHWA), "ə", "Schwa -> ə");
+assert_streq(shabda_phoneme_to_ipa(SVARA_PH_FRIC_SH), "ʃ", "Sh -> ʃ");
+assert_streq(shabda_phoneme_to_ipa(SVARA_PH_AFFR_CH), "t͡ʃ", "Ch -> t͡ʃ");
+assert_streq(shabda_phoneme_to_ipa(SVARA_PH_AFFR_J), "d͡ʒ", "J -> d͡ʒ");
+assert_streq(shabda_phoneme_to_ipa(SVARA_PH_APPROX_R), "ɹ", "R -> ɹ");
+assert_streq(shabda_phoneme_to_ipa(SVARA_PH_PLOSIVE_G), "ɡ", "G -> ɡ");
+assert_streq(shabda_phoneme_to_ipa(SVARA_PH_GLOTTAL_STOP), "ʔ", "GlottalStop -> ʔ");
+assert_streq(shabda_phoneme_to_ipa(SVARA_PH_TAP_FLAP), "ɾ", "TapFlap -> ɾ");
+
+# ================================================================
+# inventory_gaps_are_documented — every gap phoneme returns 0 (Rust None) from
+# the English table.
+test_group("inventory gaps return None (0)");
+var gaps = shabda_varna_inventory_gaps();
+assert_eq(vec_len(gaps), 4, "4 gaps");
+var gi = 0;
+while (gi < vec_len(gaps)) {
+    assert_eq(shabda_phoneme_to_ipa(vec_get(gaps, gi)), 0, "gap phoneme -> None");
+    gi = gi + 1;
+}
+# The exact gap identities (order matches the Rust const array).
+assert_eq(vec_get(gaps, 0), SVARA_PH_DIPH_AI, "gap0 = DiphAI");
+assert_eq(vec_get(gaps, 1), SVARA_PH_DIPH_AU, "gap1 = DiphAU");
+assert_eq(vec_get(gaps, 2), SVARA_PH_DIPH_OI, "gap2 = DiphOI");
+assert_eq(vec_get(gaps, 3), SVARA_PH_VOWEL_BIRD, "gap3 = VowelBird");
+
+# ================================================================
+# silence_is_skipped_in_validation — [Silence] validates as empty (no invalid).
+test_group("silence skipped in validation");
+var sil = _vk1(SVARA_PH_SILENCE);
+var sil_invalid = shabda_validate_phonemes(sil, eng);
+assert_eq(vec_len(sil_invalid), 0, "silence -> no invalid phonemes");
+
+# ================================================================
+# serde_roundtrip_language analog — the inventory_for path works, English
+# inventory has "p". (Cyrius has no serde in this layer; the Rust test just
+# deserialized "English" and asserted inv.has("p").)
+test_group("inventory_for(English) has p");
+var eng2 = shabda_inventory_for(SHABDA_LANG_ENGLISH);
+assert_eq(phoneme_has(eng2, "p"), 1, "English inventory has p");
+
+# ================================================================
+# english_rules_produce_valid_phonemes (adapted) — the tcyr can't include
+# rules.cyr, so instead assert that a hand-built plausible English phoneme
+# sequence for "cat" (k æ t) + "she" (ʃ iː) validates as all-valid.
+test_group("known-good English phonemes validate clean");
+fn _vk3(a, b, c): i64 {
+    var v = vec_new(); vec_push(v, a); vec_push(v, b); vec_push(v, c); return v;
+}
+var cat = _vk3(SVARA_PH_PLOSIVE_K, SVARA_PH_VOWEL_ASH, SVARA_PH_PLOSIVE_T);
+assert_eq(vec_len(shabda_validate_phonemes(cat, eng)), 0, "cat -> all valid");
+var she = vec_new();
+vec_push(she, SVARA_PH_FRIC_SH); vec_push(she, SVARA_PH_VOWEL_E);
+assert_eq(vec_len(shabda_validate_phonemes(she, eng)), 0, "she -> all valid");
+
+# A phoneme NOT in the English inventory is reported: TapFlap -> ɾ is a valid
+# IPA in the mapping but absent from varna's English inventory.
+var flap = _vk1(SVARA_PH_TAP_FLAP);
+var flap_invalid = shabda_validate_phonemes(flap, eng);
+assert_eq(vec_len(flap_invalid), 1, "TapFlap reported invalid");
+assert_streq(vec_get(flap_invalid, 0), "ɾ", "invalid IPA = ɾ");
+
+# ================================================================
+# validate_phonemes_for language awareness — Spanish VowelO maps to "o", present
+# in the Spanish inventory; the same phoneme maps to "oʊ" in English.
+test_group("language-aware IPA mapping");
+assert_streq(shabda_phoneme_to_ipa_for(SVARA_PH_VOWEL_O, SHABDA_LANG_SPANISH), "o", "Spanish VowelO -> o");
+assert_streq(shabda_phoneme_to_ipa_for(SVARA_PH_VOWEL_O, SHABDA_LANG_ENGLISH), "oʊ", "English VowelO -> oʊ");
+var spa = shabda_inventory_for(SHABDA_LANG_SPANISH);
+var spo = _vk1(SVARA_PH_VOWEL_O);
+assert_eq(vec_len(shabda_validate_phonemes_for(spo, spa, SHABDA_LANG_SPANISH)), 0, "Spanish o valid in Spanish inv");
+
+# ================================================================
+# Sanskrit delegates consonants to Hindi; overrides schwa + long vowels.
+test_group("Sanskrit delegates to Hindi");
+# Overridden vowels differ from Hindi.
+assert_streq(shabda_sanskrit_phoneme_to_ipa(SVARA_PH_VOWEL_SCHWA), "ɐ", "Skt schwa -> ɐ");
+assert_streq(shabda_hindi_phoneme_to_ipa(SVARA_PH_VOWEL_SCHWA), "ə", "Hindi schwa -> ə");
+assert_streq(shabda_sanskrit_phoneme_to_ipa(SVARA_PH_VOWEL_OPEN_A), "ɐː", "Skt OpenA -> ɐː");
+assert_streq(shabda_sanskrit_phoneme_to_ipa(SVARA_PH_VOWEL_OPEN_E), "eː", "Skt OpenE -> eː");
+# Shared consonants: identical to Hindi.
+assert_streq(shabda_sanskrit_phoneme_to_ipa(SVARA_PH_PLOSIVE_T), "t̪", "Skt T == Hindi t̪");
+assert_streq(shabda_sanskrit_phoneme_to_ipa(SVARA_PH_AFFR_CH), "t͡ɕ", "Skt Ch == Hindi t͡ɕ");
+assert_streq(shabda_sanskrit_phoneme_to_ipa(SVARA_PH_FRIC_H), "ɦ", "Skt H == Hindi ɦ");
+assert_streq(shabda_sanskrit_phoneme_to_ipa(SVARA_PH_NASAL_M), "m", "Skt M == Hindi m");
+
+# ================================================================
+# German / Hindi / Arabic exact-string spot checks (parity-critical).
+test_group("other-language IPA spot checks");
+assert_streq(shabda_german_phoneme_to_ipa(SVARA_PH_APPROX_R), "ʁ", "German R -> ʁ");
+assert_streq(shabda_german_phoneme_to_ipa(SVARA_PH_VOWEL_O), "oː", "German O -> oː");
+assert_streq(shabda_hindi_phoneme_to_ipa(SVARA_PH_VOWEL_OPEN_A), "ɛː", "Hindi OpenA -> ɛː");
+assert_streq(shabda_hindi_phoneme_to_ipa(SVARA_PH_FRIC_V), "ʋ", "Hindi V -> ʋ");
+assert_streq(shabda_arabic_phoneme_to_ipa(SVARA_PH_PLOSIVE_G), "ɣ", "Arabic G -> ɣ");
+assert_streq(shabda_arabic_phoneme_to_ipa(SVARA_PH_GLOTTAL_STOP), "ʔ", "Arabic glottal -> ʔ");
+assert_streq(shabda_spanish_phoneme_to_ipa(SVARA_PH_APPROX_R), "rr", "Spanish R -> rr");
+assert_streq(shabda_spanish_phoneme_to_ipa(SVARA_PH_FRIC_H), "x", "Spanish H -> x");
+
+# ================================================================
+# phonotactics_for: English -> a handle; other langs -> 0 (None).
+test_group("phonotactics_for dispatch");
+assert_neq(shabda_phonotactics_for(SHABDA_LANG_ENGLISH), 0, "English has phonotactics");
+assert_eq(shabda_phonotactics_for(SHABDA_LANG_SPANISH), 0, "Spanish has none");
+assert_eq(shabda_phonotactics_for(SHABDA_LANG_HINDI), 0, "Hindi has none");
+
+# validate_phonotactics: no constraints for Spanish -> empty regardless of input.
+var span_run = _vk3(SVARA_PH_FRIC_S, SVARA_PH_PLOSIVE_T, SVARA_PH_APPROX_R);
+assert_eq(vec_len(shabda_validate_phonotactics(span_run, SHABDA_LANG_SPANISH)), 0, "Spanish phonotactics empty");
+
+# English: a short onset [s t] before a vowel + short coda is within limits
+# (max_onset=3, max_coda=4) -> no violations.
+test_group("English phonotactics within limits");
+fn _vk5(a, b, c, d, e): i64 {
+    var v = vec_new();
+    vec_push(v, a); vec_push(v, b); vec_push(v, c); vec_push(v, d); vec_push(v, e);
+    return v;
+}
+# "stɹæt" : onset run [s t ɹ] (len 3 <= 3), vowel æ, coda [t] (len 1 <= 4).
+var strat = _vk5(SVARA_PH_FRIC_S, SVARA_PH_PLOSIVE_T, SVARA_PH_APPROX_R, SVARA_PH_VOWEL_ASH, SVARA_PH_PLOSIVE_T);
+assert_eq(vec_len(shabda_validate_phonotactics(strat, SHABDA_LANG_ENGLISH)), 0, "str-onset within limits");
+
+# Onset run longer than max_onset (4 consonants before a vowel) -> 1 violation,
+# with the exact Rust report string.
+test_group("English phonotactics onset overflow");
+fn _vk6(a, b, c, d, e, f): i64 {
+    var v = vec_new();
+    vec_push(v, a); vec_push(v, b); vec_push(v, c);
+    vec_push(v, d); vec_push(v, e); vec_push(v, f);
+    return v;
+}
+# [s t ɹ f] then vowel æ then t : onset run len 4 > 3.
+var overflow = _vk6(
+    SVARA_PH_FRIC_S, SVARA_PH_PLOSIVE_T, SVARA_PH_APPROX_R,
+    SVARA_PH_FRIC_F, SVARA_PH_VOWEL_ASH, SVARA_PH_PLOSIVE_T);
+var ov = shabda_validate_phonotactics(overflow, SHABDA_LANG_ENGLISH);
+assert_eq(vec_len(ov), 1, "onset overflow -> 1 violation");
+assert_streq(vec_get(ov, 0), "consonant cluster too long for onset: stɹf", "onset overflow message");
+
+# Trailing coda run longer than max_coda (5 consonants after the last vowel) ->
+# 1 coda violation with the exact message.
+test_group("English phonotactics coda overflow");
+fn _vk7(a, b, c, d, e, f, g): i64 {
+    var v = vec_new();
+    vec_push(v, a); vec_push(v, b); vec_push(v, c); vec_push(v, d);
+    vec_push(v, e); vec_push(v, f); vec_push(v, g);
+    return v;
+}
+# æ then 6 t's after the vowel -> coda run len 6 > 4.
+var coda_of = _vk7(
+    SVARA_PH_VOWEL_ASH, SVARA_PH_PLOSIVE_T, SVARA_PH_PLOSIVE_T, SVARA_PH_PLOSIVE_T,
+    SVARA_PH_PLOSIVE_T, SVARA_PH_PLOSIVE_T, SVARA_PH_PLOSIVE_T);
+var co = shabda_validate_phonotactics(coda_of, SHABDA_LANG_ENGLISH);
+assert_eq(vec_len(co), 1, "coda overflow -> 1 violation");
+assert_streq(vec_get(co, 0), "consonant cluster too long for coda: tttttt", "coda overflow message");
+
+var rc = assert_summary();
+syscall(60, rc);

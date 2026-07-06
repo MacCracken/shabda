@@ -1,13 +1,91 @@
-# shabda test suite
-# Stdlib auto-included via cyrius.cyml
+# shabda.tcyr — crate-level integration suite (ports the cross-module parity
+# checks from rust-old/tests/integration.rs + validate.rs that no single module
+# test can host because they span rules + validate + varna + engine together).
+#
+# The headline check is english_rules_produce_valid_phonemes: every phoneme the
+# rule engine emits for a corpus of English words must exist in varna's English
+# inventory — the strongest regression guard on the rules<->inventory contract.
 
-fn main() {
-    alloc_init();
-    test_group("smoke");
-    assert(1, "true is true");
-    assert_eq(1 + 1, 2, "math works");
-    return assert_summary();
+include "lib/hisab.cyr"
+include "lib/goonj.cyr"
+include "lib/naad.cyr"
+include "lib/svara.cyr"
+include "lib/varna.cyr"
+include "lib/shabdakosh.cyr"
+
+include "src/error.cyr"
+include "src/normalize.cyr"
+include "src/syllable.cyr"
+include "src/heteronym.cyr"
+include "src/ssml.cyr"
+include "src/rules.cyr"
+include "src/prosody.cyr"
+include "src/validate.cyr"
+include "src/engine.cyr"
+
+# english_rules(word) -> count of phonemes NOT in varna's English inventory.
+fn _shabda_it_english_invalid(word, inv): i64 {
+    var ph = shabda_english_rules(word);
+    return vec_len(shabda_validate_phonemes(ph, inv));
 }
 
-var exit_code = main();
-syscall(60, exit_code);
+# convert `text` for `lang`, return the produced event count (0 on error).
+fn _shabda_it_convert_len(lang, text): i64 {
+    var g = shabda_g2p_new(lang);
+    var slot = alloc(8);
+    var err = shabda_convert(g, text, slot);
+    if (shabda_is_err(err) != 0) { return 0; }
+    return vec_len(load64(slot));
+}
+
+alloc_init();
+
+# ================================================================
+# english_rules produce only inventory-valid phonemes (validate.rs oracle: the
+# exact 20-word corpus).
+test_group("english rules produce inventory-valid phonemes");
+var inv = shabda_inventory_for(SHABDA_LANG_ENGLISH);
+assert_eq(_shabda_it_english_invalid("cat", inv), 0, "cat");
+assert_eq(_shabda_it_english_invalid("dog", inv), 0, "dog");
+assert_eq(_shabda_it_english_invalid("hello", inv), 0, "hello");
+assert_eq(_shabda_it_english_invalid("world", inv), 0, "world");
+assert_eq(_shabda_it_english_invalid("knight", inv), 0, "knight");
+assert_eq(_shabda_it_english_invalid("write", inv), 0, "write");
+assert_eq(_shabda_it_english_invalid("nation", inv), 0, "nation");
+assert_eq(_shabda_it_english_invalid("she", inv), 0, "she");
+assert_eq(_shabda_it_english_invalid("the", inv), 0, "the");
+assert_eq(_shabda_it_english_invalid("church", inv), 0, "church");
+assert_eq(_shabda_it_english_invalid("think", inv), 0, "think");
+assert_eq(_shabda_it_english_invalid("sing", inv), 0, "sing");
+assert_eq(_shabda_it_english_invalid("make", inv), 0, "make");
+assert_eq(_shabda_it_english_invalid("time", inv), 0, "time");
+assert_eq(_shabda_it_english_invalid("home", inv), 0, "home");
+assert_eq(_shabda_it_english_invalid("bird", inv), 0, "bird");
+assert_eq(_shabda_it_english_invalid("car", inv), 0, "car");
+assert_eq(_shabda_it_english_invalid("unhappy", inv), 0, "unhappy");
+assert_eq(_shabda_it_english_invalid("walked", inv), 0, "walked");
+assert_eq(_shabda_it_english_invalid("wanted", inv), 0, "wanted");
+
+# ================================================================
+# End-to-end convert across all six languages (romanized + native scripts),
+# each producing a non-empty event stream — the full normalize->lookup/rules->
+# syllabify->prosody pipeline exercised per language.
+test_group("multi-language end-to-end convert");
+assert_neq(_shabda_it_convert_len(SHABDA_LANG_ENGLISH, "hello world"), 0, "english");
+assert_neq(_shabda_it_convert_len(SHABDA_LANG_SPANISH, "hola mundo"), 0, "spanish");
+assert_neq(_shabda_it_convert_len(SHABDA_LANG_GERMAN, "hallo welt"), 0, "german");
+assert_neq(_shabda_it_convert_len(SHABDA_LANG_HINDI, "namaste"), 0, "hindi romanized");
+assert_neq(_shabda_it_convert_len(SHABDA_LANG_HINDI, "नमस्ते"), 0, "hindi devanagari");
+assert_neq(_shabda_it_convert_len(SHABDA_LANG_ARABIC, "كتاب"), 0, "arabic native");
+assert_neq(_shabda_it_convert_len(SHABDA_LANG_SANSKRIT, "धर्म"), 0, "sanskrit native");
+
+# ================================================================
+# Punctuation -> phrase-boundary pauses survive the pipeline; empty input errs.
+test_group("crate smoke");
+assert_neq(_shabda_it_convert_len(SHABDA_LANG_ENGLISH, "hello, world."), 0, "punctuated non-empty");
+var g_empty = shabda_g2p_new(SHABDA_LANG_ENGLISH);
+var empty_slot = alloc(8);
+assert_eq(shabda_is_err(shabda_convert(g_empty, "", empty_slot)), 1, "empty input errors");
+
+var rc = assert_summary();
+syscall(60, rc);

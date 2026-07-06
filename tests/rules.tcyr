@@ -132,5 +132,216 @@ assert_eq(vec_len(sp_empty), 0, "spanish empty");
 var nino = shabda_spanish_rules("niño");
 assert_eq(_has(nino, SVARA_PH_NASAL_NG), 1, "niño has NG");
 
+# =============================================================================
+# German
+# =============================================================================
+test_group("german");
+var hallo = shabda_german_rules("hallo");
+assert_eq(vec_get(hallo, 0), SVARA_PH_FRIC_H, "hallo[0] = h");
+assert_neq(vec_len(hallo), 0, "hallo non-empty");
+
+var schule = shabda_german_rules("schule");
+assert_eq(vec_get(schule, 0), SVARA_PH_FRIC_SH, "schule[0] = sh");
+
+var ich = shabda_german_rules("ich");
+assert_eq(_has(ich, SVARA_PH_FRIC_SH), 1, "ich has sh (ich-Laut)");
+
+var ein = shabda_german_rules("ein");
+assert_eq(_has(ein, SVARA_PH_DIPH_AI), 1, "ein has AI");
+
+var die = shabda_german_rules("die");
+assert_eq(_has(die, SVARA_PH_VOWEL_E), 1, "die has E (long i)");
+
+var hund = shabda_german_rules("hund");
+assert_eq(_last(hund), SVARA_PH_PLOSIVE_T, "hund ends t (devoiced d)");
+
+var uber = shabda_german_rules("über");
+assert_eq(vec_get(uber, 0), SVARA_PH_VOWEL_E, "über[0] = E (ü)");
+
+var zeit = shabda_german_rules("zeit");
+assert_eq(vec_get(zeit, 0), SVARA_PH_PLOSIVE_T, "zeit[0] = t (ts)");
+assert_eq(vec_get(zeit, 1), SVARA_PH_FRIC_S, "zeit[1] = s (ts)");
+
+var de_empty = shabda_german_rules("");
+assert_eq(vec_len(de_empty), 0, "german empty");
+
+# =============================================================================
+# Hindi (Devanagari)
+# =============================================================================
+test_group("hindi");
+var namaste = shabda_hindi_rules("नमस्ते");
+assert_neq(vec_len(namaste), 0, "namaste non-empty");
+assert_eq(_has(namaste, SVARA_PH_NASAL_N), 1, "namaste has n");
+assert_eq(_has(namaste, SVARA_PH_NASAL_M), 1, "namaste has m");
+
+var ka = shabda_hindi_rules("क");
+assert_eq(vec_get(ka, 0), SVARA_PH_PLOSIVE_K, "ka[0] = k");
+
+var aa = shabda_hindi_rules("आ");
+assert_eq(vec_get(aa, 0), SVARA_PH_VOWEL_OPEN_A, "aa[0] = OpenA");
+
+var hi_rom = shabda_hindi_rules("namaste");
+assert_neq(vec_len(hi_rom), 0, "romanized non-empty");
+assert_eq(_has(hi_rom, SVARA_PH_NASAL_N), 1, "romanized has n");
+
+var hi_empty = shabda_hindi_rules("");
+assert_eq(vec_len(hi_empty), 0, "hindi empty");
+
+# =============================================================================
+# Sanskrit (Devanagari)
+# =============================================================================
+test_group("sanskrit");
+var om = shabda_sanskrit_rules("ओम्");
+assert_neq(vec_len(om), 0, "om non-empty");
+assert_eq(vec_get(om, 0), SVARA_PH_VOWEL_O, "om[0] = O");
+
+var dharma = shabda_sanskrit_rules("धर्म");
+assert_neq(vec_len(dharma), 0, "dharma non-empty");
+assert_eq(_has(dharma, SVARA_PH_TAP_FLAP), 1, "dharma has TapFlap (r)");
+assert_eq(_has(dharma, SVARA_PH_NASAL_M), 1, "dharma has m");
+
+# Sanskrit preserves final schwa (unlike Hindi): कर -> k,ə,r,ə (4 phonemes).
+var kara = shabda_sanskrit_rules("कर");
+assert_eq(vec_len(kara), 4, "kara len 4 (schwa preserved)");
+assert_eq(vec_get(kara, 3), SVARA_PH_VOWEL_SCHWA, "kara[3] = schwa");
+
+var sa_rom = shabda_sanskrit_rules("dharma");
+assert_neq(vec_len(sa_rom), 0, "sanskrit romanized non-empty");
+
+var sa_empty = shabda_sanskrit_rules("");
+assert_eq(vec_len(sa_empty), 0, "sanskrit empty");
+
+# =============================================================================
+# Arabic
+# =============================================================================
+test_group("arabic");
+var bism = shabda_arabic_rules("بسم");
+assert_neq(vec_len(bism), 0, "bism non-empty");
+assert_eq(vec_get(bism, 0), SVARA_PH_PLOSIVE_B, "bism[0] = b");
+
+var kitab = shabda_arabic_rules("كتاب");
+assert_eq(vec_get(kitab, 0), SVARA_PH_PLOSIVE_K, "kitab[0] = k");
+assert_eq(_has(kitab, SVARA_PH_VOWEL_OPEN_A), 1, "kitab has OpenA (alef)");
+
+var shams = shabda_arabic_rules("شمس");
+assert_eq(vec_get(shams, 0), SVARA_PH_FRIC_SH, "shams[0] = sh");
+
+var ar_rom = shabda_arabic_rules("salam");
+assert_neq(vec_len(ar_rom), 0, "arabic romanized non-empty");
+assert_eq(vec_get(ar_rom, 0), SVARA_PH_FRIC_S, "salam[0] = s");
+
+var ar_empty = shabda_arabic_rules("");
+assert_eq(vec_len(ar_empty), 0, "arabic empty");
+
+# =============================================================================
+# Adversarial parity tests (full sequences / discriminating edge cases the
+# baseline tests do not lock down). Verified by hand against rust-old/src/rules.rs.
+# =============================================================================
+test_group("adversarial: english full sequences");
+# nation -> N, VowelAsh, Sh, Schwa, N  (tion 4-letter pattern)
+var nation2 = shabda_english_rules("nation");
+assert_eq(vec_len(nation2), 5, "nation len 5");
+assert_eq(vec_get(nation2, 0), SVARA_PH_NASAL_N, "nation[0]=N");
+assert_eq(vec_get(nation2, 1), SVARA_PH_VOWEL_ASH, "nation[1]=Ash");
+assert_eq(vec_get(nation2, 2), SVARA_PH_FRIC_SH, "nation[2]=Sh");
+assert_eq(vec_get(nation2, 3), SVARA_PH_VOWEL_SCHWA, "nation[3]=Schwa");
+assert_eq(vec_get(nation2, 4), SVARA_PH_NASAL_N, "nation[4]=N");
+
+# walked -> W, Ash, L, K, T  (-ed after voiceless /k/ = /t/)
+var walked2 = shabda_english_rules("walked");
+assert_eq(vec_len(walked2), 5, "walked len 5");
+assert_eq(vec_get(walked2, 0), SVARA_PH_APPROX_W, "walked[0]=W");
+assert_eq(vec_get(walked2, 3), SVARA_PH_PLOSIVE_K, "walked[3]=K");
+assert_eq(vec_get(walked2, 4), SVARA_PH_PLOSIVE_T, "walked[4]=T");
+
+# magic-e where consonant is not in the single_consonant table: axe -> [EI]
+# (magic_e_vowel('a')=DiphthongEI, single_consonant('x') = empty)
+var axe = shabda_english_rules("axe");
+assert_eq(vec_len(axe), 1, "axe len 1");
+assert_eq(vec_get(axe, 0), SVARA_PH_DIPH_EI, "axe[0]=EI");
+
+# -ed NOT stripped from short 3-letter word "bed" (len<4): b,VowelOpenE,d
+var bed = shabda_english_rules("bed");
+assert_eq(vec_len(bed), 3, "bed len 3 (ed not stripped)");
+assert_eq(vec_get(bed, 0), SVARA_PH_PLOSIVE_B, "bed[0]=B");
+assert_eq(vec_get(bed, 2), SVARA_PH_PLOSIVE_D, "bed[2]=D (no id suffix)");
+
+# ough 4-letter pattern: through -> Th,R,DiphOU
+var through = shabda_english_rules("through");
+assert_eq(_has(through, SVARA_PH_DIPH_OU), 1, "through has OU (ough)");
+assert_eq(vec_get(through, 0), SVARA_PH_FRIC_TH, "through[0]=Th (thr)");
+
+test_group("adversarial: german double consonant + z");
+# essen: e,ss,e,n -> OpenE, S(single), OpenE, N  (ss collapses to one /s/)
+var essen = shabda_german_rules("essen");
+assert_eq(vec_len(essen), 4, "essen len 4 (ss->one s)");
+assert_eq(vec_get(essen, 1), SVARA_PH_FRIC_S, "essen[1]=S");
+# zz falls through z no-op arm to single 'z' twice -> t,s,t,s
+var zz = shabda_german_rules("zz");
+assert_eq(vec_len(zz), 4, "zz len 4 (t,s,t,s)");
+assert_eq(vec_get(zz, 0), SVARA_PH_PLOSIVE_T, "zz[0]=T");
+assert_eq(vec_get(zz, 1), SVARA_PH_FRIC_S, "zz[1]=S");
+assert_eq(vec_get(zz, 2), SVARA_PH_PLOSIVE_T, "zz[2]=T");
+assert_eq(vec_get(zz, 3), SVARA_PH_FRIC_S, "zz[3]=S");
+
+test_group("adversarial: hindi vs sanskrit divergence");
+# Hindi ऐ -> single OpenA; Sanskrit ऐ -> OpenA + NearI (two phonemes)
+var hi_ai = shabda_hindi_rules("ऐ");
+assert_eq(vec_len(hi_ai), 1, "hindi ai len 1");
+assert_eq(vec_get(hi_ai, 0), SVARA_PH_VOWEL_OPEN_A, "hindi ai = OpenA");
+var sa_ai = shabda_sanskrit_rules("ऐ");
+assert_eq(vec_len(sa_ai), 2, "sanskrit ai len 2");
+assert_eq(vec_get(sa_ai, 0), SVARA_PH_VOWEL_OPEN_A, "sanskrit ai[0]=OpenA");
+assert_eq(vec_get(sa_ai, 1), SVARA_PH_VOWEL_NEAR_I, "sanskrit ai[1]=NearI");
+# Hindi कर -> schwa deletion: K, schwa, R (len 3); Sanskrit len 4 (already tested)
+var hi_kara = shabda_hindi_rules("कर");
+assert_eq(vec_len(hi_kara), 3, "hindi kara len 3 (final schwa deleted)");
+assert_eq(vec_get(hi_kara, 0), SVARA_PH_PLOSIVE_K, "hindi kara[0]=K");
+assert_eq(vec_get(hi_kara, 1), SVARA_PH_VOWEL_SCHWA, "hindi kara[1]=schwa");
+assert_eq(vec_get(hi_kara, 2), SVARA_PH_TAP_FLAP, "hindi kara[2]=R");
+# Hindi anusvara -> N, Sanskrit anusvara -> M (ं standalone)
+var hi_anu = shabda_hindi_rules("कं");
+assert_eq(_has(hi_anu, SVARA_PH_NASAL_N), 1, "hindi anusvara -> N");
+var sa_anu = shabda_sanskrit_rules("कं");
+assert_eq(_has(sa_anu, SVARA_PH_NASAL_M), 1, "sanskrit anusvara -> M");
+
+test_group("adversarial: arabic diacritics");
+# shadda duplicates previous phoneme: بّ -> B, B
+var ar_shad = shabda_arabic_rules("بّ");
+assert_eq(vec_len(ar_shad), 2, "shadda len 2");
+assert_eq(vec_get(ar_shad, 0), SVARA_PH_PLOSIVE_B, "shadda[0]=B");
+assert_eq(vec_get(ar_shad, 1), SVARA_PH_PLOSIVE_B, "shadda[1]=B (duplicated)");
+# tanween fathatan -> OpenA + N
+var ar_tan = shabda_arabic_rules("بً");
+assert_eq(vec_len(ar_tan), 3, "tanween len 3");
+assert_eq(vec_get(ar_tan, 1), SVARA_PH_VOWEL_OPEN_A, "tanween[1]=OpenA");
+assert_eq(vec_get(ar_tan, 2), SVARA_PH_NASAL_N, "tanween[2]=N");
+# madda آ -> GlottalStop + OpenA
+var ar_madda = shabda_arabic_rules("آ");
+assert_eq(vec_len(ar_madda), 2, "madda len 2");
+assert_eq(vec_get(ar_madda, 0), SVARA_PH_GLOTTAL_STOP, "madda[0]=glottal");
+assert_eq(vec_get(ar_madda, 1), SVARA_PH_VOWEL_OPEN_A, "madda[1]=OpenA");
+# ain ع -> glottal stop
+var ar_ain = shabda_arabic_rules("ع");
+assert_eq(vec_get(ar_ain, 0), SVARA_PH_GLOTTAL_STOP, "ain -> glottal");
+
+test_group("adversarial: spanish edge cases");
+# x -> ks
+var sp_x = shabda_spanish_rules("axa");
+assert_eq(_has(sp_x, SVARA_PH_PLOSIVE_K), 1, "spanish x has K");
+assert_eq(_has(sp_x, SVARA_PH_FRIC_S), 1, "spanish x has S");
+# z -> Castilian /θ/ (FricTh)
+var sp_z = shabda_spanish_rules("zapato");
+assert_eq(vec_get(sp_z, 0), SVARA_PH_FRIC_TH, "spanish z[0]=Th");
+# c before e -> /θ/
+var sp_ce = shabda_spanish_rules("cena");
+assert_eq(vec_get(sp_ce, 0), SVARA_PH_FRIC_TH, "spanish ce[0]=Th");
+# j -> /x/ (FricH)
+var sp_j = shabda_spanish_rules("jamon");
+assert_eq(vec_get(sp_j, 0), SVARA_PH_FRIC_H, "spanish j[0]=H");
+# g before e -> FricH
+var sp_ge = shabda_spanish_rules("gente");
+assert_eq(vec_get(sp_ge, 0), SVARA_PH_FRIC_H, "spanish ge[0]=H");
+
 var rc = assert_summary();
 syscall(60, rc);

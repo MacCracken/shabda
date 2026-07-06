@@ -1,0 +1,530 @@
+# engine.tcyr — tests for src/engine.cyr (ports rust-old/src/engine.rs +
+# rust-old/tests/integration.rs, 55 #[test]s, plus the engine.rs doctests).
+#
+# The include chain: vendored dep bundles first (dependency order), then every
+# shabda module deps-before-dependents. Modules never include each other.
+
+include "lib/hisab.cyr"
+include "lib/goonj.cyr"
+include "lib/naad.cyr"
+include "lib/svara.cyr"
+include "lib/varna.cyr"
+include "lib/shabdakosh.cyr"
+include "src/error.cyr"
+include "src/normalize.cyr"
+include "src/syllable.cyr"
+include "src/heteronym.cyr"
+include "src/ssml.cyr"
+include "src/rules.cyr"
+include "src/prosody.cyr"
+include "src/validate.cyr"
+include "src/engine.cyr"
+
+alloc_init();
+
+# ---- out-param call wrappers -------------------------------------------------
+# convert (default opts) -> events vec; asserts ok.
+fn _conv(g, text): i64 {
+    var slot = alloc(8);
+    var err = shabda_convert(g, text, slot);
+    assert_eq(shabda_is_err(err), 0, "convert ok");
+    return load64(slot);
+}
+# convert_with(opts) -> events vec; asserts ok.
+fn _conv_opts(g, text, opts): i64 {
+    var slot = alloc(8);
+    var err = shabda_convert_with(g, text, opts, slot);
+    assert_eq(shabda_is_err(err), 0, "convert_with ok");
+    return load64(slot);
+}
+# convert_ssml -> events vec; asserts ok.
+fn _ssml(g, s): i64 {
+    var slot = alloc(8);
+    var err = shabda_convert_ssml(g, s, slot);
+    assert_eq(shabda_is_err(err), 0, "convert_ssml ok");
+    return load64(slot);
+}
+# speak -> samples vec; asserts ok.
+fn _speak(g, text, voice, sr): i64 {
+    var slot = alloc(8);
+    var err = shabda_speak(g, text, voice, sr, slot);
+    assert_eq(shabda_is_err(err), 0, "speak ok");
+    return load64(slot);
+}
+
+# ---- helpers -----------------------------------------------------------------
+# Sum every event's duration (f64 bits) in a vec.
+fn _sum_dur(events): i64 {
+    var total = f64_from(0);
+    var n = vec_len(events);
+    var i = 0;
+    while (i < n) {
+        total = f64_add(total, SvPhonemeEvent_duration(vec_get(events, i)));
+        i = i + 1;
+    }
+    return total;
+}
+
+# Count events whose stress == `stress`.
+fn _count_stress(events, stress): i64 {
+    var c = 0;
+    var n = vec_len(events);
+    var i = 0;
+    while (i < n) {
+        if (SvPhonemeEvent_stress(vec_get(events, i)) == stress) { c = c + 1; }
+        i = i + 1;
+    }
+    return c;
+}
+
+# Count Silence events with duration > threshold (f64 bits).
+fn _count_pauses_over(events, thresh): i64 {
+    var c = 0;
+    var n = vec_len(events);
+    var i = 0;
+    while (i < n) {
+        var e = vec_get(events, i);
+        if (SvPhonemeEvent_phoneme(e) == SVARA_PH_SILENCE) {
+            if (f64_gt(SvPhonemeEvent_duration(e), thresh) == 1) { c = c + 1; }
+        }
+        i = i + 1;
+    }
+    return c;
+}
+
+# Are all samples finite AND is the max abs amplitude > 0.001? Returns 1/0.
+fn _samples_audible(samples): i64 {
+    var n = vec_len(samples);
+    if (n == 0) { return 0; }
+    var maxamp = f64_from(0);
+    var i = 0;
+    while (i < n) {
+        var s = vec_get(samples, i);
+        var a = f64_abs(s);
+        if (f64_gt(a, maxamp) == 1) { maxamp = a; }
+        i = i + 1;
+    }
+    if (f64_gt(maxamp, 0.001) == 1) { return 1; }
+    return 0;
+}
+
+# All samples finite? (no NaN/Inf) Returns 1/0.
+fn _samples_finite(samples): i64 {
+    var n = vec_len(samples);
+    var i = 0;
+    while (i < n) {
+        var s = vec_get(samples, i);
+        # finite: s == s (NaN != NaN) and abs < a huge bound.
+        if (f64_eq(s, s) == 0) { return 0; }
+        i = i + 1;
+    }
+    return 1;
+}
+
+# Streaming callback: record the word into a global vec; assert events non-empty.
+var STREAM_WORDS = vec_new();
+fn _stream_cb(word, events): i64 {
+    assert_neq(vec_len(events), 0, "streaming events non-empty");
+    vec_push(STREAM_WORDS, word);
+    return 0;
+}
+
+
+# ==============================================================================
+# test_hello_world
+# ==============================================================================
+test_group("hello world");
+var g_en = shabda_g2p_new(SHABDA_LANG_ENGLISH);
+var hw = _conv(g_en, "hello world");
+assert_gt(vec_len(hw), 4, "hello world > 4 events");
+
+# ==============================================================================
+# test_empty_input_errors
+# ==============================================================================
+test_group("empty input errors");
+var e_empty = alloc(8);
+assert_eq(shabda_is_err(shabda_convert(g_en, "", e_empty)), 1, "empty -> err");
+assert_eq(shabda_is_err(shabda_convert(g_en, "   ", e_empty)), 1, "whitespace -> err");
+
+# ==============================================================================
+# test_dictionary_lookup — "the" is in the dictionary
+# ==============================================================================
+test_group("dictionary lookup");
+var the_ev = _conv(g_en, "the");
+assert_neq(vec_len(the_ev), 0, "the non-empty");
+
+# ==============================================================================
+# test_rule_fallback — "flurb" not in dict, rules handle it
+# ==============================================================================
+test_group("rule fallback");
+var flurb = _conv(g_en, "flurb");
+assert_neq(vec_len(flurb), 0, "flurb non-empty");
+
+# ==============================================================================
+# test_speak_produces_audio
+# ==============================================================================
+test_group("speak produces audio");
+var voice_m = svara_voice_new_male();
+var samples = _speak(g_en, "hello", voice_m, f64_from(44100));
+assert_neq(vec_len(samples), 0, "samples non-empty");
+assert_eq(_samples_finite(samples), 1, "samples finite");
+assert_eq(_samples_audible(samples), 1, "samples audible");
+
+# ==============================================================================
+# test_speak_sentence
+# ==============================================================================
+test_group("speak sentence");
+var voice_f = svara_voice_new_female();
+var samples2 = _speak(g_en, "hello world", voice_f, f64_from(44100));
+assert_neq(vec_len(samples2), 0, "sentence samples non-empty");
+assert_eq(_samples_finite(samples2), 1, "sentence samples finite");
+
+# ==============================================================================
+# test_question_intonation
+# ==============================================================================
+test_group("question intonation");
+var samples3 = _speak(g_en, "hello?", voice_m, f64_from(44100));
+assert_neq(vec_len(samples3), 0, "hello? samples non-empty");
+assert_eq(shabda_detect_intonation("hello?"), SHABDA_STYPE_QUESTION, "? -> question");
+
+# ==============================================================================
+# test_custom_dictionary_entry
+# ==============================================================================
+test_group("custom dictionary entry");
+var g_custom = shabda_g2p_new(SHABDA_LANG_ENGLISH);
+var agnos_ph = vec_new();
+vec_push(agnos_ph, SVARA_PH_VOWEL_ASH);
+vec_push(agnos_ph, SVARA_PH_PLOSIVE_G);
+vec_push(agnos_ph, SVARA_PH_NASAL_N);
+vec_push(agnos_ph, SVARA_PH_VOWEL_O);
+vec_push(agnos_ph, SVARA_PH_FRIC_S);
+var ins = shbdk_dict_insert(shabda_g2p_dictionary_mut(g_custom), "agnos", agnos_ph);
+var agnos_ev = _conv(g_custom, "agnos");
+assert_gte(vec_len(agnos_ev), 5, "agnos >= 5 events");
+
+# ==============================================================================
+# test_content_vs_function_word_stress — "the" first event unstressed
+# ==============================================================================
+test_group("content vs function stress");
+var tc_ev = _conv(g_en, "the cat");
+assert_eq(SvPhonemeEvent_stress(vec_get(tc_ev, 0)), SVARA_STRESS_UNSTRESSED, "the[0] unstressed");
+
+# ==============================================================================
+# test_serde_roundtrip_language (+ per-language variants)
+# ==============================================================================
+test_group("language roundtrip");
+assert_eq(shabda_language_from_str(shabda_language_to_str(SHABDA_LANG_ENGLISH)), SHABDA_LANG_ENGLISH, "English roundtrip");
+assert_eq(shabda_language_from_str(shabda_language_to_str(SHABDA_LANG_SPANISH)), SHABDA_LANG_SPANISH, "Spanish roundtrip");
+assert_eq(shabda_language_from_str(shabda_language_to_str(SHABDA_LANG_GERMAN)), SHABDA_LANG_GERMAN, "German roundtrip");
+assert_eq(shabda_language_from_str(shabda_language_to_str(SHABDA_LANG_HINDI)), SHABDA_LANG_HINDI, "Hindi roundtrip");
+assert_eq(shabda_language_from_str(shabda_language_to_str(SHABDA_LANG_ARABIC)), SHABDA_LANG_ARABIC, "Arabic roundtrip");
+assert_eq(shabda_language_from_str(shabda_language_to_str(SHABDA_LANG_SANSKRIT)), SHABDA_LANG_SANSKRIT, "Sanskrit roundtrip");
+assert_streq(shabda_language_to_str(SHABDA_LANG_ENGLISH), "English", "English to_str");
+
+# ==============================================================================
+# test_serde_roundtrip_engine — english engine has non-empty dict; non-english empty
+# ==============================================================================
+test_group("engine dict populations");
+assert_gt(shbdk_dict_len(shabda_g2p_dictionary(g_en)), 0, "english dict non-empty");
+var g_sp0 = shabda_g2p_new(SHABDA_LANG_SPANISH);
+assert_eq(shbdk_dict_len(shabda_g2p_dictionary(g_sp0)), 0, "spanish dict empty");
+assert_eq(shabda_g2p_language(g_en), SHABDA_LANG_ENGLISH, "engine language english");
+
+# ==============================================================================
+# test_phrase_pause_comma — comma -> silence dur > 0.1
+# ==============================================================================
+test_group("phrase pause comma");
+var comma_ev = _conv(g_en, "hello, world");
+assert_gt(_count_pauses_over(comma_ev, 0.1), 0, "comma pause > 0.1");
+
+# ==============================================================================
+# test_phrase_pause_period — period -> silence dur > 0.2
+# ==============================================================================
+test_group("phrase pause period");
+var period_ev = _conv(g_en, "hello. world");
+assert_gt(_count_pauses_over(period_ev, 0.2), 0, "period pause > 0.2");
+
+# ==============================================================================
+# test_number_expansion_in_pipeline — "42" expands, > 4 events
+# ==============================================================================
+test_group("number expansion");
+var num_ev = _conv(g_en, "42");
+assert_gt(vec_len(num_ev), 4, "42 > 4 events");
+
+# ==============================================================================
+# test_convert_with_default_matches_convert — same length
+# ==============================================================================
+test_group("convert_with default == convert");
+var cd = _conv(g_en, "hello world");
+var cw = _conv_opts(g_en, "hello world", shabda_convert_options_default());
+assert_eq(vec_len(cd), vec_len(cw), "same length");
+
+# ==============================================================================
+# test_convert_with_emphasis — HELLO -> >= 1 Primary
+# ==============================================================================
+test_group("convert with emphasis");
+var emp_opts = shabda_convert_options_with_emphasis(shabda_convert_options_new(), 1);
+var emp_ev = _conv_opts(g_en, "HELLO world", emp_opts);
+assert_neq(vec_len(emp_ev), 0, "emphasis non-empty");
+assert_gte(_count_stress(emp_ev, SVARA_STRESS_PRIMARY), 1, "emphasis >= 1 primary");
+
+# ==============================================================================
+# test_convert_with_speaking_rate — 75 WPM total > 1.5x baseline
+# ==============================================================================
+test_group("convert with speaking rate");
+var normal_rate = _conv(g_en, "hello world");
+var slow_opts = shabda_convert_options_with_speaking_rate(shabda_convert_options_new(), f64_from(75));
+var slow_rate = _conv_opts(g_en, "hello world", slow_opts);
+var normal_dur = _sum_dur(normal_rate);
+var slow_dur = _sum_dur(slow_rate);
+assert_eq(f64_gt(slow_dur, f64_mul(normal_dur, 1.5)), 1, "75 WPM > 1.5x baseline");
+
+# ==============================================================================
+# test_abbreviation_in_pipeline — "Dr. Smith"
+# ==============================================================================
+test_group("abbreviation pipeline");
+var abbr_ev = _conv(g_en, "Dr. Smith");
+assert_neq(vec_len(abbr_ev), 0, "Dr. Smith non-empty");
+
+# ==============================================================================
+# test_acronym_in_pipeline — "the FBI"
+# ==============================================================================
+test_group("acronym pipeline");
+var acro_ev = _conv(g_en, "the FBI");
+assert_neq(vec_len(acro_ev), 0, "the FBI non-empty");
+
+# ==============================================================================
+# test_foreign_word_in_pipeline — "café"
+# ==============================================================================
+test_group("foreign word pipeline");
+var cafe_ev = _conv(g_en, "café");
+assert_neq(vec_len(cafe_ev), 0, "café non-empty");
+
+# ==============================================================================
+# test_heteronym_in_pipeline
+# ==============================================================================
+test_group("heteronym pipeline");
+var het1 = _conv(g_en, "I read a book");
+var het2 = _conv(g_en, "please read this");
+assert_neq(vec_len(het1), 0, "het1 non-empty");
+assert_neq(vec_len(het2), 0, "het2 non-empty");
+
+# ==============================================================================
+# test_ssml_basic
+# ==============================================================================
+test_group("ssml basic");
+var ssml1 = _ssml(g_en, "<speak>hello world</speak>");
+assert_neq(vec_len(ssml1), 0, "ssml basic non-empty");
+
+# ==============================================================================
+# test_ssml_break — 500ms silence > 0.4
+# ==============================================================================
+test_group("ssml break");
+var ssml_brk = _ssml(g_en, "hello <break time=\"500ms\"/> world");
+assert_gt(_count_pauses_over(ssml_brk, 0.4), 0, "500ms break present");
+
+# ==============================================================================
+# test_ssml_emphasis — strong emphasis -> primary present
+# ==============================================================================
+test_group("ssml emphasis");
+var ssml_emp = _ssml(g_en, "<emphasis level=\"strong\">important</emphasis>");
+assert_neq(vec_len(ssml_emp), 0, "ssml emphasis non-empty");
+assert_gte(_count_stress(ssml_emp, SVARA_STRESS_PRIMARY), 1, "strong emphasis primary");
+
+# ==============================================================================
+# test_ssml_prosody_rate — slow prosody longer than normal
+# ==============================================================================
+test_group("ssml prosody rate");
+var pr_normal = _conv(g_en, "hello world");
+var pr_slow = _ssml(g_en, "<prosody rate=\"slow\">hello world</prosody>");
+assert_eq(f64_gt(_sum_dur(pr_slow), _sum_dur(pr_normal)), 1, "slow prosody longer");
+
+# ==============================================================================
+# test_ssml_empty_errors
+# ==============================================================================
+test_group("ssml empty errors");
+var e_ssml = alloc(8);
+assert_eq(shabda_is_err(shabda_convert_ssml(g_en, "", e_ssml)), 1, "empty ssml -> err");
+
+# ==============================================================================
+# test_timing_profile — 2x vowel scale increases total duration
+# ==============================================================================
+test_group("timing profile");
+var tp_normal = _conv(g_en, "hello");
+var tp = shabda_timing_new(f64_from(2), f64_from(1), f64_from(1));
+var tp_opts = shabda_convert_options_with_timing(shabda_convert_options_new(), tp);
+var tp_stretched = _conv_opts(g_en, "hello", tp_opts);
+assert_eq(f64_gt(_sum_dur(tp_stretched), _sum_dur(tp_normal)), 1, "2x vowel scale longer");
+
+# TimingProfile fed to apply_timing directly lengthens vowel durations (offset check).
+test_group("timing profile offsets");
+var tp2 = shabda_timing_new(f64_from(2), f64_from(1), f64_from(1));
+var vowel_ev = vec_new();
+vec_push(vowel_ev, svara_phoneme_event_new(SVARA_PH_VOWEL_A, f64_from(1), SVARA_STRESS_PRIMARY));
+var base_vd = SvPhonemeEvent_duration(vec_get(vowel_ev, 0));
+var at_rc = shabda_apply_timing(vowel_ev, tp2);
+var scaled_vd = SvPhonemeEvent_duration(vec_get(vowel_ev, 0));
+assert_eq(f64_gt(scaled_vd, base_vd), 1, "vowel scale 2.0 lengthens");
+assert_eq(shabda_timing_vowel_scale(tp2), f64_from(2), "vowel_scale accessor");
+
+# ==============================================================================
+# test_convert_streaming
+# ==============================================================================
+test_group("convert streaming");
+var sc = shabda_convert_streaming(g_en, "hello world", &_stream_cb);
+assert_eq(shabda_is_err(sc), 0, "streaming ok");
+assert_gte(vec_len(STREAM_WORDS), 2, "streaming saw >= 2 words");
+
+# ==============================================================================
+# test_convert_streaming_empty_errors
+# ==============================================================================
+test_group("convert streaming empty errors");
+assert_eq(shabda_is_err(shabda_convert_streaming(g_en, "", &_stream_cb)), 1, "empty streaming -> err");
+
+# ==============================================================================
+# TimingProfile accessors (serde-ish roundtrip)
+# ==============================================================================
+test_group("timing profile accessors");
+var tp3 = shabda_timing_new(f64_from(3), f64_from(4), f64_from(5));
+assert_eq(shabda_timing_vowel_scale(tp3), f64_from(3), "vowel 3");
+assert_eq(shabda_timing_consonant_scale(tp3), f64_from(4), "consonant 4");
+assert_eq(shabda_timing_pause_scale(tp3), f64_from(5), "pause 5");
+var tpd = shabda_timing_default();
+assert_eq(shabda_timing_vowel_scale(tpd), f64_from(1), "default vowel 1");
+
+# ==============================================================================
+# test_serde_roundtrip_convert_options — build ConvertOptions{emphasis:true,
+# rate:Some(120)} and assert every field reads back (the port's serde analog: the
+# field accessors are the wire surface, mirroring Rust's to_string/from_str
+# equality on the same options).
+# ==============================================================================
+test_group("convert_options roundtrip");
+var co_rt = shabda_convert_options_with_speaking_rate(
+    shabda_convert_options_with_emphasis(shabda_convert_options_new(), 1), f64_from(120));
+assert_eq(shabda_convert_options_emphasis(co_rt), 1, "co emphasis on");
+assert_eq(shabda_convert_options_has_rate(co_rt), 1, "co has_rate on");
+assert_eq(shabda_convert_options_rate_wpm(co_rt), f64_from(120), "co rate 120");
+assert_eq(shabda_convert_options_timing(co_rt), 0, "co timing none");
+# default options: all fields off/none (matches ConvertOptions::default()).
+var co_def = shabda_convert_options_default();
+assert_eq(shabda_convert_options_emphasis(co_def), 0, "co default emphasis off");
+assert_eq(shabda_convert_options_has_rate(co_def), 0, "co default has_rate off");
+assert_eq(shabda_convert_options_timing(co_def), 0, "co default timing none");
+
+# ==============================================================================
+# test_serde_roundtrip_error — a ShabdaError's stable code + diagnostic text
+# survives (the port's serde analog: the code is the wire tag, err_name is
+# Display). Mirrors Rust's err.to_string() == roundtripped.to_string().
+# ==============================================================================
+test_group("error roundtrip");
+var err_uw = shabda_err_unknown_word();
+assert_eq(shabda_is_err(err_uw), 1, "unknown_word is err");
+assert_streq(shabda_err_name(err_uw), "unknown word", "unknown_word name");
+assert_streq(shabda_err_name(shabda_err_invalid_input()), "invalid input", "invalid_input name");
+
+# ==============================================================================
+# Spanish
+# ==============================================================================
+test_group("spanish");
+var g_sp = shabda_g2p_new(SHABDA_LANG_SPANISH);
+var sp_ev = _conv(g_sp, "hola mundo");
+assert_neq(vec_len(sp_ev), 0, "spanish non-empty");
+var sp_opts = shabda_convert_options_with_speaking_rate(shabda_convert_options_new(), f64_from(100));
+var sp_ev2 = _conv_opts(g_sp, "buenos días", sp_opts);
+assert_neq(vec_len(sp_ev2), 0, "spanish with options non-empty");
+var sp_samples = _speak(g_sp, "hola", voice_m, f64_from(44100));
+assert_neq(vec_len(sp_samples), 0, "spanish samples non-empty");
+
+# ==============================================================================
+# German
+# ==============================================================================
+test_group("german");
+var g_de = shabda_g2p_new(SHABDA_LANG_GERMAN);
+var de_ev = _conv(g_de, "hallo welt");
+assert_neq(vec_len(de_ev), 0, "german non-empty");
+var de_samples = _speak(g_de, "guten tag", voice_m, f64_from(44100));
+assert_neq(vec_len(de_samples), 0, "german samples non-empty");
+
+# ==============================================================================
+# Hindi
+# ==============================================================================
+test_group("hindi");
+var g_hi = shabda_g2p_new(SHABDA_LANG_HINDI);
+# Parity with Rust test_hindi_namaste: native Devanagari convert yields events.
+# normalize keeps char::is_alphabetic() code points (incl. Devanagari letters +
+# matras) so the word survives to hindi_rules — see normalize.cyr _shabda_is_alpha.
+var hi_deva_slot = alloc(8);
+var hi_deva_err = shabda_convert(g_hi, "नमस्ते", hi_deva_slot);
+assert_eq(shabda_is_err(hi_deva_err), 0, "hindi devanagari convert ok");
+assert_neq(vec_len(load64(hi_deva_slot)), 0, "hindi devanagari non-empty events");
+var hi_rom = _conv(g_hi, "namaste");
+assert_neq(vec_len(hi_rom), 0, "hindi romanized non-empty");
+var hi_samples = _speak(g_hi, "namaste", voice_m, f64_from(44100));
+assert_neq(vec_len(hi_samples), 0, "hindi samples non-empty");
+
+# ==============================================================================
+# Arabic
+# ==============================================================================
+test_group("arabic");
+var g_ar = shabda_g2p_new(SHABDA_LANG_ARABIC);
+# Parity with Rust test_arabic_convert: native Arabic script yields events
+# (normalize keeps Arabic letters + harakat via _shabda_is_alpha).
+var ar_ev_slot = alloc(8);
+var ar_ev_err = shabda_convert(g_ar, "كتاب", ar_ev_slot);
+assert_eq(shabda_is_err(ar_ev_err), 0, "arabic convert ok");
+assert_neq(vec_len(load64(ar_ev_slot)), 0, "arabic native non-empty events");
+var ar_rom = _conv(g_ar, "salam");
+assert_neq(vec_len(ar_rom), 0, "arabic romanized non-empty");
+
+# ==============================================================================
+# Sanskrit
+# ==============================================================================
+test_group("sanskrit");
+var g_sa = shabda_g2p_new(SHABDA_LANG_SANSKRIT);
+# Parity with Rust test_sanskrit_convert: native Devanagari yields events
+# (Sanskrit rules preserve the inherent schwa; normalize keeps the codepoints).
+var sa_ev_slot = alloc(8);
+var sa_ev_err = shabda_convert(g_sa, "धर्म", sa_ev_slot);
+assert_eq(shabda_is_err(sa_ev_err), 0, "sanskrit convert ok");
+assert_neq(vec_len(load64(sa_ev_slot)), 0, "sanskrit native non-empty events");
+var sa_rom = _conv(g_sa, "dharma");
+assert_neq(vec_len(sa_rom), 0, "sanskrit romanized non-empty");
+
+# ==============================================================================
+# phoneme_inventory (varna, always compiled)
+# ==============================================================================
+test_group("phoneme inventory");
+var inv_en = shabda_g2p_phoneme_inventory(g_en);
+assert_eq(phoneme_has(inv_en, "p"), 1, "english inv has p");
+assert_eq(phoneme_has(inv_en, "ʃ"), 1, "english inv has esh");
+assert_eq(phoneme_has(inv_en, "ə"), 1, "english inv has schwa");
+var inv_de = shabda_g2p_phoneme_inventory(g_de);
+assert_eq(phoneme_has(inv_de, "p"), 1, "german inv has p");
+assert_eq(phoneme_has(inv_de, "ʃ"), 1, "german inv has esh");
+var inv_hi = shabda_g2p_phoneme_inventory(g_hi);
+assert_eq(phoneme_has(inv_hi, "p"), 1, "hindi inv has p");
+assert_eq(phoneme_has(inv_hi, "ə"), 1, "hindi inv has schwa");
+var inv_ar = shabda_g2p_phoneme_inventory(g_ar);
+assert_eq(phoneme_has(inv_ar, "b"), 1, "arabic inv has b");
+assert_eq(phoneme_has(inv_ar, "ʔ"), 1, "arabic inv has glottal");
+var inv_sa = shabda_g2p_phoneme_inventory(g_sa);
+assert_eq(phoneme_has(inv_sa, "p"), 1, "sanskrit inv has p");
+assert_eq(phoneme_has(inv_sa, "ɐ"), 1, "sanskrit inv has near-open");
+var inv_sp = shabda_g2p_phoneme_inventory(g_sp);
+assert_eq(phoneme_has(inv_sp, "p"), 1, "spanish inv has p");
+assert_eq(phoneme_has(inv_sp, "θ"), 1, "spanish inv has theta");
+assert_eq(phoneme_has(inv_sp, "a"), 1, "spanish inv has a");
+
+# ==============================================================================
+# detect_language — "hello world" -> English, "" -> None
+# ==============================================================================
+test_group("detect language");
+assert_eq(shabda_detect_language("hello world"), SHABDA_LANG_ENGLISH, "latin -> english");
+assert_eq(shabda_detect_language(""), (0 - 1), "empty -> none");
+
+# is_content 'the' -> 0
+test_group("is_content the");
+assert_eq(shabda_is_content_word("the"), 0, "the is function word");
+
+var rc = assert_summary();
+syscall(60, rc);

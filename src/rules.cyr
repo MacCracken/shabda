@@ -229,25 +229,25 @@ fn _shabda_english_match(chars, pos, out): i64 {
         var d = vec_get(chars, pos + 3);
         # eigh
         if (a == 0x65) { if (b == 0x69) { if (c == 0x67) { if (d == 0x68) {
-            vec_push(out, SVARA_PH_DIPH_EI); return 4; } } } }
+                        vec_push(out, SVARA_PH_DIPH_EI); return 4; } } } }
         # augh
         if (a == 0x61) { if (b == 0x75) { if (c == 0x67) { if (d == 0x68) {
-            vec_push(out, SVARA_PH_VOWEL_OPEN_O); return 4; } } } }
+                        vec_push(out, SVARA_PH_VOWEL_OPEN_O); return 4; } } } }
         # ough
         if (a == 0x6F) { if (b == 0x75) { if (c == 0x67) { if (d == 0x68) {
-            vec_push(out, SVARA_PH_DIPH_OU); return 4; } } } }
+                        vec_push(out, SVARA_PH_DIPH_OU); return 4; } } } }
         # tion -> Sh schwa N
         if (a == 0x74) { if (b == 0x69) { if (c == 0x6F) { if (d == 0x6E) {
-            vec_push(out, SVARA_PH_FRIC_SH); vec_push(out, SVARA_PH_VOWEL_SCHWA);
-            vec_push(out, SVARA_PH_NASAL_N); return 4; } } } }
+                        vec_push(out, SVARA_PH_FRIC_SH); vec_push(out, SVARA_PH_VOWEL_SCHWA);
+                        vec_push(out, SVARA_PH_NASAL_N); return 4; } } } }
         # sion -> Zh schwa N
         if (a == 0x73) { if (b == 0x69) { if (c == 0x6F) { if (d == 0x6E) {
-            vec_push(out, SVARA_PH_FRIC_ZH); vec_push(out, SVARA_PH_VOWEL_SCHWA);
-            vec_push(out, SVARA_PH_NASAL_N); return 4; } } } }
+                        vec_push(out, SVARA_PH_FRIC_ZH); vec_push(out, SVARA_PH_VOWEL_SCHWA);
+                        vec_push(out, SVARA_PH_NASAL_N); return 4; } } } }
         # cian -> same as tion
         if (a == 0x63) { if (b == 0x69) { if (c == 0x61) { if (d == 0x6E) {
-            vec_push(out, SVARA_PH_FRIC_SH); vec_push(out, SVARA_PH_VOWEL_SCHWA);
-            vec_push(out, SVARA_PH_NASAL_N); return 4; } } } }
+                        vec_push(out, SVARA_PH_FRIC_SH); vec_push(out, SVARA_PH_VOWEL_SCHWA);
+                        vec_push(out, SVARA_PH_NASAL_N); return 4; } } } }
     }
 
     # 3-letter patterns
@@ -270,66 +270,66 @@ fn _shabda_english_match(chars, pos, out): i64 {
         }
         # air -> OpenE R
         if (t0 == 0x61) { if (t1 == 0x69) { if (t2 == 0x72) {
-            vec_push(out, SVARA_PH_VOWEL_OPEN_E); vec_push(out, SVARA_PH_APPROX_R); return 3; } } }
+                    vec_push(out, SVARA_PH_VOWEL_OPEN_E); vec_push(out, SVARA_PH_APPROX_R); return 3; } } }
         # ear -> NearI R
         if (t0 == 0x65) { if (t1 == 0x61) { if (t2 == 0x72) {
-            vec_push(out, SVARA_PH_VOWEL_NEAR_I); vec_push(out, SVARA_PH_APPROX_R); return 3; } } }
+                    vec_push(out, SVARA_PH_VOWEL_NEAR_I); vec_push(out, SVARA_PH_APPROX_R); return 3; } } }
         # our -> AU R
         if (t0 == 0x6F) { if (t1 == 0x75) { if (t2 == 0x72) {
-            vec_push(out, SVARA_PH_DIPH_AU); vec_push(out, SVARA_PH_APPROX_R); return 3; } } }
+                    vec_push(out, SVARA_PH_DIPH_AU); vec_push(out, SVARA_PH_APPROX_R); return 3; } } }
         # igh -> AI
         if (t0 == 0x69) { if (t1 == 0x67) { if (t2 == 0x68) {
-            vec_push(out, SVARA_PH_DIPH_AI); return 3; } } }
+                    vec_push(out, SVARA_PH_DIPH_AI); return 3; } } }
         # thr -> Th R
         if (t0 == 0x74) { if (t1 == 0x68) { if (t2 == 0x72) {
-            vec_push(out, SVARA_PH_FRIC_TH); vec_push(out, SVARA_PH_APPROX_R); return 3; } } }
+                    vec_push(out, SVARA_PH_FRIC_TH); vec_push(out, SVARA_PH_APPROX_R); return 3; } } }
         # the -> Dh schwa
         if (t0 == 0x74) { if (t1 == 0x68) { if (t2 == 0x65) {
-            vec_push(out, SVARA_PH_FRIC_DH); vec_push(out, SVARA_PH_VOWEL_SCHWA); return 3; } } }
+                    vec_push(out, SVARA_PH_FRIC_DH); vec_push(out, SVARA_PH_VOWEL_SCHWA); return 3; } } }
         # sh_ (consume 2)
         if (t0 == 0x73) { if (t1 == 0x68) {
-            vec_push(out, SVARA_PH_FRIC_SH); return 2; } }
+                vec_push(out, SVARA_PH_FRIC_SH); return 2; } }
         # ch_ (consume 2)
         if (t0 == 0x63) { if (t1 == 0x68) {
-            vec_push(out, SVARA_PH_AFFR_CH); return 2; } }
+                vec_push(out, SVARA_PH_AFFR_CH); return 2; } }
         # th_ (consume 2)
         if (t0 == 0x74) { if (t1 == 0x68) {
-            vec_push(out, SVARA_PH_FRIC_TH); return 2; } }
+                vec_push(out, SVARA_PH_FRIC_TH); return 2; } }
         # ng_ : Rust guards `!chars[2].is_alphabetic() || chars.len() == 3`.
         # Here rem is the remaining-slice length; rem == 3 corresponds to
         # chars.len() == 3 in Rust's remaining slice. t2 alphabetic check below.
         if (t0 == 0x6E) { if (t1 == 0x67) {
-            var ng_ok = 0;
-            if (rem == 3) { ng_ok = 1; }
-            if (_shabda_is_ascii_alpha(t2) == 0) { ng_ok = 1; }
-            if (ng_ok == 1) {
-                vec_push(out, SVARA_PH_NASAL_NG); return 2;
-            }
-        } }
+                var ng_ok = 0;
+                if (rem == 3) { ng_ok = 1; }
+                if (_shabda_rules_is_ascii_alpha(t2) == 0) { ng_ok = 1; }
+                if (ng_ok == 1) {
+                    vec_push(out, SVARA_PH_NASAL_NG); return 2;
+                }
+            } }
         # ing (only when rem == 3)
         if (t0 == 0x69) { if (t1 == 0x6E) { if (t2 == 0x67) {
-            if (rem == 3) {
-                vec_push(out, SVARA_PH_VOWEL_NEAR_I); vec_push(out, SVARA_PH_NASAL_NG); return 3;
-            }
-        } } }
+                    if (rem == 3) {
+                        vec_push(out, SVARA_PH_VOWEL_NEAR_I); vec_push(out, SVARA_PH_NASAL_NG); return 3;
+                    }
+                } } }
         # ou_
         if (t0 == 0x6F) { if (t1 == 0x75) {
-            vec_push(out, SVARA_PH_DIPH_AU); return 2; } }
+                vec_push(out, SVARA_PH_DIPH_AU); return 2; } }
         # ow_
         if (t0 == 0x6F) { if (t1 == 0x77) {
-            vec_push(out, SVARA_PH_DIPH_OU); return 2; } }
+                vec_push(out, SVARA_PH_DIPH_OU); return 2; } }
         # ai_
         if (t0 == 0x61) { if (t1 == 0x69) {
-            vec_push(out, SVARA_PH_DIPH_AI); return 2; } }
+                vec_push(out, SVARA_PH_DIPH_AI); return 2; } }
         # ee_
         if (t0 == 0x65) { if (t1 == 0x65) {
-            vec_push(out, SVARA_PH_VOWEL_E); return 2; } }
+                vec_push(out, SVARA_PH_VOWEL_E); return 2; } }
         # oo_
         if (t0 == 0x6F) { if (t1 == 0x6F) {
-            vec_push(out, SVARA_PH_VOWEL_U); return 2; } }
+                vec_push(out, SVARA_PH_VOWEL_U); return 2; } }
         # ea_
         if (t0 == 0x65) { if (t1 == 0x61) {
-            vec_push(out, SVARA_PH_VOWEL_E); return 2; } }
+                vec_push(out, SVARA_PH_VOWEL_E); return 2; } }
     }
 
     # 2-letter patterns
@@ -343,9 +343,9 @@ fn _shabda_english_match(chars, pos, out): i64 {
         if (d0 == 0x70) { if (d1 == 0x68) { vec_push(out, SVARA_PH_FRIC_F); return 2; } }    # ph
         if (d0 == 0x63) { if (d1 == 0x6B) { vec_push(out, SVARA_PH_PLOSIVE_K); return 2; } } # ck
         if (d0 == 0x71) { if (d1 == 0x75) {                                                  # qu
-            vec_push(out, SVARA_PH_PLOSIVE_K); vec_push(out, SVARA_PH_APPROX_W); return 2; } }
+                vec_push(out, SVARA_PH_PLOSIVE_K); vec_push(out, SVARA_PH_APPROX_W); return 2; } }
         if (d0 == 0x61) { if (d1 == 0x72) {                                                  # ar
-            vec_push(out, SVARA_PH_VOWEL_OPEN_A); vec_push(out, SVARA_PH_APPROX_R); return 2; } }
+                vec_push(out, SVARA_PH_VOWEL_OPEN_A); vec_push(out, SVARA_PH_APPROX_R); return 2; } }
         # er/ir/ur -> Bird R
         if (d1 == 0x72) {
             if (d0 == 0x65) { vec_push(out, SVARA_PH_VOWEL_BIRD); vec_push(out, SVARA_PH_APPROX_R); return 2; }
@@ -361,7 +361,7 @@ fn _shabda_english_match(chars, pos, out): i64 {
 
 # ASCII alphabetic test (Rust char::is_alphabetic for ASCII inputs).
 #must_use
-fn _shabda_is_ascii_alpha(cp): i64 {
+fn _shabda_rules_is_ascii_alpha(cp): i64 {
     if (cp >= 0x61) { if (cp <= 0x7A) { return 1; } }
     if (cp >= 0x41) { if (cp <= 0x5A) { return 1; } }
     return 0;
@@ -725,5 +725,664 @@ fn shabda_spanish_rules(word): i64 {
         var consumed = _shabda_spanish_match(chars, i, phonemes);
         i = i + consumed;
     }
+    return phonemes;
+}
+
+# ================================================================
+# German G2P rules — ports german_rules(). Accented codepoints (2-byte UTF-8):
+#   ä=0xE4 ö=0xF6 ü=0xFC ß=0xDF á=0xE1. Post-pass: final devoicing on the last
+#   phoneme (b->p d->t g->k v->f z->s).
+# ================================================================
+
+# German double-consonant helper: for a doubled non-vowel `a`, push its single
+# phoneme (Rust's inner match). Pushes onto out, returns 1 if handled else 0.
+fn _shabda_german_double(out, a): i64 {
+    if (a == 0x62) { vec_push(out, SVARA_PH_PLOSIVE_B); return 1; }   # b
+    if (a == 0x63) { vec_push(out, SVARA_PH_PLOSIVE_K); return 1; }   # c
+    if (a == 0x64) { vec_push(out, SVARA_PH_PLOSIVE_D); return 1; }   # d
+    if (a == 0x66) { vec_push(out, SVARA_PH_FRIC_F); return 1; }      # f
+    if (a == 0x67) { vec_push(out, SVARA_PH_PLOSIVE_G); return 1; }   # g
+    if (a == 0x6C) { vec_push(out, SVARA_PH_LATERAL_L); return 1; }   # l
+    if (a == 0x6D) { vec_push(out, SVARA_PH_NASAL_M); return 1; }     # m
+    if (a == 0x6E) { vec_push(out, SVARA_PH_NASAL_N); return 1; }     # n
+    if (a == 0x70) { vec_push(out, SVARA_PH_PLOSIVE_P); return 1; }   # p
+    if (a == 0x72) { vec_push(out, SVARA_PH_APPROX_R); return 1; }    # r
+    if (a == 0x73) { vec_push(out, SVARA_PH_FRIC_S); return 1; }      # s
+    if (a == 0x74) { vec_push(out, SVARA_PH_PLOSIVE_T); return 1; }   # t
+    # _ arm: empty phoneme sequence, but still consumes 2.
+    return 1;
+}
+
+# German pattern match at `pos`. Pushes phonemes onto `out`, returns consumed.
+fn _shabda_german_match(chars, pos, out): i64 {
+    var n = vec_len(chars);
+    var rem = n - pos;
+    if (rem <= 0) { return 1; }
+
+    var c0 = vec_get(chars, pos);
+
+    # 3-letter: sch -> /ʃ/
+    if (rem >= 3) {
+        if (c0 == 0x73) {
+            if (vec_get(chars, pos + 1) == 0x63) {
+                if (vec_get(chars, pos + 2) == 0x68) {
+                    vec_push(out, SVARA_PH_FRIC_SH); return 3;
+                }
+            }
+        }
+    }
+
+    # 2-letter patterns.
+    if (rem >= 2) {
+        var c1 = vec_get(chars, pos + 1);
+        if (c0 == 0x63) { if (c1 == 0x68) { vec_push(out, SVARA_PH_FRIC_SH); return 2; } }   # ch (ich-Laut)
+        if (c0 == 0x63) { if (c1 == 0x6B) { vec_push(out, SVARA_PH_PLOSIVE_K); return 2; } } # ck
+        if (c0 == 0x65) { if (c1 == 0x69) { vec_push(out, SVARA_PH_DIPH_AI); return 2; } }   # ei
+        if (c0 == 0x69) { if (c1 == 0x65) { vec_push(out, SVARA_PH_VOWEL_E); return 2; } }   # ie long /iː/
+        if (c0 == 0x65) { if (c1 == 0x75) { vec_push(out, SVARA_PH_DIPH_OI); return 2; } }   # eu
+        if (c0 == 0xE4) { if (c1 == 0x75) { vec_push(out, SVARA_PH_DIPH_OI); return 2; } }   # äu
+        if (c0 == 0x70) { if (c1 == 0x66) {                                                  # pf
+                vec_push(out, SVARA_PH_PLOSIVE_P); vec_push(out, SVARA_PH_FRIC_F); return 2; } }
+        # ('t','z') | ('z',_) if chars[0]=='z' => {} : no-op, falls to single 'z'.
+        # (We simply don't match here for z; the single-char handler runs.)
+        # sp/st at word start -> /ʃp/, /ʃt/ : Dynamic(1, [Sh]) — consumes ONE.
+        if (c0 == 0x73) {
+            if (c1 == 0x70) { vec_push(out, SVARA_PH_FRIC_SH); return 1; }   # sp
+            if (c1 == 0x74) { vec_push(out, SVARA_PH_FRIC_SH); return 1; }   # st
+        }
+        if (c0 == 0x74) { if (c1 == 0x68) { vec_push(out, SVARA_PH_PLOSIVE_T); return 2; } } # th
+        if (c0 == 0x70) { if (c1 == 0x68) { vec_push(out, SVARA_PH_FRIC_F); return 2; } }    # ph
+        if (c0 == 0x71) { if (c1 == 0x75) {                                                  # qu
+                vec_push(out, SVARA_PH_PLOSIVE_K); vec_push(out, SVARA_PH_FRIC_V); return 2; } }
+        # Double consonants -> single phoneme (only if a==b and non-vowel).
+        # Rust reaches this arm AFTER the z-guard no-op; z==z would have been
+        # caught by the no-op arm first, so exclude z here to match (z doubles
+        # fall through to single 'z' twice in Rust — but the no-op arm returns
+        # nothing and Rust re-loops; actually the no-op arm has empty body so the
+        # match falls through to single-char. Replicate: only handle a==b for
+        # non-vowel, non-z.)
+        if (c0 == c1) {
+            if (_shabda_is_vowel_char(c0) == 0) {
+                if (c0 != 0x7A) {
+                    _shabda_german_double(out, c0);
+                    return 2;
+                }
+            }
+        }
+    }
+
+    # Single characters.
+    var next = 0;
+    if (rem > 1) { next = vec_get(chars, pos + 1); }
+
+    if (c0 == 0x61) { vec_push(out, SVARA_PH_VOWEL_OPEN_A); return 1; }   # a
+    if (c0 == 0xE1) { vec_push(out, SVARA_PH_VOWEL_OPEN_A); return 1; }   # á
+    if (c0 == 0xE4) { vec_push(out, SVARA_PH_VOWEL_OPEN_E); return 1; }   # ä
+    if (c0 == 0x65) { vec_push(out, SVARA_PH_VOWEL_OPEN_E); return 1; }   # e
+    if (c0 == 0x69) { vec_push(out, SVARA_PH_VOWEL_NEAR_I); return 1; }   # i
+    if (c0 == 0x6F) { vec_push(out, SVARA_PH_VOWEL_O); return 1; }        # o
+    if (c0 == 0xF6) { vec_push(out, SVARA_PH_VOWEL_OPEN_E); return 1; }   # ö /œ/
+    if (c0 == 0x75) { vec_push(out, SVARA_PH_VOWEL_U); return 1; }        # u
+    if (c0 == 0xFC) { vec_push(out, SVARA_PH_VOWEL_E); return 1; }        # ü /yː/
+    if (c0 == 0x62) { vec_push(out, SVARA_PH_PLOSIVE_B); return 1; }      # b
+    if (c0 == 0x63) { vec_push(out, SVARA_PH_PLOSIVE_K); return 1; }      # c
+    if (c0 == 0x64) { vec_push(out, SVARA_PH_PLOSIVE_D); return 1; }      # d
+    if (c0 == 0x66) { vec_push(out, SVARA_PH_FRIC_F); return 1; }         # f
+    if (c0 == 0x67) { vec_push(out, SVARA_PH_PLOSIVE_G); return 1; }      # g
+    if (c0 == 0x68) { vec_push(out, SVARA_PH_FRIC_H); return 1; }         # h
+    if (c0 == 0x6A) { vec_push(out, SVARA_PH_APPROX_J); return 1; }       # j
+    if (c0 == 0x6B) { vec_push(out, SVARA_PH_PLOSIVE_K); return 1; }      # k
+    if (c0 == 0x6C) { vec_push(out, SVARA_PH_LATERAL_L); return 1; }      # l
+    if (c0 == 0x6D) { vec_push(out, SVARA_PH_NASAL_M); return 1; }        # m
+    if (c0 == 0x6E) { vec_push(out, SVARA_PH_NASAL_N); return 1; }        # n
+    if (c0 == 0x70) { vec_push(out, SVARA_PH_PLOSIVE_P); return 1; }      # p
+    if (c0 == 0x72) { vec_push(out, SVARA_PH_APPROX_R); return 1; }       # r
+    if (c0 == 0x73) {                                                     # s
+        if (rem > 1) {
+            if (_shabda_is_vowel_char(next) == 1) {
+                vec_push(out, SVARA_PH_FRIC_Z); return 1;   # s before vowel -> /z/
+            }
+        }
+        vec_push(out, SVARA_PH_FRIC_S); return 1;
+    }
+    if (c0 == 0xDF) { vec_push(out, SVARA_PH_FRIC_S); return 1; }         # ß
+    if (c0 == 0x74) { vec_push(out, SVARA_PH_PLOSIVE_T); return 1; }      # t
+    if (c0 == 0x76) { vec_push(out, SVARA_PH_FRIC_F); return 1; }         # v = /f/
+    if (c0 == 0x77) { vec_push(out, SVARA_PH_FRIC_V); return 1; }         # w = /v/
+    if (c0 == 0x78) { vec_push(out, SVARA_PH_PLOSIVE_K); return 1; }      # x
+    if (c0 == 0x79) { vec_push(out, SVARA_PH_VOWEL_E); return 1; }        # y /yː/
+    if (c0 == 0x7A) {                                                     # z -> /ts/
+        vec_push(out, SVARA_PH_PLOSIVE_T); vec_push(out, SVARA_PH_FRIC_S); return 1;
+    }
+    if (c0 == 0x27) { return 1; }                                        # '
+    if (c0 == 0x2D) { return 1; }                                        # -
+    return 1;
+}
+
+# Public German engine. Ports german_rules().
+#must_use
+fn shabda_german_rules(word): i64 {
+    var chars = _shabda_word_chars(word);
+    if (vec_len(chars) == 0) {
+        return vec_new();
+    }
+    var phonemes = vec_new();
+    var i = 0;
+    var n = vec_len(chars);
+    while (i < n) {
+        var consumed = _shabda_german_match(chars, i, phonemes);
+        i = i + consumed;
+    }
+
+    # Final devoicing: voiced -> voiceless at word end (mutate last element).
+    var pn = vec_len(phonemes);
+    if (pn > 0) {
+        var last = vec_get(phonemes, pn - 1);
+        var newl = last;
+        if (last == SVARA_PH_PLOSIVE_B) { newl = SVARA_PH_PLOSIVE_P; }
+        if (last == SVARA_PH_PLOSIVE_D) { newl = SVARA_PH_PLOSIVE_T; }
+        if (last == SVARA_PH_PLOSIVE_G) { newl = SVARA_PH_PLOSIVE_K; }
+        if (last == SVARA_PH_FRIC_V)    { newl = SVARA_PH_FRIC_F; }
+        if (last == SVARA_PH_FRIC_Z)    { newl = SVARA_PH_FRIC_S; }
+        vec_set(phonemes, pn - 1, newl);
+    }
+
+    return phonemes;
+}
+
+# ================================================================
+# Hindi G2P rules (Devanagari) — ports hindi_rules(). Devanagari codepoints are
+# load-bearing: independent vowels, matras (combining vowel signs), virama,
+# anusvara/visarga/chandrabindu. Each consonant carries an inherent schwa unless
+# followed by a matra/virama/anusvara/chandrabindu. Word-final schwa DELETION.
+# The word is decoded WITHOUT ASCII-lowering (Rust uses word.chars() here); the
+# Latin fallback lowercases per-codepoint.
+# ================================================================
+
+# Should the inherent schwa be suppressed given the following codepoint `next`?
+# Ports push_consonant's suppress set (Hindi). next == -1 means end-of-word.
+#must_use
+fn _shabda_hindi_suppress(next): i64 {
+    if (next == 0x093E) { return 1; }   # ा aa matra
+    if (next == 0x093F) { return 1; }   # ि i
+    if (next == 0x0940) { return 1; }   # ी ii
+    if (next == 0x0941) { return 1; }   # ु u
+    if (next == 0x0942) { return 1; }   # ू uu
+    if (next == 0x0947) { return 1; }   # े e
+    if (next == 0x0948) { return 1; }   # ै ai
+    if (next == 0x094B) { return 1; }   # ो o
+    if (next == 0x094C) { return 1; }   # ौ au
+    if (next == 0x0943) { return 1; }   # ृ vocalic r
+    if (next == 0x094D) { return 1; }   # ् virama
+    if (next == 0x0902) { return 1; }   # ं anusvara
+    if (next == 0x0901) { return 1; }   # ँ chandrabindu
+    return 0;
+}
+
+# Push a Hindi consonant + inherent schwa unless suppressed. Ports push_consonant.
+fn _shabda_hindi_push_consonant(out, consonant, next): i64 {
+    vec_push(out, consonant);
+    if (_shabda_hindi_suppress(next) == 0) {
+        vec_push(out, SVARA_PH_VOWEL_SCHWA);
+    }
+    return 0;
+}
+
+# Latin fallback for romanized Hindi. Pushes phoneme(s) for an ASCII letter.
+fn _shabda_hindi_latin(out, cp): i64 {
+    var lower = _shabda_ascii_lower(cp);
+    if (lower == 0x61) { vec_push(out, SVARA_PH_VOWEL_SCHWA); return 0; }   # a
+    if (lower == 0x65) { vec_push(out, SVARA_PH_VOWEL_OPEN_E); return 0; }  # e
+    if (lower == 0x69) { vec_push(out, SVARA_PH_VOWEL_NEAR_I); return 0; }  # i
+    if (lower == 0x6F) { vec_push(out, SVARA_PH_VOWEL_O); return 0; }       # o
+    if (lower == 0x75) { vec_push(out, SVARA_PH_VOWEL_CUP_V); return 0; }   # u
+    if (lower == 0x6B) { vec_push(out, SVARA_PH_PLOSIVE_K); return 0; }     # k
+    if (lower == 0x67) { vec_push(out, SVARA_PH_PLOSIVE_G); return 0; }     # g
+    if (lower == 0x63) { vec_push(out, SVARA_PH_AFFR_CH); return 0; }       # c
+    if (lower == 0x6A) { vec_push(out, SVARA_PH_AFFR_J); return 0; }        # j
+    if (lower == 0x74) { vec_push(out, SVARA_PH_PLOSIVE_T); return 0; }     # t
+    if (lower == 0x64) { vec_push(out, SVARA_PH_PLOSIVE_D); return 0; }     # d
+    if (lower == 0x6E) { vec_push(out, SVARA_PH_NASAL_N); return 0; }       # n
+    if (lower == 0x70) { vec_push(out, SVARA_PH_PLOSIVE_P); return 0; }     # p
+    if (lower == 0x62) { vec_push(out, SVARA_PH_PLOSIVE_B); return 0; }     # b
+    if (lower == 0x6D) { vec_push(out, SVARA_PH_NASAL_M); return 0; }       # m
+    if (lower == 0x79) { vec_push(out, SVARA_PH_APPROX_J); return 0; }      # y
+    if (lower == 0x72) { vec_push(out, SVARA_PH_TAP_FLAP); return 0; }      # r
+    if (lower == 0x6C) { vec_push(out, SVARA_PH_LATERAL_L); return 0; }     # l
+    if (lower == 0x76) { vec_push(out, SVARA_PH_FRIC_V); return 0; }        # v
+    if (lower == 0x77) { vec_push(out, SVARA_PH_FRIC_V); return 0; }        # w
+    if (lower == 0x73) { vec_push(out, SVARA_PH_FRIC_S); return 0; }        # s
+    if (lower == 0x68) { vec_push(out, SVARA_PH_FRIC_H); return 0; }        # h
+    if (lower == 0x66) { vec_push(out, SVARA_PH_FRIC_F); return 0; }        # f
+    if (lower == 0x7A) { vec_push(out, SVARA_PH_FRIC_Z); return 0; }        # z
+    return 0;
+}
+
+# Handle a single Devanagari consonant codepoint for Hindi. Returns 1 if `ch`
+# was a recognized consonant (and pushed via push_consonant), else 0.
+#must_use
+fn _shabda_hindi_consonant(out, ch, next): i64 {
+    # Velar
+    if (ch == 0x0915) { _shabda_hindi_push_consonant(out, SVARA_PH_PLOSIVE_K, next); return 1; }   # क
+    if (ch == 0x0916) { _shabda_hindi_push_consonant(out, SVARA_PH_PLOSIVE_K, next); return 1; }   # ख
+    if (ch == 0x0917) { _shabda_hindi_push_consonant(out, SVARA_PH_PLOSIVE_G, next); return 1; }   # ग
+    if (ch == 0x0918) { _shabda_hindi_push_consonant(out, SVARA_PH_PLOSIVE_G, next); return 1; }   # घ
+    if (ch == 0x0919) { _shabda_hindi_push_consonant(out, SVARA_PH_NASAL_NG, next); return 1; }    # ङ
+    # Palatal
+    if (ch == 0x091A) { _shabda_hindi_push_consonant(out, SVARA_PH_AFFR_CH, next); return 1; }     # च
+    if (ch == 0x091B) { _shabda_hindi_push_consonant(out, SVARA_PH_AFFR_CH, next); return 1; }     # छ
+    if (ch == 0x091C) { _shabda_hindi_push_consonant(out, SVARA_PH_AFFR_J, next); return 1; }      # ज
+    if (ch == 0x091D) { _shabda_hindi_push_consonant(out, SVARA_PH_AFFR_J, next); return 1; }      # झ
+    if (ch == 0x091E) { _shabda_hindi_push_consonant(out, SVARA_PH_NASAL_N, next); return 1; }     # ञ
+    # Retroflex
+    if (ch == 0x091F) { _shabda_hindi_push_consonant(out, SVARA_PH_PLOSIVE_T, next); return 1; }   # ट
+    if (ch == 0x0920) { _shabda_hindi_push_consonant(out, SVARA_PH_PLOSIVE_T, next); return 1; }   # ठ
+    if (ch == 0x0921) { _shabda_hindi_push_consonant(out, SVARA_PH_PLOSIVE_D, next); return 1; }   # ड
+    if (ch == 0x0922) { _shabda_hindi_push_consonant(out, SVARA_PH_PLOSIVE_D, next); return 1; }   # ढ
+    if (ch == 0x0923) { _shabda_hindi_push_consonant(out, SVARA_PH_NASAL_N, next); return 1; }     # ण
+    # Dental
+    if (ch == 0x0924) { _shabda_hindi_push_consonant(out, SVARA_PH_PLOSIVE_T, next); return 1; }   # त
+    if (ch == 0x0925) { _shabda_hindi_push_consonant(out, SVARA_PH_PLOSIVE_T, next); return 1; }   # थ
+    if (ch == 0x0926) { _shabda_hindi_push_consonant(out, SVARA_PH_PLOSIVE_D, next); return 1; }   # द
+    if (ch == 0x0927) { _shabda_hindi_push_consonant(out, SVARA_PH_PLOSIVE_D, next); return 1; }   # ध
+    if (ch == 0x0928) { _shabda_hindi_push_consonant(out, SVARA_PH_NASAL_N, next); return 1; }     # न
+    # Labial
+    if (ch == 0x092A) { _shabda_hindi_push_consonant(out, SVARA_PH_PLOSIVE_P, next); return 1; }   # प
+    if (ch == 0x092B) { _shabda_hindi_push_consonant(out, SVARA_PH_PLOSIVE_P, next); return 1; }   # फ
+    if (ch == 0x092C) { _shabda_hindi_push_consonant(out, SVARA_PH_PLOSIVE_B, next); return 1; }   # ब
+    if (ch == 0x092D) { _shabda_hindi_push_consonant(out, SVARA_PH_PLOSIVE_B, next); return 1; }   # भ
+    if (ch == 0x092E) { _shabda_hindi_push_consonant(out, SVARA_PH_NASAL_M, next); return 1; }     # म
+    # Semivowels / liquids
+    if (ch == 0x092F) { _shabda_hindi_push_consonant(out, SVARA_PH_APPROX_J, next); return 1; }    # य
+    if (ch == 0x0930) { _shabda_hindi_push_consonant(out, SVARA_PH_TAP_FLAP, next); return 1; }    # र
+    if (ch == 0x0932) { _shabda_hindi_push_consonant(out, SVARA_PH_LATERAL_L, next); return 1; }   # ल
+    if (ch == 0x0935) { _shabda_hindi_push_consonant(out, SVARA_PH_FRIC_V, next); return 1; }      # व
+    # Sibilants
+    if (ch == 0x0936) { _shabda_hindi_push_consonant(out, SVARA_PH_FRIC_SH, next); return 1; }     # श
+    if (ch == 0x0937) { _shabda_hindi_push_consonant(out, SVARA_PH_FRIC_SH, next); return 1; }     # ष
+    if (ch == 0x0938) { _shabda_hindi_push_consonant(out, SVARA_PH_FRIC_S, next); return 1; }      # स
+    if (ch == 0x0939) { _shabda_hindi_push_consonant(out, SVARA_PH_FRIC_H, next); return 1; }      # ह
+    return 0;
+}
+
+# Public Hindi engine. Ports hindi_rules().
+#must_use
+fn shabda_hindi_rules(word): i64 {
+    var chars = _shabda_decode_chars(word, 0);
+    if (vec_len(chars) == 0) {
+        return vec_new();
+    }
+    var phonemes = vec_new();
+    var i = 0;
+    var n = vec_len(chars);
+    while (i < n) {
+        var ch = vec_get(chars, i);
+        var next = _shabda_cp_at(chars, i + 1);
+
+        # Independent vowels + matras.
+        if (ch == 0x0905) { vec_push(phonemes, SVARA_PH_VOWEL_SCHWA); }
+        elif (ch == 0x0906) { vec_push(phonemes, SVARA_PH_VOWEL_OPEN_A); }
+        elif (ch == 0x093E) { vec_push(phonemes, SVARA_PH_VOWEL_OPEN_A); }
+        elif (ch == 0x0907) { vec_push(phonemes, SVARA_PH_VOWEL_NEAR_I); }
+        elif (ch == 0x093F) { vec_push(phonemes, SVARA_PH_VOWEL_NEAR_I); }
+        elif (ch == 0x0908) { vec_push(phonemes, SVARA_PH_VOWEL_E); }
+        elif (ch == 0x0940) { vec_push(phonemes, SVARA_PH_VOWEL_E); }
+        elif (ch == 0x0909) { vec_push(phonemes, SVARA_PH_VOWEL_CUP_V); }
+        elif (ch == 0x0941) { vec_push(phonemes, SVARA_PH_VOWEL_CUP_V); }
+        elif (ch == 0x090A) { vec_push(phonemes, SVARA_PH_VOWEL_U); }
+        elif (ch == 0x0942) { vec_push(phonemes, SVARA_PH_VOWEL_U); }
+        elif (ch == 0x090F) { vec_push(phonemes, SVARA_PH_VOWEL_OPEN_E); }
+        elif (ch == 0x0947) { vec_push(phonemes, SVARA_PH_VOWEL_OPEN_E); }
+        elif (ch == 0x0910) { vec_push(phonemes, SVARA_PH_VOWEL_OPEN_A); }
+        elif (ch == 0x0948) { vec_push(phonemes, SVARA_PH_VOWEL_OPEN_A); }
+        elif (ch == 0x0913) { vec_push(phonemes, SVARA_PH_VOWEL_O); }
+        elif (ch == 0x094B) { vec_push(phonemes, SVARA_PH_VOWEL_O); }
+        elif (ch == 0x0914) { vec_push(phonemes, SVARA_PH_VOWEL_OPEN_O); }
+        elif (ch == 0x094C) { vec_push(phonemes, SVARA_PH_VOWEL_OPEN_O); }
+        elif (ch == 0x090B) {
+            vec_push(phonemes, SVARA_PH_TAP_FLAP); vec_push(phonemes, SVARA_PH_VOWEL_NEAR_I);
+        }
+        elif (ch == 0x0943) {
+            vec_push(phonemes, SVARA_PH_TAP_FLAP); vec_push(phonemes, SVARA_PH_VOWEL_NEAR_I);
+        }
+        # Nukta / virama — skip (base consonant already handled).
+        elif (ch == 0x093C) { i = i; }
+        elif (ch == 0x094D) { i = i; }
+        # Anusvara / visarga / chandrabindu.
+        elif (ch == 0x0902) { vec_push(phonemes, SVARA_PH_NASAL_N); }
+        elif (ch == 0x0903) { vec_push(phonemes, SVARA_PH_FRIC_H); }
+        elif (ch == 0x0901) { vec_push(phonemes, SVARA_PH_NASAL_N); }
+        else {
+            # Consonants, then Latin fallback, else skip.
+            if (_shabda_hindi_consonant(phonemes, ch, next) == 0) {
+                if (_shabda_rules_is_ascii_alpha(ch) == 1) {
+                    _shabda_hindi_latin(phonemes, ch);
+                }
+            }
+        }
+
+        i = i + 1;
+    }
+
+    # Hindi schwa deletion: remove word-final schwa (only if len > 1).
+    var pn = vec_len(phonemes);
+    if (pn > 1) {
+        if (vec_get(phonemes, pn - 1) == SVARA_PH_VOWEL_SCHWA) {
+            vec_pop(phonemes);
+        }
+    }
+
+    return phonemes;
+}
+
+# ================================================================
+# Sanskrit G2P rules (Devanagari) — ports sanskrit_rules(). Same Devanagari
+# codepoints as Hindi, but: NO word-final schwa deletion (schwa PRESERVATION),
+# anusvara -> NasalM (not NasalN), and richer independent-vowel expansions
+# (ai/au -> two phonemes; vocalic rr/l). Suppress set adds vocalic-rr matra
+# (0x0944) and vocalic-l matra (0x0962).
+# ================================================================
+
+# Sanskrit suppress set for the inherent schwa. Ports push_sanskrit_consonant.
+#must_use
+fn _shabda_sanskrit_suppress(next): i64 {
+    if (next == 0x093E) { return 1; }   # ा
+    if (next == 0x093F) { return 1; }   # ि
+    if (next == 0x0940) { return 1; }   # ी
+    if (next == 0x0941) { return 1; }   # ु
+    if (next == 0x0942) { return 1; }   # ू
+    if (next == 0x0947) { return 1; }   # े
+    if (next == 0x0948) { return 1; }   # ै
+    if (next == 0x094B) { return 1; }   # ो
+    if (next == 0x094C) { return 1; }   # ौ
+    if (next == 0x0943) { return 1; }   # ृ vocalic r
+    if (next == 0x0944) { return 1; }   # ॄ vocalic rr
+    if (next == 0x0962) { return 1; }   # ॢ vocalic l
+    if (next == 0x094D) { return 1; }   # ् virama
+    if (next == 0x0902) { return 1; }   # ं anusvara
+    if (next == 0x0901) { return 1; }   # ँ chandrabindu
+    return 0;
+}
+
+# Push a Sanskrit consonant + inherent schwa unless suppressed.
+fn _shabda_sanskrit_push_consonant(out, consonant, next): i64 {
+    vec_push(out, consonant);
+    if (_shabda_sanskrit_suppress(next) == 0) {
+        vec_push(out, SVARA_PH_VOWEL_SCHWA);
+    }
+    return 0;
+}
+
+# Latin fallback for romanized Sanskrit (IAST-like). Ports the inline arm.
+fn _shabda_sanskrit_latin(out, cp): i64 {
+    var lower = _shabda_ascii_lower(cp);
+    if (lower == 0x61) { vec_push(out, SVARA_PH_VOWEL_SCHWA); return 0; }   # a
+    if (lower == 0x65) { vec_push(out, SVARA_PH_VOWEL_OPEN_E); return 0; }  # e
+    if (lower == 0x69) { vec_push(out, SVARA_PH_VOWEL_NEAR_I); return 0; }  # i
+    if (lower == 0x6F) { vec_push(out, SVARA_PH_VOWEL_O); return 0; }       # o
+    if (lower == 0x75) { vec_push(out, SVARA_PH_VOWEL_CUP_V); return 0; }   # u
+    if (lower == 0x6B) { vec_push(out, SVARA_PH_PLOSIVE_K); return 0; }     # k
+    if (lower == 0x67) { vec_push(out, SVARA_PH_PLOSIVE_G); return 0; }     # g
+    if (lower == 0x63) { vec_push(out, SVARA_PH_AFFR_CH); return 0; }       # c
+    if (lower == 0x6A) { vec_push(out, SVARA_PH_AFFR_J); return 0; }        # j
+    if (lower == 0x74) { vec_push(out, SVARA_PH_PLOSIVE_T); return 0; }     # t
+    if (lower == 0x64) { vec_push(out, SVARA_PH_PLOSIVE_D); return 0; }     # d
+    if (lower == 0x6E) { vec_push(out, SVARA_PH_NASAL_N); return 0; }       # n
+    if (lower == 0x70) { vec_push(out, SVARA_PH_PLOSIVE_P); return 0; }     # p
+    if (lower == 0x62) { vec_push(out, SVARA_PH_PLOSIVE_B); return 0; }     # b
+    if (lower == 0x6D) { vec_push(out, SVARA_PH_NASAL_M); return 0; }       # m
+    if (lower == 0x79) { vec_push(out, SVARA_PH_APPROX_J); return 0; }      # y
+    if (lower == 0x72) { vec_push(out, SVARA_PH_TAP_FLAP); return 0; }      # r
+    if (lower == 0x6C) { vec_push(out, SVARA_PH_LATERAL_L); return 0; }     # l
+    if (lower == 0x76) { vec_push(out, SVARA_PH_FRIC_V); return 0; }        # v
+    if (lower == 0x77) { vec_push(out, SVARA_PH_FRIC_V); return 0; }        # w
+    if (lower == 0x73) { vec_push(out, SVARA_PH_FRIC_S); return 0; }        # s
+    if (lower == 0x68) { vec_push(out, SVARA_PH_FRIC_H); return 0; }        # h
+    return 0;
+}
+
+# Handle a Devanagari consonant for Sanskrit. Returns 1 if recognized else 0.
+#must_use
+fn _shabda_sanskrit_consonant(out, ch, next): i64 {
+    if (ch == 0x0915) { _shabda_sanskrit_push_consonant(out, SVARA_PH_PLOSIVE_K, next); return 1; }   # क
+    if (ch == 0x0916) { _shabda_sanskrit_push_consonant(out, SVARA_PH_PLOSIVE_K, next); return 1; }   # ख
+    if (ch == 0x0917) { _shabda_sanskrit_push_consonant(out, SVARA_PH_PLOSIVE_G, next); return 1; }   # ग
+    if (ch == 0x0918) { _shabda_sanskrit_push_consonant(out, SVARA_PH_PLOSIVE_G, next); return 1; }   # घ
+    if (ch == 0x0919) { _shabda_sanskrit_push_consonant(out, SVARA_PH_NASAL_NG, next); return 1; }    # ङ
+    if (ch == 0x091A) { _shabda_sanskrit_push_consonant(out, SVARA_PH_AFFR_CH, next); return 1; }     # च
+    if (ch == 0x091B) { _shabda_sanskrit_push_consonant(out, SVARA_PH_AFFR_CH, next); return 1; }     # छ
+    if (ch == 0x091C) { _shabda_sanskrit_push_consonant(out, SVARA_PH_AFFR_J, next); return 1; }      # ज
+    if (ch == 0x091D) { _shabda_sanskrit_push_consonant(out, SVARA_PH_AFFR_J, next); return 1; }      # झ
+    if (ch == 0x091E) { _shabda_sanskrit_push_consonant(out, SVARA_PH_NASAL_N, next); return 1; }     # ञ
+    if (ch == 0x091F) { _shabda_sanskrit_push_consonant(out, SVARA_PH_PLOSIVE_T, next); return 1; }   # ट
+    if (ch == 0x0920) { _shabda_sanskrit_push_consonant(out, SVARA_PH_PLOSIVE_T, next); return 1; }   # ठ
+    if (ch == 0x0921) { _shabda_sanskrit_push_consonant(out, SVARA_PH_PLOSIVE_D, next); return 1; }   # ड
+    if (ch == 0x0922) { _shabda_sanskrit_push_consonant(out, SVARA_PH_PLOSIVE_D, next); return 1; }   # ढ
+    if (ch == 0x0923) { _shabda_sanskrit_push_consonant(out, SVARA_PH_NASAL_N, next); return 1; }     # ण
+    if (ch == 0x0924) { _shabda_sanskrit_push_consonant(out, SVARA_PH_PLOSIVE_T, next); return 1; }   # त
+    if (ch == 0x0925) { _shabda_sanskrit_push_consonant(out, SVARA_PH_PLOSIVE_T, next); return 1; }   # थ
+    if (ch == 0x0926) { _shabda_sanskrit_push_consonant(out, SVARA_PH_PLOSIVE_D, next); return 1; }   # द
+    if (ch == 0x0927) { _shabda_sanskrit_push_consonant(out, SVARA_PH_PLOSIVE_D, next); return 1; }   # ध
+    if (ch == 0x0928) { _shabda_sanskrit_push_consonant(out, SVARA_PH_NASAL_N, next); return 1; }     # न
+    if (ch == 0x092A) { _shabda_sanskrit_push_consonant(out, SVARA_PH_PLOSIVE_P, next); return 1; }   # प
+    if (ch == 0x092B) { _shabda_sanskrit_push_consonant(out, SVARA_PH_PLOSIVE_P, next); return 1; }   # फ
+    if (ch == 0x092C) { _shabda_sanskrit_push_consonant(out, SVARA_PH_PLOSIVE_B, next); return 1; }   # ब
+    if (ch == 0x092D) { _shabda_sanskrit_push_consonant(out, SVARA_PH_PLOSIVE_B, next); return 1; }   # भ
+    if (ch == 0x092E) { _shabda_sanskrit_push_consonant(out, SVARA_PH_NASAL_M, next); return 1; }     # म
+    if (ch == 0x092F) { _shabda_sanskrit_push_consonant(out, SVARA_PH_APPROX_J, next); return 1; }    # य
+    if (ch == 0x0930) { _shabda_sanskrit_push_consonant(out, SVARA_PH_TAP_FLAP, next); return 1; }    # र
+    if (ch == 0x0932) { _shabda_sanskrit_push_consonant(out, SVARA_PH_LATERAL_L, next); return 1; }   # ल
+    if (ch == 0x0935) { _shabda_sanskrit_push_consonant(out, SVARA_PH_FRIC_V, next); return 1; }      # व
+    if (ch == 0x0936) { _shabda_sanskrit_push_consonant(out, SVARA_PH_FRIC_SH, next); return 1; }     # श
+    if (ch == 0x0937) { _shabda_sanskrit_push_consonant(out, SVARA_PH_FRIC_SH, next); return 1; }     # ष
+    if (ch == 0x0938) { _shabda_sanskrit_push_consonant(out, SVARA_PH_FRIC_S, next); return 1; }      # स
+    if (ch == 0x0939) { _shabda_sanskrit_push_consonant(out, SVARA_PH_FRIC_H, next); return 1; }      # ह
+    return 0;
+}
+
+# Public Sanskrit engine. Ports sanskrit_rules().
+#must_use
+fn shabda_sanskrit_rules(word): i64 {
+    var chars = _shabda_decode_chars(word, 0);
+    if (vec_len(chars) == 0) {
+        return vec_new();
+    }
+    var phonemes = vec_new();
+    var i = 0;
+    var n = vec_len(chars);
+    while (i < n) {
+        var ch = vec_get(chars, i);
+        var next = _shabda_cp_at(chars, i + 1);
+
+        # Independent vowels + matras.
+        if (ch == 0x0905) { vec_push(phonemes, SVARA_PH_VOWEL_SCHWA); }
+        elif (ch == 0x0906) { vec_push(phonemes, SVARA_PH_VOWEL_OPEN_A); }
+        elif (ch == 0x093E) { vec_push(phonemes, SVARA_PH_VOWEL_OPEN_A); }
+        elif (ch == 0x0907) { vec_push(phonemes, SVARA_PH_VOWEL_NEAR_I); }
+        elif (ch == 0x093F) { vec_push(phonemes, SVARA_PH_VOWEL_NEAR_I); }
+        elif (ch == 0x0908) { vec_push(phonemes, SVARA_PH_VOWEL_E); }
+        elif (ch == 0x0940) { vec_push(phonemes, SVARA_PH_VOWEL_E); }
+        elif (ch == 0x0909) { vec_push(phonemes, SVARA_PH_VOWEL_CUP_V); }
+        elif (ch == 0x0941) { vec_push(phonemes, SVARA_PH_VOWEL_CUP_V); }
+        elif (ch == 0x090A) { vec_push(phonemes, SVARA_PH_VOWEL_U); }
+        elif (ch == 0x0942) { vec_push(phonemes, SVARA_PH_VOWEL_U); }
+        elif (ch == 0x090B) {
+            vec_push(phonemes, SVARA_PH_TAP_FLAP); vec_push(phonemes, SVARA_PH_VOWEL_NEAR_I);
+        }
+        elif (ch == 0x0943) {
+            vec_push(phonemes, SVARA_PH_TAP_FLAP); vec_push(phonemes, SVARA_PH_VOWEL_NEAR_I);
+        }
+        elif (ch == 0x0960) {
+            vec_push(phonemes, SVARA_PH_TAP_FLAP); vec_push(phonemes, SVARA_PH_VOWEL_E);
+        }
+        elif (ch == 0x0944) {
+            vec_push(phonemes, SVARA_PH_TAP_FLAP); vec_push(phonemes, SVARA_PH_VOWEL_E);
+        }
+        elif (ch == 0x090C) {
+            vec_push(phonemes, SVARA_PH_LATERAL_L); vec_push(phonemes, SVARA_PH_VOWEL_NEAR_I);
+        }
+        elif (ch == 0x0962) {
+            vec_push(phonemes, SVARA_PH_LATERAL_L); vec_push(phonemes, SVARA_PH_VOWEL_NEAR_I);
+        }
+        elif (ch == 0x090F) { vec_push(phonemes, SVARA_PH_VOWEL_OPEN_E); }
+        elif (ch == 0x0947) { vec_push(phonemes, SVARA_PH_VOWEL_OPEN_E); }
+        elif (ch == 0x0910) {
+            vec_push(phonemes, SVARA_PH_VOWEL_OPEN_A); vec_push(phonemes, SVARA_PH_VOWEL_NEAR_I);
+        }
+        elif (ch == 0x0948) {
+            vec_push(phonemes, SVARA_PH_VOWEL_OPEN_A); vec_push(phonemes, SVARA_PH_VOWEL_NEAR_I);
+        }
+        elif (ch == 0x0913) { vec_push(phonemes, SVARA_PH_VOWEL_O); }
+        elif (ch == 0x094B) { vec_push(phonemes, SVARA_PH_VOWEL_O); }
+        elif (ch == 0x0914) {
+            vec_push(phonemes, SVARA_PH_VOWEL_OPEN_A); vec_push(phonemes, SVARA_PH_VOWEL_CUP_V);
+        }
+        elif (ch == 0x094C) {
+            vec_push(phonemes, SVARA_PH_VOWEL_OPEN_A); vec_push(phonemes, SVARA_PH_VOWEL_CUP_V);
+        }
+        # Virama / nukta — skip.
+        elif (ch == 0x094D) { i = i; }
+        elif (ch == 0x093C) { i = i; }
+        # Anusvara -> NasalM (Sanskrit), visarga -> FricH.
+        elif (ch == 0x0902) { vec_push(phonemes, SVARA_PH_NASAL_M); }
+        elif (ch == 0x0903) { vec_push(phonemes, SVARA_PH_FRIC_H); }
+        else {
+            if (_shabda_sanskrit_consonant(phonemes, ch, next) == 0) {
+                if (_shabda_rules_is_ascii_alpha(ch) == 1) {
+                    _shabda_sanskrit_latin(phonemes, ch);
+                }
+            }
+        }
+
+        i = i + 1;
+    }
+
+    # Sanskrit: NO schwa deletion (preservation).
+    return phonemes;
+}
+
+# ================================================================
+# Arabic G2P rules — ports arabic_rules(). Abjad: 28 letters (emphatics collapsed
+# to their plain counterparts), hamza/ain -> GlottalStop, harakat (fatha/kasra/
+# damma), tanween -> V+n, shadda -> duplicate previous phoneme, taa marbuta,
+# alef maqsura, + ASCII romanized fallback. Iterates codepoint-by-codepoint with
+# no lookahead (Rust `for &ch in &chars`). Word decoded WITHOUT ASCII-lowering.
+# ================================================================
+
+# Latin fallback for romanized Arabic. Pushes phoneme(s) for an ASCII letter.
+fn _shabda_arabic_latin(out, cp): i64 {
+    var lower = _shabda_ascii_lower(cp);
+    if (lower == 0x61) { vec_push(out, SVARA_PH_VOWEL_OPEN_A); return 0; }  # a
+    if (lower == 0x69) { vec_push(out, SVARA_PH_VOWEL_NEAR_I); return 0; }  # i
+    if (lower == 0x75) { vec_push(out, SVARA_PH_VOWEL_CUP_V); return 0; }   # u
+    if (lower == 0x62) { vec_push(out, SVARA_PH_PLOSIVE_B); return 0; }     # b
+    if (lower == 0x74) { vec_push(out, SVARA_PH_PLOSIVE_T); return 0; }     # t
+    if (lower == 0x64) { vec_push(out, SVARA_PH_PLOSIVE_D); return 0; }     # d
+    if (lower == 0x6B) { vec_push(out, SVARA_PH_PLOSIVE_K); return 0; }     # k
+    if (lower == 0x66) { vec_push(out, SVARA_PH_FRIC_F); return 0; }        # f
+    if (lower == 0x73) { vec_push(out, SVARA_PH_FRIC_S); return 0; }        # s
+    if (lower == 0x7A) { vec_push(out, SVARA_PH_FRIC_Z); return 0; }        # z
+    if (lower == 0x68) { vec_push(out, SVARA_PH_FRIC_H); return 0; }        # h
+    if (lower == 0x6C) { vec_push(out, SVARA_PH_LATERAL_L); return 0; }     # l
+    if (lower == 0x6D) { vec_push(out, SVARA_PH_NASAL_M); return 0; }       # m
+    if (lower == 0x6E) { vec_push(out, SVARA_PH_NASAL_N); return 0; }       # n
+    if (lower == 0x72) { vec_push(out, SVARA_PH_TAP_FLAP); return 0; }      # r
+    if (lower == 0x77) { vec_push(out, SVARA_PH_APPROX_W); return 0; }      # w
+    if (lower == 0x79) { vec_push(out, SVARA_PH_APPROX_J); return 0; }      # y
+    if (lower == 0x6A) { vec_push(out, SVARA_PH_AFFR_J); return 0; }        # j
+    if (lower == 0x71) { vec_push(out, SVARA_PH_PLOSIVE_K); return 0; }     # q
+    return 0;
+}
+
+# Public Arabic engine. Ports arabic_rules().
+#must_use
+fn shabda_arabic_rules(word): i64 {
+    var chars = _shabda_decode_chars(word, 0);
+    if (vec_len(chars) == 0) {
+        return vec_new();
+    }
+    var phonemes = vec_new();
+    var i = 0;
+    var n = vec_len(chars);
+    while (i < n) {
+        var ch = vec_get(chars, i);
+
+        # Consonants.
+        if (ch == 0x0628) { vec_push(phonemes, SVARA_PH_PLOSIVE_B); }       # ب
+        elif (ch == 0x062A) { vec_push(phonemes, SVARA_PH_PLOSIVE_T); }     # ت
+        elif (ch == 0x062B) { vec_push(phonemes, SVARA_PH_FRIC_TH); }       # ث
+        elif (ch == 0x062C) { vec_push(phonemes, SVARA_PH_AFFR_J); }        # ج
+        elif (ch == 0x062D) { vec_push(phonemes, SVARA_PH_FRIC_H); }        # ح /ħ/
+        elif (ch == 0x062E) { vec_push(phonemes, SVARA_PH_FRIC_H); }        # خ /x/
+        elif (ch == 0x062F) { vec_push(phonemes, SVARA_PH_PLOSIVE_D); }     # د
+        elif (ch == 0x0630) { vec_push(phonemes, SVARA_PH_FRIC_DH); }       # ذ
+        elif (ch == 0x0631) { vec_push(phonemes, SVARA_PH_TAP_FLAP); }      # ر
+        elif (ch == 0x0632) { vec_push(phonemes, SVARA_PH_FRIC_Z); }        # ز
+        elif (ch == 0x0633) { vec_push(phonemes, SVARA_PH_FRIC_S); }        # س
+        elif (ch == 0x0634) { vec_push(phonemes, SVARA_PH_FRIC_SH); }       # ش
+        elif (ch == 0x0635) { vec_push(phonemes, SVARA_PH_FRIC_S); }        # ص emphatic /s/
+        elif (ch == 0x0636) { vec_push(phonemes, SVARA_PH_PLOSIVE_D); }     # ض emphatic /d/
+        elif (ch == 0x0637) { vec_push(phonemes, SVARA_PH_PLOSIVE_T); }     # ط emphatic /t/
+        elif (ch == 0x0638) { vec_push(phonemes, SVARA_PH_FRIC_DH); }       # ظ emphatic /ð/
+        elif (ch == 0x0639) { vec_push(phonemes, SVARA_PH_GLOTTAL_STOP); }  # ع /ʕ/ -> glottal
+        elif (ch == 0x063A) { vec_push(phonemes, SVARA_PH_PLOSIVE_G); }     # غ /ɣ/
+        elif (ch == 0x0641) { vec_push(phonemes, SVARA_PH_FRIC_F); }        # ف
+        elif (ch == 0x0642) { vec_push(phonemes, SVARA_PH_PLOSIVE_K); }     # ق /q/
+        elif (ch == 0x0643) { vec_push(phonemes, SVARA_PH_PLOSIVE_K); }     # ك
+        elif (ch == 0x0644) { vec_push(phonemes, SVARA_PH_LATERAL_L); }     # ل
+        elif (ch == 0x0645) { vec_push(phonemes, SVARA_PH_NASAL_M); }       # م
+        elif (ch == 0x0646) { vec_push(phonemes, SVARA_PH_NASAL_N); }       # ن
+        elif (ch == 0x0647) { vec_push(phonemes, SVARA_PH_FRIC_H); }        # ه
+        elif (ch == 0x0648) { vec_push(phonemes, SVARA_PH_APPROX_W); }      # و
+        elif (ch == 0x064A) { vec_push(phonemes, SVARA_PH_APPROX_J); }      # ي
+        # Hamza (glottal stop): ء أ إ ؤ ئ.
+        elif (ch == 0x0621) { vec_push(phonemes, SVARA_PH_GLOTTAL_STOP); }
+        elif (ch == 0x0623) { vec_push(phonemes, SVARA_PH_GLOTTAL_STOP); }
+        elif (ch == 0x0625) { vec_push(phonemes, SVARA_PH_GLOTTAL_STOP); }
+        elif (ch == 0x0624) { vec_push(phonemes, SVARA_PH_GLOTTAL_STOP); }
+        elif (ch == 0x0626) { vec_push(phonemes, SVARA_PH_GLOTTAL_STOP); }
+        # Alef (long /aː/).
+        elif (ch == 0x0627) { vec_push(phonemes, SVARA_PH_VOWEL_OPEN_A); }  # ا
+        elif (ch == 0x0622) {                                               # آ
+            vec_push(phonemes, SVARA_PH_GLOTTAL_STOP);
+            vec_push(phonemes, SVARA_PH_VOWEL_OPEN_A);
+        }
+        # Taa marbuta.
+        elif (ch == 0x0629) { vec_push(phonemes, SVARA_PH_VOWEL_OPEN_A); }  # ة
+        # Short vowel diacritics.
+        elif (ch == 0x064E) { vec_push(phonemes, SVARA_PH_VOWEL_OPEN_A); }  # fatha /a/
+        elif (ch == 0x0650) { vec_push(phonemes, SVARA_PH_VOWEL_NEAR_I); }  # kasra /i/
+        elif (ch == 0x064F) { vec_push(phonemes, SVARA_PH_VOWEL_CUP_V); }   # damma /u/
+        # Tanween (nunation) -> V + n.
+        elif (ch == 0x064B) {
+            vec_push(phonemes, SVARA_PH_VOWEL_OPEN_A); vec_push(phonemes, SVARA_PH_NASAL_N);
+        }
+        elif (ch == 0x064D) {
+            vec_push(phonemes, SVARA_PH_VOWEL_NEAR_I); vec_push(phonemes, SVARA_PH_NASAL_N);
+        }
+        elif (ch == 0x064C) {
+            vec_push(phonemes, SVARA_PH_VOWEL_CUP_V); vec_push(phonemes, SVARA_PH_NASAL_N);
+        }
+        # Sukun (no vowel) — skip.
+        elif (ch == 0x0652) { i = i; }
+        # Shadda (gemination) — repeat the previous phoneme.
+        elif (ch == 0x0651) {
+            var pn = vec_len(phonemes);
+            if (pn > 0) {
+                vec_push(phonemes, vec_get(phonemes, pn - 1));
+            }
+        }
+        # Alef maqsura.
+        elif (ch == 0x0649) { vec_push(phonemes, SVARA_PH_VOWEL_OPEN_A); }  # ى
+        else {
+            # Latin fallback for romanized Arabic, else skip.
+            if (_shabda_rules_is_ascii_alpha(ch) == 1) {
+                _shabda_arabic_latin(phonemes, ch);
+            }
+        }
+
+        i = i + 1;
+    }
+
     return phonemes;
 }

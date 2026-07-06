@@ -1,0 +1,285 @@
+# prosody.cyr — prosody assignment: stress patterns, emphasis, rate, timing,
+# and sentence intonation.
+#
+# Ports rust-old/src/prosody.rs. Maps sentence structure and word class to
+# stress and intonation, producing svara-compatible PhonemeEvents.
+#
+# DEP POSITION: svara (PhonemeEvent ctor + accessors, phoneme class/duration,
+# Stress/Intonation consts, SVARA_PH_SILENCE) + src/error.cyr (SentenceType tags,
+# SHABDA_NO_STRESS_IDX, SHABDA_TIMING_* layout offsets) + src/syllable.cyr
+# (Syllable accessors + shabda_syllable_is_heavy). The entry file includes all of
+# those ABOVE this module. Modules never include each other.
+#
+# PhonemeEvent is immutable-by-handle in Cyrius: the Rust `event.stress = ...` /
+# `event.duration *= ...` in-place mutations are re-expressed by rebuilding the
+# event via svara_phoneme_event_new(phoneme, dur, stress) and vec_set-ing it back.
+#
+# Float parity: every Rust f32 constant is promoted to f64 (svara durations are
+# f64 bits). The f64 arithmetic/comparison intrinsics (f64_mul/f64_gt/f64_lt/
+# f64_from) are compiler builtins; clamp/max are inlined here (math.cyr is not in
+# the include set).
+#
+# NAMING: public surface is `shabda_`-prefixed; private helpers are
+# `_shabda_prosody_*` to keep the flat link namespace collision-free.
+
+# ---- Promoted f64 constants (were Rust f32) ----------------------------------
+# DEFAULT_WPM = 150.0
+var SHABDA_PROSODY_DEFAULT_WPM = 0x4062_C000_0000_0000;
+# MIN_WPM = 50.0
+var SHABDA_PROSODY_MIN_WPM = 0x4049_0000_0000_0000;
+# MAX_WPM = 300.0
+var SHABDA_PROSODY_MAX_WPM = 0x4072_C000_0000_0000;
+# MIN_CONSONANT_DURATION = 0.03
+var SHABDA_PROSODY_MIN_CONSONANT_DURATION = 0x3F9E_B851_EB85_1EB8;
+# MIN_VOWEL_DURATION = 0.05
+var SHABDA_PROSODY_MIN_VOWEL_DURATION = 0x3FA9_9999_9999_999A;
+# EMPHASIS_DURATION_SCALE = 1.3
+var SHABDA_PROSODY_EMPHASIS_DURATION_SCALE = 0x3FF4_CCCC_CCCC_CCCD;
+
+# ---- Private helpers ---------------------------------------------------------
+# True if the phoneme is a vowel or diphthong (stress-bearing).
+fn _shabda_prosody_is_vowel_like(ph): i64 {
+    var c = svara_phoneme_class(ph);
+    if (c == SVARA_CLASS_VOWEL) { return 1; }
+    if (c == SVARA_CLASS_DIPHTHONG) { return 1; }
+    return 0;
+}
+
+# f64 max(a, b) — larger of two IEEE-754 f64 bit patterns.
+fn _shabda_prosody_f64_max(a, b): i64 {
+    if (f64_gt(a, b) == 1) { return a; }
+    return b;
+}
+
+# f64 clamp(x, lo, hi).
+fn _shabda_prosody_f64_clamp(x, lo, hi): i64 {
+    if (f64_lt(x, lo) == 1) { return lo; }
+    if (f64_gt(x, hi) == 1) { return hi; }
+    return x;
+}
+
+# ---- assign_stress -----------------------------------------------------------
+# Convert a word's phoneme sequence (vec of ordinals) into PhonemeEvents with
+# stress. First vowel-like ph in a content word -> Primary, later vowel-like ->
+# Secondary, else Unstressed; function words -> all Unstressed.
+#must_use
+fn shabda_assign_stress(phonemes, is_content_word): i64 {
+    var events = vec_new();
+    var found_primary = 0;
+    var n = vec_len(phonemes);
+    var i = 0;
+    while (i < n) {
+        var ph = vec_get(phonemes, i);
+        var dur = svara_phoneme_duration(ph);
+        var stress = SVARA_STRESS_UNSTRESSED;
+        if (is_content_word == 0) {
+            stress = SVARA_STRESS_UNSTRESSED;
+        } elif ((_shabda_prosody_is_vowel_like(ph) == 1) & (found_primary == 0)) {
+            found_primary = 1;
+            stress = SVARA_STRESS_PRIMARY;
+        } elif (_shabda_prosody_is_vowel_like(ph) == 1) {
+            stress = SVARA_STRESS_SECONDARY;
+        } else {
+            stress = SVARA_STRESS_UNSTRESSED;
+        }
+        vec_push(events, svara_phoneme_event_new(ph, dur, stress));
+        i = i + 1;
+    }
+    return events;
+}
+
+# ---- assign_stress_syllabic --------------------------------------------------
+# Assign stress using syllable-weight analysis over a vec of Syllable*.
+# Monosyllable/2-syllable -> stress first; heavy penult -> penult; else
+# antepenult; function words -> none.
+#must_use
+fn shabda_assign_stress_syllabic(syllables, is_content_word): i64 {
+    var events = vec_new();
+    var len = vec_len(syllables);
+    if (len == 0) { return events; }
+
+    # Determine which syllable index gets primary stress.
+    var primary_idx = SHABDA_NO_STRESS_IDX;
+    if (is_content_word == 0) {
+        primary_idx = SHABDA_NO_STRESS_IDX;
+    } elif (len <= 2) {
+        primary_idx = 0;
+    } else {
+        var penult = len - 2;
+        if (shabda_syllable_is_heavy(vec_get(syllables, penult)) == 1) {
+            primary_idx = penult;
+        } else {
+            # Stress antepenult (third from end); Rust saturating_sub(3).
+            if (len >= 3) {
+                primary_idx = len - 3;
+            } else {
+                primary_idx = 0;
+            }
+        }
+    }
+
+    var syl_idx = 0;
+    while (syl_idx < len) {
+        var syllable = vec_get(syllables, syl_idx);
+        var syl_stress = SVARA_STRESS_UNSTRESSED;
+        if (syl_idx == primary_idx) {
+            syl_stress = SVARA_STRESS_PRIMARY;
+        } else {
+            syl_stress = SVARA_STRESS_UNSTRESSED;
+        }
+
+        # Onset: unstressed.
+        var onset = shabda_syllable_onset(syllable);
+        var on = vec_len(onset);
+        var oi = 0;
+        while (oi < on) {
+            var oph = vec_get(onset, oi);
+            var odur = svara_phoneme_duration(oph);
+            vec_push(events, svara_phoneme_event_new(oph, odur, SVARA_STRESS_UNSTRESSED));
+            oi = oi + 1;
+        }
+        # Nucleus: carries the syllable's stress.
+        var nuc = shabda_syllable_nucleus(syllable);
+        var ndur = svara_phoneme_duration(nuc);
+        vec_push(events, svara_phoneme_event_new(nuc, ndur, syl_stress));
+        # Coda: unstressed.
+        var coda = shabda_syllable_coda(syllable);
+        var cn = vec_len(coda);
+        var ci = 0;
+        while (ci < cn) {
+            var cph = vec_get(coda, ci);
+            var cdur = svara_phoneme_duration(cph);
+            vec_push(events, svara_phoneme_event_new(cph, cdur, SVARA_STRESS_UNSTRESSED));
+            ci = ci + 1;
+        }
+
+        syl_idx = syl_idx + 1;
+    }
+
+    return events;
+}
+
+# ---- is_content_word ---------------------------------------------------------
+# 1 if `word` (cstr) is a content word, 0 if it is one of the ~40 English
+# function words. Compares the ASCII-lowercased word against the function set.
+#must_use
+fn shabda_is_content_word(word): i64 {
+    var w = str_lower_cstr(word);
+    if (streq(w, "a") == 1) { return 0; }
+    if (streq(w, "an") == 1) { return 0; }
+    if (streq(w, "the") == 1) { return 0; }
+    if (streq(w, "is") == 1) { return 0; }
+    if (streq(w, "am") == 1) { return 0; }
+    if (streq(w, "are") == 1) { return 0; }
+    if (streq(w, "was") == 1) { return 0; }
+    if (streq(w, "were") == 1) { return 0; }
+    if (streq(w, "be") == 1) { return 0; }
+    if (streq(w, "been") == 1) { return 0; }
+    if (streq(w, "to") == 1) { return 0; }
+    if (streq(w, "of") == 1) { return 0; }
+    if (streq(w, "in") == 1) { return 0; }
+    if (streq(w, "on") == 1) { return 0; }
+    if (streq(w, "at") == 1) { return 0; }
+    if (streq(w, "by") == 1) { return 0; }
+    if (streq(w, "for") == 1) { return 0; }
+    if (streq(w, "and") == 1) { return 0; }
+    if (streq(w, "or") == 1) { return 0; }
+    if (streq(w, "but") == 1) { return 0; }
+    if (streq(w, "if") == 1) { return 0; }
+    if (streq(w, "it") == 1) { return 0; }
+    if (streq(w, "he") == 1) { return 0; }
+    if (streq(w, "she") == 1) { return 0; }
+    if (streq(w, "we") == 1) { return 0; }
+    if (streq(w, "they") == 1) { return 0; }
+    if (streq(w, "that") == 1) { return 0; }
+    if (streq(w, "this") == 1) { return 0; }
+    if (streq(w, "with") == 1) { return 0; }
+    if (streq(w, "not") == 1) { return 0; }
+    if (streq(w, "do") == 1) { return 0; }
+    if (streq(w, "did") == 1) { return 0; }
+    if (streq(w, "has") == 1) { return 0; }
+    if (streq(w, "had") == 1) { return 0; }
+    if (streq(w, "have") == 1) { return 0; }
+    return 1;
+}
+
+# ---- apply_emphasis ----------------------------------------------------------
+# Boost every vowel-like event to Primary stress and scale its duration by 1.3x.
+# Rebuilds each mutated event in place (immutable-by-handle).
+fn shabda_apply_emphasis(events): i64 {
+    var n = vec_len(events);
+    var i = 0;
+    while (i < n) {
+        var e = vec_get(events, i);
+        var ph = SvPhonemeEvent_phoneme(e);
+        if (_shabda_prosody_is_vowel_like(ph) == 1) {
+            var dur = f64_mul(SvPhonemeEvent_duration(e), SHABDA_PROSODY_EMPHASIS_DURATION_SCALE);
+            vec_set(events, i, svara_phoneme_event_new(ph, dur, SVARA_STRESS_PRIMARY));
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+# ---- apply_rate --------------------------------------------------------------
+# Scale event durations to a target speaking rate (WPM clamped to 50..300).
+# scale = 150/clamped; enforce per-class minimum durations.
+fn shabda_apply_rate(events, target_wpm): i64 {
+    var clamped_wpm = _shabda_prosody_f64_clamp(target_wpm, SHABDA_PROSODY_MIN_WPM, SHABDA_PROSODY_MAX_WPM);
+    var scale = f64_div(SHABDA_PROSODY_DEFAULT_WPM, clamped_wpm);
+
+    var n = vec_len(events);
+    var i = 0;
+    while (i < n) {
+        var e = vec_get(events, i);
+        var ph = SvPhonemeEvent_phoneme(e);
+        var scaled = f64_mul(SvPhonemeEvent_duration(e), scale);
+        var min = SHABDA_PROSODY_MIN_CONSONANT_DURATION;
+        if (_shabda_prosody_is_vowel_like(ph) == 1) {
+            min = SHABDA_PROSODY_MIN_VOWEL_DURATION;
+        }
+        var dur = _shabda_prosody_f64_max(scaled, min);
+        vec_set(events, i, svara_phoneme_event_new(ph, dur, SvPhonemeEvent_stress(e)));
+        i = i + 1;
+    }
+    return 0;
+}
+
+# ---- apply_timing ------------------------------------------------------------
+# Scale each event's duration by a per-category factor from a TimingProfile:
+# silence -> pause_scale, vowel-like -> vowel_scale, else consonant_scale. The
+# profile stores three f64-bit scales at the SHABDA_TIMING_* offsets.
+fn shabda_apply_timing(events, profile): i64 {
+    var vowel_scale = load64(profile + SHABDA_TIMING_VOWEL);
+    var consonant_scale = load64(profile + SHABDA_TIMING_CONSONANT);
+    var pause_scale = load64(profile + SHABDA_TIMING_PAUSE);
+
+    var n = vec_len(events);
+    var i = 0;
+    while (i < n) {
+        var e = vec_get(events, i);
+        var ph = SvPhonemeEvent_phoneme(e);
+        var scale = consonant_scale;
+        if (ph == SVARA_PH_SILENCE) {
+            scale = pause_scale;
+        } elif (_shabda_prosody_is_vowel_like(ph) == 1) {
+            scale = vowel_scale;
+        } else {
+            scale = consonant_scale;
+        }
+        var dur = f64_mul(SvPhonemeEvent_duration(e), scale);
+        vec_set(events, i, svara_phoneme_event_new(ph, dur, SvPhonemeEvent_stress(e)));
+        i = i + 1;
+    }
+    return 0;
+}
+
+# ---- sentence_intonation -----------------------------------------------------
+# Map a SentenceType tag to a svara IntonationPattern.
+#must_use
+fn shabda_sentence_intonation(sentence_type): i64 {
+    if (sentence_type == SHABDA_STYPE_STATEMENT) { return SVARA_INTONATION_DECLARATIVE; }
+    if (sentence_type == SHABDA_STYPE_QUESTION) { return SVARA_INTONATION_INTERROGATIVE; }
+    if (sentence_type == SHABDA_STYPE_EXCLAMATION) { return SVARA_INTONATION_EXCLAMATORY; }
+    return SVARA_INTONATION_DECLARATIVE;
+}

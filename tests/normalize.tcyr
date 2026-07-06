@@ -31,6 +31,10 @@ assert_streq(shabda_expand_numbers("3.14"), "three point one four", "expand deci
 assert_streq(shabda_expand_numbers("-5"), "negative five", "expand negative");
 assert_streq(shabda_expand_numbers("I have 42 cats"), "I have forty two cats", "expand in sentence");
 assert_streq(shabda_expand_numbers("no numbers here"), "no numbers here", "expand no numbers");
+# large integers: parse::<u64> path up to i64::MAX (matches Rust number_to_words).
+assert_streq(shabda_expand_numbers("1000000"), "one million", "expand one million");
+assert_streq(shabda_expand_numbers("1000000000"), "one billion", "expand one billion");
+assert_streq(shabda_expand_numbers("9223372036854775807"), "nine billion two hundred twenty three million three hundred seventy two thousand thirty six billion eight hundred fifty four million seven hundred seventy five thousand eight hundred seven", "expand i64::MAX");
 
 # ================================================================
 test_group("normalize with numbers + pauses");

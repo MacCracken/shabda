@@ -1,0 +1,198 @@
+# prosody.tcyr — tests for src/prosody.cyr (ports rust-old/src/prosody.rs).
+#
+# rust-old/src/prosody.rs ships no #[test] module, so these tests are the parity
+# checks named in the port spec, tracing the Rust algorithm by hand and pinning
+# the observable behaviour (stress assignment, content-word set, emphasis, rate,
+# timing, intonation mapping).
+
+include "lib/hisab.cyr"
+include "lib/goonj.cyr"
+include "lib/naad.cyr"
+include "lib/svara.cyr"
+include "src/error.cyr"
+include "src/syllable.cyr"
+include "src/prosody.cyr"
+
+alloc_init();
+
+# ---- local helpers -----------------------------------------------------------
+fn _mk1(a): i64 { var v = vec_new(); vec_push(v, a); return v; }
+fn _mk2(a, b): i64 { var v = vec_new(); vec_push(v, a); vec_push(v, b); return v; }
+fn _mk3(a, b, c): i64 {
+    var v = vec_new(); vec_push(v, a); vec_push(v, b); vec_push(v, c); return v;
+}
+
+# Build a TimingProfile block: three f64-bit scale factors.
+fn _mk_profile(vowel, consonant, pause): i64 {
+    var p = alloc(SHABDA_TIMING_SIZE);
+    store64(p + SHABDA_TIMING_VOWEL, vowel);
+    store64(p + SHABDA_TIMING_CONSONANT, consonant);
+    store64(p + SHABDA_TIMING_PAUSE, pause);
+    return p;
+}
+
+# f64 bit patterns used in assertions.
+var F64_0_12 = 0x3FBEB851EB851EB8;   # 0.12  (vowel duration)
+var F64_0_08 = 0x3FB47AE147AE147B;   # 0.08  (plosive duration)
+var F64_0_24 = 0x3FCEB851EB851EB8;   # 0.24  (0.12 * 2.0)
+var F64_0_18 = 0x3FC70A3D70A3D70A;   # 0.18  (1.5 * 0.12 threshold)
+var F64_0_156 = 0x3FC3F7CED916872B;  # 0.156 (0.12 * 1.3)
+var F64_2_0 = 0x4000000000000000;    # 2.0
+var F64_75 = 0x4052C00000000000;     # 75.0
+var F64_1_0 = 0x3FF0000000000000;    # 1.0
+
+# ================================================================
+# is_content_word: function word "the" -> 0, content word "cat" -> 1.
+test_group("is_content_word");
+assert_eq(shabda_is_content_word("the"), 0, "'the' is a function word");
+assert_eq(shabda_is_content_word("cat"), 1, "'cat' is a content word");
+# case-insensitivity: "The" lowercases to "the".
+assert_eq(shabda_is_content_word("The"), 0, "'The' lowercases to function word");
+# a sampling of the rest of the ~40-word set.
+assert_eq(shabda_is_content_word("have"), 0, "'have' is a function word");
+assert_eq(shabda_is_content_word("with"), 0, "'with' is a function word");
+assert_eq(shabda_is_content_word("dog"), 1, "'dog' is a content word");
+
+# ================================================================
+# assign_stress: content word, first vowel-like ph -> Primary, later vowel ->
+# Secondary, consonants -> Unstressed. "cat" = k æ t.
+test_group("assign_stress content word");
+var cat = _mk3(SVARA_PH_PLOSIVE_K, SVARA_PH_VOWEL_ASH, SVARA_PH_PLOSIVE_T);
+var cat_ev = shabda_assign_stress(cat, 1);
+assert_eq(vec_len(cat_ev), 3, "cat -> 3 events");
+assert_eq(SvPhonemeEvent_stress(vec_get(cat_ev, 0)), SVARA_STRESS_UNSTRESSED, "k unstressed");
+assert_eq(SvPhonemeEvent_stress(vec_get(cat_ev, 1)), SVARA_STRESS_PRIMARY, "first vowel primary");
+assert_eq(SvPhonemeEvent_stress(vec_get(cat_ev, 2)), SVARA_STRESS_UNSTRESSED, "t unstressed");
+assert_eq(SvPhonemeEvent_phoneme(vec_get(cat_ev, 1)), SVARA_PH_VOWEL_ASH, "event1 phoneme = Ash");
+assert_eq(f64_eq(SvPhonemeEvent_duration(vec_get(cat_ev, 1)), F64_0_12), 1, "vowel dur = 0.12");
+
+# second vowel gets Secondary: "aa" = æ æ -> primary then secondary.
+var twovow = _mk2(SVARA_PH_VOWEL_ASH, SVARA_PH_VOWEL_ASH);
+var tv_ev = shabda_assign_stress(twovow, 1);
+assert_eq(SvPhonemeEvent_stress(vec_get(tv_ev, 0)), SVARA_STRESS_PRIMARY, "first vowel primary");
+assert_eq(SvPhonemeEvent_stress(vec_get(tv_ev, 1)), SVARA_STRESS_SECONDARY, "second vowel secondary");
+
+# function word: everything unstressed.
+var fw_ev = shabda_assign_stress(cat, 0);
+assert_eq(SvPhonemeEvent_stress(vec_get(fw_ev, 0)), SVARA_STRESS_UNSTRESSED, "fw k unstressed");
+assert_eq(SvPhonemeEvent_stress(vec_get(fw_ev, 1)), SVARA_STRESS_UNSTRESSED, "fw vowel unstressed");
+assert_eq(SvPhonemeEvent_stress(vec_get(fw_ev, 2)), SVARA_STRESS_UNSTRESSED, "fw t unstressed");
+
+# ================================================================
+# assign_stress_syllabic: empty -> empty; monosyllable -> nucleus Primary.
+test_group("assign_stress_syllabic");
+var empty_syls = vec_new();
+assert_eq(vec_len(shabda_assign_stress_syllabic(empty_syls, 1)), 0, "empty syllables -> empty events");
+
+# "cat" as a single syllable: onset [k], nucleus æ, coda [t].
+var cat_syl = shabda_syllable_new(_mk1(SVARA_PH_PLOSIVE_K), SVARA_PH_VOWEL_ASH, _mk1(SVARA_PH_PLOSIVE_T));
+var cat_syls = _mk1(cat_syl);
+var syl_ev = shabda_assign_stress_syllabic(cat_syls, 1);
+assert_eq(vec_len(syl_ev), 3, "cat syllable -> 3 events");
+assert_eq(SvPhonemeEvent_stress(vec_get(syl_ev, 0)), SVARA_STRESS_UNSTRESSED, "onset k unstressed");
+assert_eq(SvPhonemeEvent_stress(vec_get(syl_ev, 1)), SVARA_STRESS_PRIMARY, "nucleus primary (monosyllable)");
+assert_eq(SvPhonemeEvent_stress(vec_get(syl_ev, 2)), SVARA_STRESS_UNSTRESSED, "coda t unstressed");
+
+# function word syllable: nucleus not stressed (primary_idx = NO_STRESS_IDX).
+var fw_syl_ev = shabda_assign_stress_syllabic(cat_syls, 0);
+assert_eq(SvPhonemeEvent_stress(vec_get(fw_syl_ev, 1)), SVARA_STRESS_UNSTRESSED, "fw nucleus unstressed");
+
+# 2-syllable content word: stress the FIRST syllable's nucleus (len <= 2 -> idx 0).
+# Each syllable = empty onset, vowel nucleus, empty coda (light, open).
+var s2a = shabda_syllable_new(vec_new(), SVARA_PH_VOWEL_ASH, vec_new());
+var s2b = shabda_syllable_new(vec_new(), SVARA_PH_VOWEL_E, vec_new());
+var two_syls = _mk2(s2a, s2b);
+var two_ev = shabda_assign_stress_syllabic(two_syls, 1);
+assert_eq(vec_len(two_ev), 2, "2 light syllables -> 2 nucleus events");
+assert_eq(SvPhonemeEvent_stress(vec_get(two_ev, 0)), SVARA_STRESS_PRIMARY, "2-syl: first nucleus primary");
+assert_eq(SvPhonemeEvent_stress(vec_get(two_ev, 1)), SVARA_STRESS_UNSTRESSED, "2-syl: second nucleus unstressed");
+
+# 3-syllable content word, LIGHT penult -> stress antepenult (idx 0, saturating_sub(3)).
+# syl0 light, syl1 (penult) light-open, syl2 (final) light.
+var s3a = shabda_syllable_new(vec_new(), SVARA_PH_VOWEL_ASH, vec_new());
+var s3b = shabda_syllable_new(vec_new(), SVARA_PH_VOWEL_E, vec_new());
+var s3c = shabda_syllable_new(vec_new(), SVARA_PH_VOWEL_I, vec_new());
+var three_light = _mk3(s3a, s3b, s3c);
+var tl_ev = shabda_assign_stress_syllabic(three_light, 1);
+assert_eq(vec_len(tl_ev), 3, "3 light syllables -> 3 nucleus events");
+assert_eq(SvPhonemeEvent_stress(vec_get(tl_ev, 0)), SVARA_STRESS_PRIMARY, "3-syl light penult: antepenult (idx0) primary");
+assert_eq(SvPhonemeEvent_stress(vec_get(tl_ev, 1)), SVARA_STRESS_UNSTRESSED, "3-syl light penult: penult unstressed");
+assert_eq(SvPhonemeEvent_stress(vec_get(tl_ev, 2)), SVARA_STRESS_UNSTRESSED, "3-syl light penult: final unstressed");
+
+# 3-syllable content word, HEAVY penult (non-empty coda) -> stress the penult (idx 1).
+var h3a = shabda_syllable_new(vec_new(), SVARA_PH_VOWEL_ASH, vec_new());
+var h3b = shabda_syllable_new(vec_new(), SVARA_PH_VOWEL_E, _mk1(SVARA_PH_PLOSIVE_T));
+var h3c = shabda_syllable_new(vec_new(), SVARA_PH_VOWEL_I, vec_new());
+var three_heavy = _mk3(h3a, h3b, h3c);
+var th_ev = shabda_assign_stress_syllabic(three_heavy, 1);
+# penult carries a coda [t], so nucleus is event idx 1, coda event idx 2, final event idx 3.
+assert_eq(vec_len(th_ev), 4, "3-syl heavy penult -> 4 events (penult has coda)");
+assert_eq(SvPhonemeEvent_stress(vec_get(th_ev, 0)), SVARA_STRESS_UNSTRESSED, "3-syl heavy penult: antepenult unstressed");
+assert_eq(SvPhonemeEvent_stress(vec_get(th_ev, 1)), SVARA_STRESS_PRIMARY, "3-syl heavy penult: penult nucleus primary");
+assert_eq(SvPhonemeEvent_stress(vec_get(th_ev, 2)), SVARA_STRESS_UNSTRESSED, "3-syl heavy penult: penult coda unstressed");
+
+# HEAVY penult via diphthong nucleus (no coda) also attracts stress to penult.
+var d3a = shabda_syllable_new(vec_new(), SVARA_PH_VOWEL_ASH, vec_new());
+var d3b = shabda_syllable_new(vec_new(), SVARA_PH_DIPH_AI, vec_new());
+var d3c = shabda_syllable_new(vec_new(), SVARA_PH_VOWEL_I, vec_new());
+var three_diph = _mk3(d3a, d3b, d3c);
+var td_ev = shabda_assign_stress_syllabic(three_diph, 1);
+assert_eq(SvPhonemeEvent_stress(vec_get(td_ev, 0)), SVARA_STRESS_UNSTRESSED, "3-syl diph penult: antepenult unstressed");
+assert_eq(SvPhonemeEvent_stress(vec_get(td_ev, 1)), SVARA_STRESS_PRIMARY, "3-syl diph penult: penult (diphthong) primary");
+
+# ================================================================
+# apply_emphasis: vowels -> Primary stress + 1.3x duration; consonants untouched.
+test_group("apply_emphasis");
+var emp = shabda_assign_stress(cat, 0);   # start all-unstressed
+shabda_apply_emphasis(emp);
+assert_eq(SvPhonemeEvent_stress(vec_get(emp, 0)), SVARA_STRESS_UNSTRESSED, "emp consonant unchanged");
+assert_eq(SvPhonemeEvent_stress(vec_get(emp, 1)), SVARA_STRESS_PRIMARY, "emp vowel -> primary");
+assert_eq(f64_eq(SvPhonemeEvent_duration(vec_get(emp, 1)), F64_0_156), 1, "emp vowel dur = 0.156");
+# consonant duration unchanged (plosive 0.08).
+assert_eq(f64_eq(SvPhonemeEvent_duration(vec_get(emp, 0)), F64_0_08), 1, "emp consonant dur unchanged");
+
+# ================================================================
+# apply_rate: 75 wpm -> scale 2.0; vowel dur doubles to 0.24 (> 1.5x = 0.18).
+test_group("apply_rate");
+var rate_ev = shabda_assign_stress(cat, 1);
+shabda_apply_rate(rate_ev, F64_75);
+assert_eq(f64_eq(SvPhonemeEvent_duration(vec_get(rate_ev, 1)), F64_0_24), 1, "vowel dur doubled to 0.24");
+assert_eq(f64_gt(SvPhonemeEvent_duration(vec_get(rate_ev, 1)), F64_0_18), 1, "vowel dur > 1.5x original");
+# stress preserved through rate scaling.
+assert_eq(SvPhonemeEvent_stress(vec_get(rate_ev, 1)), SVARA_STRESS_PRIMARY, "rate preserves stress");
+
+# low WPM clamps up to MIN_WPM (50): 10 wpm -> clamp 50 -> scale 150/50 = 3.0.
+# vowel 0.12 * 3.0 = 0.36 (>> vowel min 0.05, no floor).
+var F64_10 = 0x4024000000000000;   # 10.0
+var F64_0_36 = 0x3FD70A3D70A3D70A;  # 0.36 (0.12 * 3.0)
+var lowrate_ev = shabda_assign_stress(cat, 1);
+shabda_apply_rate(lowrate_ev, F64_10);
+assert_eq(f64_eq(SvPhonemeEvent_duration(vec_get(lowrate_ev, 1)), F64_0_36), 1, "10wpm clamps to 50 -> vowel dur 0.36");
+
+# ================================================================
+# apply_timing: vowel scale 2.0 -> vowel dur doubled; consonant scale 1.0 keeps.
+test_group("apply_timing");
+var prof = _mk_profile(F64_2_0, F64_1_0, F64_1_0);
+var tim_ev = shabda_assign_stress(cat, 1);
+shabda_apply_timing(tim_ev, prof);
+assert_eq(f64_eq(SvPhonemeEvent_duration(vec_get(tim_ev, 1)), F64_0_24), 1, "timing vowel dur doubled");
+assert_eq(f64_eq(SvPhonemeEvent_duration(vec_get(tim_ev, 0)), F64_0_08), 1, "timing consonant unchanged (scale 1)");
+
+# silence uses pause scale: a lone silence event scaled by pause 2.0.
+var sil = _mk1(SVARA_PH_SILENCE);
+var sil_ev = shabda_assign_stress(sil, 1);
+var sil_dur0 = SvPhonemeEvent_duration(vec_get(sil_ev, 0));
+var prof2 = _mk_profile(F64_1_0, F64_1_0, F64_2_0);
+shabda_apply_timing(sil_ev, prof2);
+assert_eq(f64_eq(SvPhonemeEvent_duration(vec_get(sil_ev, 0)), f64_mul(sil_dur0, F64_2_0)), 1, "silence uses pause scale");
+
+# ================================================================
+# sentence_intonation: Statement->Declarative, Question->Interrogative,
+# Exclamation->Exclamatory.
+test_group("sentence_intonation");
+assert_eq(shabda_sentence_intonation(SHABDA_STYPE_STATEMENT), SVARA_INTONATION_DECLARATIVE, "statement -> declarative");
+assert_eq(shabda_sentence_intonation(SHABDA_STYPE_QUESTION), SVARA_INTONATION_INTERROGATIVE, "question -> interrogative");
+assert_eq(shabda_sentence_intonation(SHABDA_STYPE_EXCLAMATION), SVARA_INTONATION_EXCLAMATORY, "exclamation -> exclamatory");
+
+var rc = assert_summary();
+syscall(60, rc);

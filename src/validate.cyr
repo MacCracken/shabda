@@ -1,0 +1,440 @@
+# validate.cyr — phoneme inventory + phonotactic validation via varna.
+#
+# Ports rust-old/src/validate.rs. In Rust the whole module is
+# #[cfg(feature = "varna")]; here it is compiled UNCONDITIONALLY (varna is a
+# hard dep of the Cyrius port, mirroring shabdakosh's always-on inventory).
+#
+# Verifies that phoneme output from the G2P rules is valid for a target
+# language's phoneme inventory as defined by varna. Every IPA string below MUST
+# match the Rust oracle byte-for-byte — downstream tests assert exact strings.
+#
+# DEP POSITION: svara + varna. The entry file (tests/validate.tcyr / main.cyr)
+# includes lib/svara.cyr (SVARA_PH_* ordinals + SVARA_CLASS_* + phoneme class
+# query), lib/varna.cyr (phoneme_english/… inventories, phoneme_has,
+# phonotactics_english + max_onset/max_coda) and src/error.cyr (SHABDA_LANG_*,
+# SHABDA_PH_NONE) ABOVE this module. Modules never include each other.
+#
+# A svara Phoneme is an i64 ordinal (0..SVARA_PH_SILENCE). Rust's Option::None
+# on an IPA lookup becomes the sentinel 0 (a null cstr pointer) — a phoneme with
+# no IPA in the given inventory returns 0. Report Strings become cstr vecs.
+#
+# NAMING: public surface is `shabda_`-prefixed; private helpers are
+# `_shabda_validate_<name>` (flat link namespace, avoids duplicate-fn clashes).
+
+# ================================================================
+# Phoneme -> &'static str IPA tables. Six of them, one per language. Each is an
+# if-chain over the svara phoneme ordinal returning a cstring; a phoneme with no
+# single-IPA equivalent (Silence, inventory gaps) returns 0 (== Rust None).
+# ================================================================
+
+# English (was `phoneme_to_ipa`). Returns 0 for Silence and for the four
+# phonemes valid in English but absent from varna 1.0's inventory (DiphthongAI,
+# DiphthongAU, DiphthongOI, VowelBird) — see VARNA_INVENTORY_GAPS below.
+#must_use
+fn shabda_phoneme_to_ipa(phoneme): cstring {
+    # Vowels
+    if (phoneme == SVARA_PH_VOWEL_A)       { return "ɑː"; }
+    if (phoneme == SVARA_PH_VOWEL_E)       { return "iː"; }
+    if (phoneme == SVARA_PH_VOWEL_I)       { return "ɪ"; }
+    if (phoneme == SVARA_PH_VOWEL_O)       { return "oʊ"; }
+    if (phoneme == SVARA_PH_VOWEL_U)       { return "uː"; }
+    if (phoneme == SVARA_PH_VOWEL_SCHWA)   { return "ə"; }
+    if (phoneme == SVARA_PH_VOWEL_OPEN_O)  { return "ɔː"; }
+    if (phoneme == SVARA_PH_VOWEL_ASH)     { return "æ"; }
+    if (phoneme == SVARA_PH_VOWEL_NEAR_I)  { return "ɪ"; }
+    if (phoneme == SVARA_PH_VOWEL_NEAR_U)  { return "ʊ"; }
+    if (phoneme == SVARA_PH_VOWEL_OPEN_A)  { return "ɑː"; }
+    if (phoneme == SVARA_PH_VOWEL_OPEN_E)  { return "ɛ"; }
+    if (phoneme == SVARA_PH_VOWEL_CUP_V)   { return "ʌ"; }
+    if (phoneme == SVARA_PH_VOWEL_LONG_I)  { return "iː"; }
+    # NURSE vowel (ɜː) — valid English, not yet in varna 1.0 inventory  #skip-lint
+    if (phoneme == SVARA_PH_VOWEL_BIRD)    { return 0; }
+    # Diphthongs present in varna's English inventory
+    if (phoneme == SVARA_PH_DIPH_EI)       { return "eɪ"; }
+    if (phoneme == SVARA_PH_DIPH_OU)       { return "oʊ"; }
+    # Diphthongs valid in English but not yet in varna 1.0 inventory  #skip-lint
+    if (phoneme == SVARA_PH_DIPH_AI)       { return 0; }
+    if (phoneme == SVARA_PH_DIPH_AU)       { return 0; }
+    if (phoneme == SVARA_PH_DIPH_OI)       { return 0; }
+    # Plosives
+    if (phoneme == SVARA_PH_PLOSIVE_P)     { return "p"; }
+    if (phoneme == SVARA_PH_PLOSIVE_B)     { return "b"; }
+    if (phoneme == SVARA_PH_PLOSIVE_T)     { return "t"; }
+    if (phoneme == SVARA_PH_PLOSIVE_D)     { return "d"; }
+    if (phoneme == SVARA_PH_PLOSIVE_K)     { return "k"; }
+    if (phoneme == SVARA_PH_PLOSIVE_G)     { return "ɡ"; }
+    # Fricatives
+    if (phoneme == SVARA_PH_FRIC_F)        { return "f"; }
+    if (phoneme == SVARA_PH_FRIC_V)        { return "v"; }
+    if (phoneme == SVARA_PH_FRIC_S)        { return "s"; }
+    if (phoneme == SVARA_PH_FRIC_Z)        { return "z"; }
+    if (phoneme == SVARA_PH_FRIC_SH)       { return "ʃ"; }
+    if (phoneme == SVARA_PH_FRIC_ZH)       { return "ʒ"; }
+    if (phoneme == SVARA_PH_FRIC_TH)       { return "θ"; }
+    if (phoneme == SVARA_PH_FRIC_DH)       { return "ð"; }
+    if (phoneme == SVARA_PH_FRIC_H)        { return "h"; }
+    # Nasals
+    if (phoneme == SVARA_PH_NASAL_M)       { return "m"; }
+    if (phoneme == SVARA_PH_NASAL_N)       { return "n"; }
+    if (phoneme == SVARA_PH_NASAL_NG)      { return "ŋ"; }
+    # Affricates
+    if (phoneme == SVARA_PH_AFFR_CH)       { return "t͡ʃ"; }
+    if (phoneme == SVARA_PH_AFFR_J)        { return "d͡ʒ"; }
+    # Approximants & lateral
+    if (phoneme == SVARA_PH_APPROX_R)      { return "ɹ"; }
+    if (phoneme == SVARA_PH_APPROX_W)      { return "w"; }
+    if (phoneme == SVARA_PH_APPROX_J)      { return "j"; }
+    if (phoneme == SVARA_PH_LATERAL_L)     { return "l"; }
+    # Not in English inventory (but do have an IPA in the mapping)
+    if (phoneme == SVARA_PH_GLOTTAL_STOP)  { return "ʔ"; }
+    if (phoneme == SVARA_PH_TAP_FLAP)      { return "ɾ"; }
+    if (phoneme == SVARA_PH_SILENCE)       { return 0; }
+    # #[non_exhaustive] fallback (Rust `_ => None`).
+    return 0;
+}
+
+# Spanish (was `spanish_phoneme_to_ipa`).
+#must_use
+fn shabda_spanish_phoneme_to_ipa(phoneme): cstring {
+    # Spanish vowels (5 pure vowels)
+    if (phoneme == SVARA_PH_VOWEL_OPEN_A)  { return "a"; }
+    if (phoneme == SVARA_PH_VOWEL_OPEN_E)  { return "e"; }
+    if (phoneme == SVARA_PH_VOWEL_NEAR_I)  { return "i"; }
+    if (phoneme == SVARA_PH_VOWEL_O)       { return "o"; }
+    if (phoneme == SVARA_PH_VOWEL_CUP_V)   { return "u"; }
+    # Plosives
+    if (phoneme == SVARA_PH_PLOSIVE_P)     { return "p"; }
+    if (phoneme == SVARA_PH_PLOSIVE_B)     { return "b"; }
+    if (phoneme == SVARA_PH_PLOSIVE_T)     { return "t"; }
+    if (phoneme == SVARA_PH_PLOSIVE_D)     { return "d"; }
+    if (phoneme == SVARA_PH_PLOSIVE_K)     { return "k"; }
+    if (phoneme == SVARA_PH_PLOSIVE_G)     { return "ɡ"; }
+    # Fricatives
+    if (phoneme == SVARA_PH_FRIC_F)        { return "f"; }
+    if (phoneme == SVARA_PH_FRIC_TH)       { return "θ"; }
+    if (phoneme == SVARA_PH_FRIC_S)        { return "s"; }
+    if (phoneme == SVARA_PH_FRIC_H)        { return "x"; }   # Spanish /x/ (jota)
+    # Nasals
+    if (phoneme == SVARA_PH_NASAL_M)       { return "m"; }
+    if (phoneme == SVARA_PH_NASAL_N)       { return "n"; }
+    if (phoneme == SVARA_PH_NASAL_NG)      { return "ɲ"; }   # ñ -> palatal nasal
+    # Liquids & approximants
+    if (phoneme == SVARA_PH_LATERAL_L)     { return "l"; }
+    if (phoneme == SVARA_PH_TAP_FLAP)      { return "r"; }   # Spanish tap
+    if (phoneme == SVARA_PH_APPROX_R)      { return "rr"; }  # Spanish trill
+    if (phoneme == SVARA_PH_APPROX_J)      { return "j"; }
+    if (phoneme == SVARA_PH_APPROX_W)      { return "w"; }
+    # Affricate
+    if (phoneme == SVARA_PH_AFFR_CH)       { return "t͡ʃ"; }
+    # No IPA in Spanish
+    if (phoneme == SVARA_PH_SILENCE)       { return 0; }
+    return 0;
+}
+
+# German (was `german_phoneme_to_ipa`).
+#must_use
+fn shabda_german_phoneme_to_ipa(phoneme): cstring {
+    # Vowels (short)
+    if (phoneme == SVARA_PH_VOWEL_NEAR_I)  { return "ɪ"; }
+    if (phoneme == SVARA_PH_VOWEL_OPEN_E)  { return "ɛ"; }
+    if (phoneme == SVARA_PH_VOWEL_OPEN_A)  { return "a"; }
+    if (phoneme == SVARA_PH_VOWEL_SCHWA)   { return "ə"; }
+    # Vowels (long)
+    if (phoneme == SVARA_PH_VOWEL_E)       { return "iː"; }
+    if (phoneme == SVARA_PH_VOWEL_O)       { return "oː"; }
+    if (phoneme == SVARA_PH_VOWEL_U)       { return "uː"; }
+    if (phoneme == SVARA_PH_VOWEL_ASH)     { return "aː"; }
+    # Plosives
+    if (phoneme == SVARA_PH_PLOSIVE_P)     { return "p"; }
+    if (phoneme == SVARA_PH_PLOSIVE_B)     { return "b"; }
+    if (phoneme == SVARA_PH_PLOSIVE_T)     { return "t"; }
+    if (phoneme == SVARA_PH_PLOSIVE_D)     { return "d"; }
+    if (phoneme == SVARA_PH_PLOSIVE_K)     { return "k"; }
+    if (phoneme == SVARA_PH_PLOSIVE_G)     { return "ɡ"; }
+    # Fricatives
+    if (phoneme == SVARA_PH_FRIC_F)        { return "f"; }
+    if (phoneme == SVARA_PH_FRIC_V)        { return "v"; }
+    if (phoneme == SVARA_PH_FRIC_S)        { return "s"; }
+    if (phoneme == SVARA_PH_FRIC_Z)        { return "z"; }
+    if (phoneme == SVARA_PH_FRIC_SH)       { return "ʃ"; }
+    if (phoneme == SVARA_PH_FRIC_H)        { return "h"; }
+    # Nasals
+    if (phoneme == SVARA_PH_NASAL_M)       { return "m"; }
+    if (phoneme == SVARA_PH_NASAL_N)       { return "n"; }
+    if (phoneme == SVARA_PH_NASAL_NG)      { return "ŋ"; }
+    # Affricates
+    if (phoneme == SVARA_PH_AFFR_CH)       { return "t͡ʃ"; }
+    # Approximants & lateral
+    if (phoneme == SVARA_PH_APPROX_J)      { return "j"; }
+    if (phoneme == SVARA_PH_LATERAL_L)     { return "l"; }
+    if (phoneme == SVARA_PH_APPROX_R)      { return "ʁ"; }
+    # Not mapped
+    if (phoneme == SVARA_PH_SILENCE)       { return 0; }
+    return 0;
+}
+
+# Hindi (was `hindi_phoneme_to_ipa`).
+#must_use
+fn shabda_hindi_phoneme_to_ipa(phoneme): cstring {
+    # Vowels
+    if (phoneme == SVARA_PH_VOWEL_SCHWA)   { return "ə"; }
+    if (phoneme == SVARA_PH_VOWEL_NEAR_I)  { return "i"; }
+    if (phoneme == SVARA_PH_VOWEL_E)       { return "iː"; }
+    if (phoneme == SVARA_PH_VOWEL_CUP_V)   { return "u"; }
+    if (phoneme == SVARA_PH_VOWEL_U)       { return "uː"; }
+    if (phoneme == SVARA_PH_VOWEL_OPEN_E)  { return "e"; }
+    if (phoneme == SVARA_PH_VOWEL_O)       { return "o"; }
+    if (phoneme == SVARA_PH_VOWEL_OPEN_A)  { return "ɛː"; }
+    if (phoneme == SVARA_PH_VOWEL_OPEN_O)  { return "ɔː"; }
+    # Plosives (unaspirated only)
+    if (phoneme == SVARA_PH_PLOSIVE_P)     { return "p"; }
+    if (phoneme == SVARA_PH_PLOSIVE_B)     { return "b"; }
+    if (phoneme == SVARA_PH_PLOSIVE_T)     { return "t̪"; }
+    if (phoneme == SVARA_PH_PLOSIVE_D)     { return "d̪"; }
+    if (phoneme == SVARA_PH_PLOSIVE_K)     { return "k"; }
+    if (phoneme == SVARA_PH_PLOSIVE_G)     { return "ɡ"; }
+    # Fricatives
+    if (phoneme == SVARA_PH_FRIC_S)        { return "s"; }
+    if (phoneme == SVARA_PH_FRIC_H)        { return "ɦ"; }
+    if (phoneme == SVARA_PH_FRIC_F)        { return "f"; }
+    if (phoneme == SVARA_PH_FRIC_SH)       { return "ɕ"; }
+    # Nasals
+    if (phoneme == SVARA_PH_NASAL_M)       { return "m"; }
+    if (phoneme == SVARA_PH_NASAL_N)       { return "n"; }
+    if (phoneme == SVARA_PH_NASAL_NG)      { return "ŋ"; }
+    # Approximants & lateral
+    if (phoneme == SVARA_PH_APPROX_J)      { return "j"; }
+    if (phoneme == SVARA_PH_LATERAL_L)     { return "l"; }
+    if (phoneme == SVARA_PH_TAP_FLAP)      { return "r"; }
+    if (phoneme == SVARA_PH_FRIC_V)        { return "ʋ"; }
+    # Affricates
+    if (phoneme == SVARA_PH_AFFR_CH)       { return "t͡ɕ"; }
+    if (phoneme == SVARA_PH_AFFR_J)        { return "d͡ʑ"; }
+    # Not mapped
+    if (phoneme == SVARA_PH_SILENCE)       { return 0; }
+    return 0;
+}
+
+# Arabic (was `arabic_phoneme_to_ipa`).
+#must_use
+fn shabda_arabic_phoneme_to_ipa(phoneme): cstring {
+    if (phoneme == SVARA_PH_VOWEL_OPEN_A)  { return "a"; }
+    if (phoneme == SVARA_PH_VOWEL_NEAR_I)  { return "i"; }
+    if (phoneme == SVARA_PH_VOWEL_CUP_V)   { return "u"; }
+    if (phoneme == SVARA_PH_PLOSIVE_B)     { return "b"; }
+    if (phoneme == SVARA_PH_PLOSIVE_T)     { return "t"; }
+    if (phoneme == SVARA_PH_PLOSIVE_D)     { return "d"; }
+    if (phoneme == SVARA_PH_PLOSIVE_K)     { return "k"; }
+    if (phoneme == SVARA_PH_PLOSIVE_G)     { return "ɣ"; }
+    if (phoneme == SVARA_PH_FRIC_F)        { return "f"; }
+    if (phoneme == SVARA_PH_FRIC_TH)       { return "θ"; }
+    if (phoneme == SVARA_PH_FRIC_DH)       { return "ð"; }
+    if (phoneme == SVARA_PH_FRIC_S)        { return "s"; }
+    if (phoneme == SVARA_PH_FRIC_Z)        { return "z"; }
+    if (phoneme == SVARA_PH_FRIC_SH)       { return "ʃ"; }
+    if (phoneme == SVARA_PH_FRIC_H)        { return "h"; }
+    if (phoneme == SVARA_PH_NASAL_M)       { return "m"; }
+    if (phoneme == SVARA_PH_NASAL_N)       { return "n"; }
+    if (phoneme == SVARA_PH_LATERAL_L)     { return "l"; }
+    if (phoneme == SVARA_PH_TAP_FLAP)      { return "r"; }
+    if (phoneme == SVARA_PH_APPROX_W)      { return "w"; }
+    if (phoneme == SVARA_PH_APPROX_J)      { return "j"; }
+    if (phoneme == SVARA_PH_AFFR_J)        { return "d͡ʒ"; }
+    if (phoneme == SVARA_PH_GLOTTAL_STOP)  { return "ʔ"; }
+    if (phoneme == SVARA_PH_SILENCE)       { return 0; }
+    return 0;
+}
+
+# Sanskrit (was `sanskrit_phoneme_to_ipa`). Overrides a handful of vowels, then
+# DELEGATES every other phoneme to the Hindi table (Rust `other => hindi(...)`).
+#must_use
+fn shabda_sanskrit_phoneme_to_ipa(phoneme): cstring {
+    # Sanskrit schwa is /ɐ/ not /ə/
+    if (phoneme == SVARA_PH_VOWEL_SCHWA)   { return "ɐ"; }
+    # Long vowels
+    if (phoneme == SVARA_PH_VOWEL_OPEN_A)  { return "ɐː"; }
+    if (phoneme == SVARA_PH_VOWEL_NEAR_I)  { return "i"; }
+    if (phoneme == SVARA_PH_VOWEL_E)       { return "iː"; }
+    if (phoneme == SVARA_PH_VOWEL_CUP_V)   { return "u"; }
+    if (phoneme == SVARA_PH_VOWEL_U)       { return "uː"; }
+    if (phoneme == SVARA_PH_VOWEL_OPEN_E)  { return "eː"; }
+    if (phoneme == SVARA_PH_VOWEL_O)       { return "oː"; }
+    # Consonants — same as Hindi
+    return shabda_hindi_phoneme_to_ipa(phoneme);
+}
+
+# Dispatch a phoneme to the language's IPA table (was `phoneme_to_ipa_for`).
+# #[non_exhaustive] Language -> if-chain + mandatory fallback (Rust exhaustive
+# match; fall back to English).
+#must_use
+fn shabda_phoneme_to_ipa_for(phoneme, language): cstring {
+    if (language == SHABDA_LANG_ENGLISH)  { return shabda_phoneme_to_ipa(phoneme); }
+    if (language == SHABDA_LANG_SPANISH)  { return shabda_spanish_phoneme_to_ipa(phoneme); }
+    if (language == SHABDA_LANG_GERMAN)   { return shabda_german_phoneme_to_ipa(phoneme); }
+    if (language == SHABDA_LANG_HINDI)    { return shabda_hindi_phoneme_to_ipa(phoneme); }
+    if (language == SHABDA_LANG_ARABIC)   { return shabda_arabic_phoneme_to_ipa(phoneme); }
+    if (language == SHABDA_LANG_SANSKRIT) { return shabda_sanskrit_phoneme_to_ipa(phoneme); }
+    return shabda_phoneme_to_ipa(phoneme);
+}
+
+# ================================================================
+# VARNA_INVENTORY_GAPS — phonemes that are valid English sounds but not yet in  #skip-lint
+# varna 1.0's inventory; skipped during validation to avoid false positives.
+# Built as a fresh vec of ordinals (order matches the Rust const array).
+# ================================================================
+#must_use
+fn shabda_varna_inventory_gaps(): i64 {
+    var v = vec_new();
+    vec_push(v, SVARA_PH_DIPH_AI);    # PRICE: aɪ
+    vec_push(v, SVARA_PH_DIPH_AU);    # MOUTH: aʊ
+    vec_push(v, SVARA_PH_DIPH_OI);    # CHOICE: ɔɪ
+    vec_push(v, SVARA_PH_VOWEL_BIRD); # NURSE: ɜː
+    return v;
+}
+
+# ================================================================
+# Inventory + phonotactics dispatch (varna handles).
+# ================================================================
+
+# varna PhonemeInventory for a language (was `inventory_for`). #[non_exhaustive]
+# Language -> if-chain + fallback to English.
+#must_use
+fn shabda_inventory_for(language): i64 {
+    if (language == SHABDA_LANG_ENGLISH)  { return phoneme_english(); }
+    if (language == SHABDA_LANG_SPANISH)  { return phoneme_spanish(); }
+    if (language == SHABDA_LANG_GERMAN)   { return phoneme_german(); }
+    if (language == SHABDA_LANG_HINDI)    { return phoneme_hindi(); }
+    if (language == SHABDA_LANG_ARABIC)   { return phoneme_classical_arabic(); }
+    if (language == SHABDA_LANG_SANSKRIT) { return phoneme_sanskrit(); }
+    return phoneme_english();
+}
+
+# varna Phonotactics for a language (was `phonotactics_for`). Rust returns
+# Option: Some(english_phonotactics()) for English, None for every other
+# language. Sentinel: English -> handle, else 0 (== None).
+#must_use
+fn shabda_phonotactics_for(language): i64 {
+    if (language == SHABDA_LANG_ENGLISH) { return phonotactics_english(); }
+    return 0;
+}
+
+# ================================================================
+# Validation.
+# ================================================================
+
+# True (1) if a phoneme counts as a "vowel" for the phonotactics consonant-run
+# reset: Vowel or Diphthong class, OR the Silence phoneme (Rust
+# `matches!(ph.class(), Vowel | Diphthong) || ph == Silence`).
+fn _shabda_validate_is_vowel(ph): i64 {
+    var c = svara_phoneme_class(ph);
+    if (c == SVARA_CLASS_VOWEL) { return 1; }
+    if (c == SVARA_CLASS_DIPHTHONG) { return 1; }
+    if (ph == SVARA_PH_SILENCE) { return 1; }
+    return 0;
+}
+
+# Validate a phoneme sequence (vec of ordinals) against phonotactic constraints
+# (was `validate_phonotactics`). Returns a vec of report Strings (cstr). Empty
+# vec means no violations. No constraints for the language -> empty vec.
+#
+# The consonant run is a vec of IPA cstrs; on a vowel boundary a run longer than
+# max_onset is a violation; a trailing run longer than max_coda is a violation.
+# Report text mirrors Rust's alloc::format! output exactly (join is empty-sep
+# concat of the collected IPA cstrs).
+#must_use
+fn shabda_validate_phonotactics(phonemes, language): i64 {
+    var violations = vec_new();
+    var constraints = shabda_phonotactics_for(language);
+    if (constraints == 0) { return violations; }   # no constraints available
+
+    var max_onset = phonotactics_max_onset(constraints);
+    var max_coda = phonotactics_max_coda(constraints);
+
+    # Walk phonemes, tracking a run of consonant IPA cstrs.
+    var consonant_run = vec_new();
+    var n = vec_len(phonemes);
+    var i = 0;
+    while (i < n) {
+        var ph = vec_get(phonemes, i);
+        # Rust: `if let Some(ipa) = phoneme_to_ipa(ph)` — English table, always.
+        var ipa = shabda_phoneme_to_ipa(ph);
+        if (ipa != 0) {
+            if (_shabda_validate_is_vowel(ph) == 1) {
+                if (vec_len(consonant_run) > max_onset) {
+                    var joined = _shabda_validate_join(consonant_run);
+                    vec_push(violations, _shabda_validate_onset_msg(joined));
+                }
+                consonant_run = vec_new();   # Rust `consonant_run.clear()`
+            } else {
+                vec_push(consonant_run, ipa);
+            }
+        }
+        i = i + 1;
+    }
+
+    # Final consonant run vs max coda.
+    if (vec_len(consonant_run) > max_coda) {
+        var joined2 = _shabda_validate_join(consonant_run);
+        vec_push(violations, _shabda_validate_coda_msg(joined2));
+    }
+
+    return violations;
+}
+
+# Join a vec of IPA cstrs with the empty separator (Rust `run.join("")`).
+# Returns a fresh NUL-terminated cstr.
+fn _shabda_validate_join(run): cstring {
+    var sb = str_builder_new();
+    var n = vec_len(run);
+    var i = 0;
+    while (i < n) {
+        str_builder_add_cstr(sb, vec_get(run, i));
+        i = i + 1;
+    }
+    return str_cstr(str_builder_build(sb));
+}
+
+# "consonant cluster too long for onset: {joined}" (Rust format!).
+fn _shabda_validate_onset_msg(joined): cstring {
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, "consonant cluster too long for onset: ");
+    str_builder_add_cstr(sb, joined);
+    return str_cstr(str_builder_build(sb));
+}
+
+# "consonant cluster too long for coda: {joined}" (Rust format!).
+fn _shabda_validate_coda_msg(joined): cstring {
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, "consonant cluster too long for coda: ");
+    str_builder_add_cstr(sb, joined);
+    return str_cstr(str_builder_build(sb));
+}
+
+# Validate that every phoneme in the vec exists in the given inventory, using
+# language-aware IPA mapping (was `validate_phonemes_for`). Returns a vec of IPA
+# cstrs NOT in the inventory. Empty vec == all valid. A phoneme with no IPA
+# (sentinel 0) is skipped (Rust `if let Some(ipa) = ... && !inventory.has(ipa)`).
+#must_use
+fn shabda_validate_phonemes_for(phonemes, inventory, language): i64 {
+    var invalid = vec_new();
+    var n = vec_len(phonemes);
+    var i = 0;
+    while (i < n) {
+        var ph = vec_get(phonemes, i);
+        var ipa = shabda_phoneme_to_ipa_for(ph, language);
+        if (ipa != 0) {
+            if (phoneme_has(inventory, ipa) == 0) {
+                vec_push(invalid, ipa);
+            }
+        }
+        i = i + 1;
+    }
+    return invalid;
+}
+
+# Validate phonemes against the English inventory (was `validate_phonemes`,
+# backwards-compatible alias). Returns a vec of invalid IPA cstrs.
+#must_use
+fn shabda_validate_phonemes(phonemes, inventory): i64 {
+    return shabda_validate_phonemes_for(phonemes, inventory, SHABDA_LANG_ENGLISH);
+}

@@ -141,7 +141,7 @@ fn shabda_ssml_node_children(node): i64 { return load64(node + SHABDA_SSML_OFF_C
 # ASCII whitespace test (Rust char::is_whitespace, ASCII subset the parser hits):
 # space, tab, newline, carriage return, form feed, vertical tab.
 #must_use
-fn _shabda_is_ws(c): i64 {
+fn _shabda_ssml_is_ws(c): i64 {
     if (c == 32)  { return 1; }
     if (c == 9)   { return 1; }
     if (c == 10)  { return 1; }
@@ -179,7 +179,7 @@ fn _shabda_slice_eq_cstr(input, a_off, n, lit): i64 {
 
 # Does bytes[off..] start with cstring `lit`? (Rust str::starts_with)
 #must_use
-fn _shabda_starts_with(input, len, off, lit): i64 {
+fn _shabda_ssml_starts_with(input, len, off, lit): i64 {
     var i = 0;
     while (load8(lit + i) != 0) {
         if (off + i >= len) { return 0; }
@@ -255,7 +255,7 @@ fn _shabda_slice_eq_at(input, off, name, n): i64 {
 fn _shabda_tag_name_len(input, start, end): i64 {
     var i = start;
     while (i < end) {
-        if (_shabda_is_ws(load8(input + i)) == 1) { return i - start; }
+        if (_shabda_ssml_is_ws(load8(input + i)) == 1) { return i - start; }
         i = i + 1;
     }
     return end - start;
@@ -407,8 +407,8 @@ fn _shabda_push_text(nodes, input, start, end): i64 {
     # Trim ASCII whitespace both ends.
     var s = start;
     var e = end;
-    while (s < e && _shabda_is_ws(load8(input + s)) == 1) { s = s + 1; }
-    while (e > s && _shabda_is_ws(load8(input + e - 1)) == 1) { e = e - 1; }
+    while (s < e && _shabda_ssml_is_ws(load8(input + s)) == 1) { s = s + 1; }
+    while (e > s && _shabda_ssml_is_ws(load8(input + e - 1)) == 1) { e = e - 1; }
     if (e > s) {
         var ts = str_from_buf(input + s, e - s);
         vec_push(nodes, shabda_ssml_text(ts));
@@ -438,15 +438,15 @@ fn _shabda_parse_tag(input, len, pos, node_out): i64 {
         cend = cend - 1;                          # drop trailing '/'
     }
     # trim the (possibly '/'-stripped) content
-    while (cstart < cend && _shabda_is_ws(load8(input + cstart)) == 1) { cstart = cstart + 1; }
-    while (cend > cstart && _shabda_is_ws(load8(input + cend - 1)) == 1) { cend = cend - 1; }
+    while (cstart < cend && _shabda_ssml_is_ws(load8(input + cstart)) == 1) { cstart = cstart + 1; }
+    while (cend > cstart && _shabda_ssml_is_ws(load8(input + cend - 1)) == 1) { cend = cend - 1; }
 
     # split tag name / attrs
     var name_len = _shabda_tag_name_len(input, cstart, cend);
     var astart = cstart + name_len;
     var aend = cend;
-    while (astart < aend && _shabda_is_ws(load8(input + astart)) == 1) { astart = astart + 1; }
-    while (aend > astart && _shabda_is_ws(load8(input + aend - 1)) == 1) { aend = aend - 1; }
+    while (astart < aend && _shabda_ssml_is_ws(load8(input + astart)) == 1) { astart = astart + 1; }
+    while (aend > astart && _shabda_ssml_is_ws(load8(input + aend - 1)) == 1) { aend = aend - 1; }
 
     # break
     if (_shabda_name_eq(input, cstart, name_len, "break") == 1) {
@@ -541,8 +541,8 @@ fn _shabda_parse_until(input, len, start, tag_name, nodes): i64 {
                 # close_name = content[1..].trim()
                 var ns = cstart + 1;
                 var ne = tag_end;
-                while (ns < ne && _shabda_is_ws(load8(input + ns)) == 1) { ns = ns + 1; }
-                while (ne > ns && _shabda_is_ws(load8(input + ne - 1)) == 1) { ne = ne - 1; }
+                while (ns < ne && _shabda_ssml_is_ws(load8(input + ns)) == 1) { ns = ns + 1; }
+                while (ne > ns && _shabda_ssml_is_ws(load8(input + ne - 1)) == 1) { ne = ne - 1; }
                 if (_shabda_name_eq(input, ns, ne - ns, tag_name) == 1) {
                     return tag_end + 1;
                 }
@@ -627,7 +627,7 @@ fn shabda_ssml_parse(input): i64 {
 # Since "speak " implies "speak", a single prefix check suffices, matching Rust.
 #must_use
 fn _shabda_is_speak(input, len, cstart): i64 {
-    return _shabda_starts_with(input, len, cstart, "speak");
+    return _shabda_ssml_starts_with(input, len, cstart, "speak");
 }
 
 # ================================================================

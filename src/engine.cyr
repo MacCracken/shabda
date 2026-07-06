@@ -1,0 +1,780 @@
+# engine.cyr — the G2P engine: ties normalization, dictionary, rules, and prosody
+# together.
+#
+# Ports rust-old/src/engine.rs (751 LOC). Owns Language, TimingProfile,
+# ConvertOptions, and G2PEngine, plus the conversion pipeline
+# (convert / convert_with / convert_ssml / convert_streaming / speak / speak_with)
+# and the varna-gated helpers (detect_language, phoneme_inventory) which are
+# ALWAYS compiled here (the Rust #[cfg(feature="varna")] gate is dropped).
+#
+# DEP POSITION: needs the vendored dep chain (svara for PhonemeEvent/sequence/
+# voice, shabdakosh for the dictionary, varna for script detection + inventories)
+# plus every earlier shabda module (error, normalize, syllable, heteronym, ssml,
+# rules, prosody, validate). The entry file (tests/engine.tcyr / src/main.cyr)
+# orders the includes; modules never include each other.
+#
+# ---------------------------------------------------------------- byte layouts
+# ShabdaTimingProfile (24 bytes): three f64-bit scale factors, at the
+#   SHABDA_TIMING_VOWEL/CONSONANT/PAUSE offsets (0/8/16) that prosody's
+#   shabda_apply_timing reads directly via load64. Rust's TimingProfile.
+#     [0]  vowel_scale     (f64 bits)
+#     [8]  consonant_scale (f64 bits)
+#     [16] pause_scale     (f64 bits)
+#
+# ShabdaConvertOptions (32 bytes): Rust's ConvertOptions.
+#     [0]  emphasis            (i64 bool: 1 = on)
+#     [8]  has_rate            (i64 bool: Option<f32> tag; 1 = Some)
+#     [16] rate_wpm            (f64 bits; valid only when has_rate == 1)
+#     [24] timing              (ShabdaTimingProfile* or 0 == None)
+#
+# ShabdaG2PEngine (16 bytes): Rust's G2PEngine.
+#     [0]  language            (SHABDA_LANG_* tag)
+#     [8]  dictionary          (shabdakosh dict handle)
+#
+# PhonemeEvent is svara's immutable-by-handle triple (phoneme, duration-f64,
+# stress); build via svara_phoneme_event_new. Rust's `event.stress = ...` in-place
+# mutation (Reduced emphasis) is re-expressed by rebuilding the event.
+#
+# CONVENTION (fallible fns): convert / convert_with / convert_ssml / speak /
+# speak_with RETURN a packed shabda error (0 == ok, tested via shabda_is_err) and
+# WRITE their result vec (events / samples) to an out-param pointer. This is the
+# idiomatic Cyrius fallible shape (a vec handle is a non-zero heap pointer and can
+# NOT be told apart from a packed error by shabda_is_err, so the payload rides an
+# out-param instead). convert_streaming has no result vec — it returns the packed
+# error directly (0 == ok). The empty-input path returns shabda_err_invalid_input()
+# and leaves the out-param untouched.
+#
+# NAMING: every top-level symbol is `shabda_`/`SHABDA_`-prefixed (flat link
+# namespace; coexists with shbdk_ / svara_ / varna / sakshi). Private helpers are
+# `_shabda_engine_*`.
+
+# ================================================================
+# Silence durations (Rust f32 literals promoted to f64 bits). Match engine.rs.
+# ================================================================
+# 0.15 — comma phrase pause
+var SHABDA_ENGINE_COMMA_DUR = 0x3FC3_3333_3333_3333;
+# 0.30 — period phrase pause
+var SHABDA_ENGINE_PERIOD_DUR = 0x3FD3_3333_3333_3333;
+# 0.04 — inter-word silence
+var SHABDA_ENGINE_WORD_DUR = 0x3FA4_7AE1_47AE_147B;
+
+# ConvertOptions block offsets.
+var SHABDA_OPT_EMPHASIS = 0;
+var SHABDA_OPT_HAS_RATE = 8;
+var SHABDA_OPT_RATE_WPM = 16;
+var SHABDA_OPT_TIMING   = 24;
+var SHABDA_OPT_SIZE     = 32;
+
+# G2PEngine block offsets.
+var SHABDA_ENGINE_LANG = 0;
+var SHABDA_ENGINE_DICT = 8;
+var SHABDA_ENGINE_SIZE = 16;
+
+# ================================================================
+# TimingProfile — three f64-bit scales at SHABDA_TIMING_* offsets. (Rust
+# TimingProfile::new / Default.)
+# ================================================================
+#must_use
+fn shabda_timing_new(vowel_scale, consonant_scale, pause_scale): i64 {
+    var p = alloc(SHABDA_TIMING_SIZE);
+    store64(p + SHABDA_TIMING_VOWEL, vowel_scale);
+    store64(p + SHABDA_TIMING_CONSONANT, consonant_scale);
+    store64(p + SHABDA_TIMING_PAUSE, pause_scale);
+    return p;
+}
+
+# Default: 1.0 / 1.0 / 1.0.
+#must_use
+fn shabda_timing_default(): i64 {
+    return shabda_timing_new(f64_from(1), f64_from(1), f64_from(1));
+}
+
+#must_use
+fn shabda_timing_vowel_scale(p): i64 { return load64(p + SHABDA_TIMING_VOWEL); }
+
+#must_use
+fn shabda_timing_consonant_scale(p): i64 { return load64(p + SHABDA_TIMING_CONSONANT); }
+
+#must_use
+fn shabda_timing_pause_scale(p): i64 { return load64(p + SHABDA_TIMING_PAUSE); }
+
+# ================================================================
+# ConvertOptions — builders mutate in place and return self (chainable), mirroring
+# the Rust `with_*(mut self) -> Self`.
+# ================================================================
+#must_use
+fn shabda_convert_options_new(): i64 {
+    var o = alloc(SHABDA_OPT_SIZE);
+    store64(o + SHABDA_OPT_EMPHASIS, 0);
+    store64(o + SHABDA_OPT_HAS_RATE, 0);
+    store64(o + SHABDA_OPT_RATE_WPM, f64_from(0));
+    store64(o + SHABDA_OPT_TIMING, 0);
+    return o;
+}
+
+#must_use
+fn shabda_convert_options_default(): i64 {
+    return shabda_convert_options_new();
+}
+
+#must_use
+fn shabda_convert_options_with_emphasis(o, emphasis): i64 {
+    store64(o + SHABDA_OPT_EMPHASIS, emphasis);
+    return o;
+}
+
+# wpm is an f64 bit pattern (Rust took f32; promoted).
+#must_use
+fn shabda_convert_options_with_speaking_rate(o, wpm): i64 {
+    store64(o + SHABDA_OPT_HAS_RATE, 1);
+    store64(o + SHABDA_OPT_RATE_WPM, wpm);
+    return o;
+}
+
+#must_use
+fn shabda_convert_options_with_timing(o, timing): i64 {
+    store64(o + SHABDA_OPT_TIMING, timing);
+    return o;
+}
+
+#must_use
+fn shabda_convert_options_emphasis(o): i64 { return load64(o + SHABDA_OPT_EMPHASIS); }
+
+#must_use
+fn shabda_convert_options_has_rate(o): i64 { return load64(o + SHABDA_OPT_HAS_RATE); }
+
+#must_use
+fn shabda_convert_options_rate_wpm(o): i64 { return load64(o + SHABDA_OPT_RATE_WPM); }
+
+#must_use
+fn shabda_convert_options_timing(o): i64 { return load64(o + SHABDA_OPT_TIMING); }
+
+# ================================================================
+# Language serde/name (Rust derives Serialize/Deserialize + Debug). Provide the
+# string<->tag map + fallback; a roundtrip test pins it.
+# ================================================================
+#must_use
+fn shabda_language_to_str(lang): cstring {
+    if (lang == SHABDA_LANG_ENGLISH)  { return "English"; }
+    if (lang == SHABDA_LANG_SPANISH)  { return "Spanish"; }
+    if (lang == SHABDA_LANG_GERMAN)   { return "German"; }
+    if (lang == SHABDA_LANG_HINDI)    { return "Hindi"; }
+    if (lang == SHABDA_LANG_ARABIC)   { return "Arabic"; }
+    if (lang == SHABDA_LANG_SANSKRIT) { return "Sanskrit"; }
+    return "English";                 # #[non_exhaustive] fallback
+}
+
+#must_use
+fn shabda_language_from_str(s): i64 {
+    if (streq(s, "English") == 1)  { return SHABDA_LANG_ENGLISH; }
+    if (streq(s, "Spanish") == 1)  { return SHABDA_LANG_SPANISH; }
+    if (streq(s, "German") == 1)   { return SHABDA_LANG_GERMAN; }
+    if (streq(s, "Hindi") == 1)    { return SHABDA_LANG_HINDI; }
+    if (streq(s, "Arabic") == 1)   { return SHABDA_LANG_ARABIC; }
+    if (streq(s, "Sanskrit") == 1) { return SHABDA_LANG_SANSKRIT; }
+    return SHABDA_LANG_ENGLISH;       # unknown -> English fallback
+}
+
+# ================================================================
+# detect_language(text) -> Language tag or -1 (Rust Option::None). Always
+# compiled. Count codepoints in each known script via varna script_by_code; only
+# ("Latn", English) is wired (Rust leaves the rest as future). Return the language
+# with the most matching codepoints, or -1.
+# ================================================================
+#must_use
+fn shabda_detect_language(text): i64 {
+    # trim empty -> None
+    var n = strlen(text);
+    var s = 0;
+    var e = n;
+    while (s < e && _shabda_engine_is_ws(load8(text + s)) == 1) { s = s + 1; }
+    while (e > s && _shabda_engine_is_ws(load8(text + e - 1)) == 1) { e = e - 1; }
+    if (e <= s) { return (0 - 1); }
+
+    # Only ("Latn", English) is wired.
+    var best_lang = (0 - 1);
+    var best_count = 0;
+    var script = script_by_code("Latn");
+    if (script != 0) {
+        var count = _shabda_engine_count_script_cps(text, script);
+        if (count > 0) {
+            best_lang = SHABDA_LANG_ENGLISH;
+            best_count = count;
+        }
+    }
+    return best_lang;
+}
+
+# ASCII whitespace (Rust str::trim on the inputs this crate sees).
+fn _shabda_engine_is_ws(c): i64 {
+    if (c == 32) { return 1; }
+    if (c == 9)  { return 1; }
+    if (c == 10) { return 1; }
+    if (c == 13) { return 1; }
+    if (c == 12) { return 1; }
+    if (c == 11) { return 1; }
+    return 0;
+}
+
+# Count codepoints in `text` that belong to `script` (via script_contains_codepoint).
+fn _shabda_engine_count_script_cps(text, script): i64 {
+    var count = 0;
+    var p = text;
+    var cpo = alloc(8);
+    var adv = _shabda_utf8_next(p, cpo);
+    while (adv > 0) {
+        if (script_contains_codepoint(script, load64(cpo)) == 1) { count = count + 1; }
+        p = p + adv;
+        adv = _shabda_utf8_next(p, cpo);
+    }
+    return count;
+}
+
+# ================================================================
+# G2PEngine.
+# ================================================================
+# Rust: English -> PronunciationDict::english(); every other language ->
+# PronunciationDict::new() (EMPTY — NOT a language-specific dict).
+#must_use
+fn shabda_g2p_new(language): i64 {
+    var e = alloc(SHABDA_ENGINE_SIZE);
+    store64(e + SHABDA_ENGINE_LANG, language);
+    var dict = shbdk_dict_new();
+    if (language == SHABDA_LANG_ENGLISH) {
+        dict = shbdk_dict_english();
+    }
+    store64(e + SHABDA_ENGINE_DICT, dict);
+    return e;
+}
+
+#must_use
+fn shabda_g2p_language(e): i64 { return load64(e + SHABDA_ENGINE_LANG); }
+
+#must_use
+fn shabda_g2p_dictionary(e): i64 { return load64(e + SHABDA_ENGINE_DICT); }
+
+# Rust dictionary_mut() — returns the same handle; mutation is via shbdk_dict_*.
+fn shabda_g2p_dictionary_mut(e): i64 { return load64(e + SHABDA_ENGINE_DICT); }
+
+# phoneme_inventory(e) -> varna inventory for the active language. Always compiled.
+#must_use
+fn shabda_g2p_phoneme_inventory(e): i64 {
+    return shabda_inventory_for(load64(e + SHABDA_ENGINE_LANG));
+}
+
+# ================================================================
+# <lang>_rules dispatch on the language tag. (Rust match self.language.)
+# ================================================================
+#must_use
+fn _shabda_engine_rules(language, word): i64 {
+    if (language == SHABDA_LANG_ENGLISH)  { return shabda_english_rules(word); }
+    if (language == SHABDA_LANG_SPANISH)  { return shabda_spanish_rules(word); }
+    if (language == SHABDA_LANG_GERMAN)   { return shabda_german_rules(word); }
+    if (language == SHABDA_LANG_HINDI)    { return shabda_hindi_rules(word); }
+    if (language == SHABDA_LANG_ARABIC)   { return shabda_arabic_rules(word); }
+    if (language == SHABDA_LANG_SANSKRIT) { return shabda_sanskrit_rules(word); }
+    return shabda_english_rules(word);    # #[non_exhaustive] fallback
+}
+
+# ================================================================
+# split a normalized cstring on whitespace -> vec of cstr words. The normalized
+# text uses single-space separation plus the ,pause/.pause/<emph></emph> marker
+# tokens; this collapses runs and drops empties (Rust str::split_whitespace).
+# ================================================================
+#must_use
+fn _shabda_engine_split_ws(text): i64 {
+    var words = vec_new();
+    var n = strlen(text);
+    var i = 0;
+    var start = 0;
+    var inword = 0;
+    while (i < n) {
+        var c = load8(text + i);
+        if (_shabda_engine_is_ws(c) == 1) {
+            if (inword == 1) {
+                var len = i - start;
+                var buf = alloc(len + 1);
+                memcpy(buf, text + start, len);
+                store8(buf + len, 0);
+                vec_push(words, buf);
+                inword = 0;
+            }
+        } else {
+            if (inword == 0) { start = i; inword = 1; }
+        }
+        i = i + 1;
+    }
+    if (inword == 1) {
+        var len2 = n - start;
+        var buf2 = alloc(len2 + 1);
+        memcpy(buf2, text + start, len2);
+        store8(buf2 + len2, 0);
+        vec_push(words, buf2);
+    }
+    return words;
+}
+
+# Make a Silence PhonemeEvent of the given f64-bit duration (Unstressed).
+#must_use
+fn _shabda_engine_silence(duration): i64 {
+    return svara_phoneme_event_new(SVARA_PH_SILENCE, duration, SVARA_STRESS_UNSTRESSED);
+}
+
+# 1 if `word` is any of the 4 marker tokens (comma/period pause, emph start/end).
+fn _shabda_engine_is_marker(word): i64 {
+    if (streq(word, SHABDA_COMMA_PAUSE) == 1) { return 1; }
+    if (streq(word, SHABDA_PERIOD_PAUSE) == 1) { return 1; }
+    if (streq(word, SHABDA_EMPHASIS_START) == 1) { return 1; }
+    if (streq(word, SHABDA_EMPHASIS_END) == 1) { return 1; }
+    return 0;
+}
+
+# Collect up to 3 preceding non-marker words (indices i-1,i-2,i-3 downward),
+# nearest first (Rust words[..i].iter().rev().filter(non-marker).take(3)).
+#must_use
+fn _shabda_engine_preceding(words, i): i64 {
+    var preceding = vec_new();
+    var j = i - 1;
+    while (j >= 0) {
+        if (vec_len(preceding) >= 3) { return preceding; }
+        var w = vec_get(words, j);
+        if (_shabda_engine_is_marker(w) == 0) {
+            vec_push(preceding, w);
+        }
+        j = j - 1;
+    }
+    return preceding;
+}
+
+# Copy a vec of i64 (phoneme ordinals) into a fresh owned vec (Rust .to_vec()).
+#must_use
+fn _shabda_engine_copy_vec(v): i64 {
+    var out = vec_new();
+    var n = vec_len(v);
+    var i = 0;
+    while (i < n) {
+        vec_push(out, vec_get(v, i));
+        i = i + 1;
+    }
+    return out;
+}
+
+# ================================================================
+# LOOKUP (the exact fallback order from engine.rs convert_with).
+# Returns a phonemes vec (owned).
+# ================================================================
+#must_use
+fn _shabda_engine_lookup(e, word, preceding): i64 {
+    var language = load64(e + SHABDA_ENGINE_LANG);
+    var dict = load64(e + SHABDA_ENGINE_DICT);
+
+    var rule = shabda_heteronym_lookup(word);
+    if (rule != 0) {
+        var prons = shbdk_dict_lookup_all(dict, word);
+        if (prons != 0) {
+            return _shabda_engine_copy_vec(shabda_select_phonemes(rule, preceding, prons));
+        }
+        var entry = shbdk_dict_lookup(dict, word);
+        if (entry != 0) {
+            return _shabda_engine_copy_vec(entry);
+        }
+        return _shabda_engine_rules(language, word);
+    }
+
+    var dhit = shbdk_dict_lookup(dict, word);
+    if (dhit != 0) {
+        return _shabda_engine_copy_vec(dhit);
+    }
+
+    if (shabda_is_foreign_word(word) == 1) {
+        var stripped = shabda_strip_diacritics(word);
+        var shit = shbdk_dict_lookup(dict, stripped);
+        if (shit != 0) {
+            return _shabda_engine_copy_vec(shit);
+        }
+        return _shabda_engine_rules(language, stripped);
+    }
+
+    return _shabda_engine_rules(language, word);
+}
+
+# ================================================================
+# convert(e, text, out_events) -> packed err (0 ok); writes events vec to
+# *out_events. Delegates to convert_with with default options.
+# ================================================================
+#must_use
+fn shabda_convert(e, text, out_events): i64 {
+    return shabda_convert_with(e, text, shabda_convert_options_default(), out_events);
+}
+
+# ================================================================
+# convert_with(e, text, options, out_events) -> packed err (0 ok); on ok writes
+# the events vec to *out_events. THE PIPELINE — replicates engine.rs convert_with.
+# ================================================================
+#must_use
+fn shabda_convert_with(e, text, options, out_events): i64 {
+    # 1. empty text -> InvalidInput error.
+    var tn = strlen(text);
+    var ts = 0;
+    var te = tn;
+    while (ts < te && _shabda_engine_is_ws(load8(text + ts)) == 1) { ts = ts + 1; }
+    while (te > ts && _shabda_engine_is_ws(load8(text + te - 1)) == 1) { te = te - 1; }
+    if (te <= ts) { return shabda_err_invalid_input(); }
+
+    var language = load64(e + SHABDA_ENGINE_LANG);
+
+    # 2. inventory (always compiled).
+    var inv = shabda_inventory_for(language);
+
+    # 3. intonation (computed; used by nothing downstream — parity with Rust).
+    var intonation = shabda_detect_intonation(text);
+
+    # 4. normalize (with or without emphasis).
+    var normalized = 0;
+    if (shabda_convert_options_emphasis(options) != 0) {
+        normalized = shabda_normalize_with_emphasis(text);
+    } else {
+        normalized = shabda_normalize(text);
+    }
+
+    # 5. split on whitespace.
+    var words = _shabda_engine_split_ws(normalized);
+    var nwords = vec_len(words);
+
+    # 6. events + emphasis state.
+    var events = vec_new();
+    var emphasis_active = 0;
+
+    # 7. per-word loop.
+    var i = 0;
+    while (i < nwords) {
+        var word = vec_get(words, i);
+
+        # a/b. emphasis markers.
+        if (streq(word, SHABDA_EMPHASIS_START) == 1) {
+            emphasis_active = 1;
+            i = i + 1;
+            continue;
+        }
+        if (streq(word, SHABDA_EMPHASIS_END) == 1) {
+            emphasis_active = 0;
+            i = i + 1;
+            continue;
+        }
+        # c/d. phrase-boundary markers.
+        if (streq(word, SHABDA_COMMA_PAUSE) == 1) {
+            vec_push(events, _shabda_engine_silence(SHABDA_ENGINE_COMMA_DUR));
+            i = i + 1;
+            continue;
+        }
+        if (streq(word, SHABDA_PERIOD_PAUSE) == 1) {
+            vec_push(events, _shabda_engine_silence(SHABDA_ENGINE_PERIOD_DUR));
+            i = i + 1;
+            continue;
+        }
+
+        # e. preceding context.
+        var preceding = _shabda_engine_preceding(words, i);
+
+        # f. LOOKUP (dict-first, rule fallback).
+        var phonemes = _shabda_engine_lookup(e, word, preceding);
+
+        # g. debug validation — always compiled, results DISCARDED, never abort.
+        var _invalid = shabda_validate_phonemes_for(phonemes, inv, language);
+        var _violations = shabda_validate_phonotactics(phonemes, language);
+
+        # h. skip empties.
+        if (vec_len(phonemes) == 0) {
+            i = i + 1;
+            continue;
+        }
+
+        # i/j/k. syllabify + assign stress.
+        var is_content = shabda_is_content_word(word);
+        var syllables = shabda_syllabify(phonemes);
+        var word_events = 0;
+        if (vec_len(syllables) == 0) {
+            word_events = shabda_assign_stress(phonemes, is_content);
+        } else {
+            word_events = shabda_assign_stress_syllabic(syllables, is_content);
+        }
+
+        # l. emphasis if active.
+        if (emphasis_active == 1) {
+            shabda_apply_emphasis(word_events);
+        }
+
+        # m. append word events.
+        var wn = vec_len(word_events);
+        var wi = 0;
+        while (wi < wn) {
+            vec_push(events, vec_get(word_events, wi));
+            wi = wi + 1;
+        }
+
+        # n. inter-word silence (not after last word).
+        if (i < nwords - 1) {
+            vec_push(events, _shabda_engine_silence(SHABDA_ENGINE_WORD_DUR));
+        }
+
+        i = i + 1;
+    }
+
+    # 8. rate scaling.
+    if (shabda_convert_options_has_rate(options) == 1) {
+        shabda_apply_rate(events, shabda_convert_options_rate_wpm(options));
+    }
+    # 9. timing profile.
+    var timing = shabda_convert_options_timing(options);
+    if (timing != 0) {
+        shabda_apply_timing(events, timing);
+    }
+
+    # 10. ok — write out the events vec.
+    store64(out_events, events);
+    return 0;
+}
+
+# ================================================================
+# speak(e, text, voice, sr, out_samples) -> packed err (0 ok); writes samples.
+# ================================================================
+#must_use
+fn shabda_speak(e, text, voice, sample_rate, out_samples): i64 {
+    return shabda_speak_with(e, text, voice, sample_rate, shabda_convert_options_default(), out_samples);
+}
+
+# speak_with: convert, push each event to a sequence, render to samples. Render
+# error -> shabda_err_rule_error() (Rust maps the svara error into RuleError).
+# Writes the samples vec to *out_samples on ok.
+#must_use
+fn shabda_speak_with(e, text, voice, sample_rate, options, out_samples): i64 {
+    var evslot = alloc(8);
+    var cerr = shabda_convert_with(e, text, options, evslot);
+    if (shabda_is_err(cerr) == 1) { return cerr; }
+    var events = load64(evslot);
+
+    var seq = svara_sequence_new();
+    var n = vec_len(events);
+    var i = 0;
+    while (i < n) {
+        svara_sequence_push(seq, vec_get(events, i));
+        i = i + 1;
+    }
+
+    var samples = svara_sequence_render(seq, voice, sample_rate);
+    if (svara_is_err(samples) == 1) { return shabda_err_rule_error(); }
+    store64(out_samples, samples);
+    return 0;
+}
+
+# ================================================================
+# convert_ssml(e, ssml, out_events) -> packed err (0 ok); writes events on ok.
+# ================================================================
+#must_use
+fn shabda_convert_ssml(e, ssml, out_events): i64 {
+    # trim empty -> InvalidInput.
+    var n = strlen(ssml);
+    var s = 0;
+    var en = n;
+    while (s < en && _shabda_engine_is_ws(load8(ssml + s)) == 1) { s = s + 1; }
+    while (en > s && _shabda_engine_is_ws(load8(ssml + en - 1)) == 1) { en = en - 1; }
+    if (en <= s) { return shabda_err_invalid_input(); }
+
+    var nodes = shabda_ssml_parse(ssml);
+    if (nodes == 0) { return shabda_err_invalid_input(); }   # Rust parse Err
+
+    var events = vec_new();
+    var rc = _shabda_engine_render_ssml_nodes(e, nodes, shabda_convert_options_default(), events);
+    if (shabda_is_err(rc) == 1) { return rc; }
+    store64(out_events, events);
+    return 0;
+}
+
+# ================================================================
+# render_ssml_nodes (recursive). Appends into `events`. Returns 0 on ok, or a
+# packed error propagated from a convert_with call (Rust `?`).
+# ================================================================
+#must_use
+fn _shabda_engine_render_ssml_nodes(e, nodes, base_options, events): i64 {
+    var n = vec_len(nodes);
+    var i = 0;
+    while (i < n) {
+        var node = vec_get(nodes, i);
+        var tag = shabda_ssml_node_tag(node);
+
+        if (tag == SHABDA_SSML_TEXT) {
+            var text_str = shabda_ssml_node_text(node);
+            var text = str_cstr(text_str);
+            # non-empty (trimmed) text only.
+            var tn = strlen(text);
+            var ts = 0;
+            var te = tn;
+            while (ts < te && _shabda_engine_is_ws(load8(text + ts)) == 1) { ts = ts + 1; }
+            while (te > ts && _shabda_engine_is_ws(load8(text + te - 1)) == 1) { te = te - 1; }
+            if (te > ts) {
+                var teslot = alloc(8);
+                var terr = shabda_convert_with(e, text, base_options, teslot);
+                if (shabda_is_err(terr) == 1) { return terr; }
+                var text_events = load64(teslot);
+                var ten = vec_len(text_events);
+                var ti = 0;
+                while (ti < ten) {
+                    vec_push(events, vec_get(text_events, ti));
+                    ti = ti + 1;
+                }
+            }
+        } elif (tag == SHABDA_SSML_BREAK) {
+            # duration_ms / 1000.0 seconds.
+            var duration_ms = shabda_ssml_node_duration(node);
+            var duration_secs = f64_div(f64_from(duration_ms), f64_from(1000));
+            vec_push(events, _shabda_engine_silence(duration_secs));
+        } elif (tag == SHABDA_SSML_EMPHASIS) {
+            # base + emphasis=1; recurse; then boost per level.
+            var eopts = _shabda_engine_opts_with_emphasis(base_options);
+            var start = vec_len(events);
+            var erc = _shabda_engine_render_ssml_nodes(e, shabda_ssml_node_children(node), eopts, events);
+            if (shabda_is_err(erc) == 1) { return erc; }
+            var level = shabda_ssml_node_level(node);
+            if (level == SHABDA_EMPH_STRONG) {
+                _shabda_engine_apply_emphasis_range(events, start);
+            } elif (level == SHABDA_EMPH_REDUCED) {
+                _shabda_engine_destress_range(events, start);
+            }
+            # Moderate: nothing (emphasis=true already handled it).
+        } elif (tag == SHABDA_SSML_PROSODY) {
+            # rate? base+speaking_rate : base.
+            var popts = base_options;
+            var rate = shabda_ssml_node_rate(node);
+            if (rate != SHABDA_RATE_NONE) {
+                popts = _shabda_engine_opts_with_rate(base_options, shabda_speaking_rate_wpm(rate));
+            }
+            var prc = _shabda_engine_render_ssml_nodes(e, shabda_ssml_node_children(node), popts, events);
+            if (shabda_is_err(prc) == 1) { return prc; }
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+# Clone `base` options, set emphasis=1 (Rust ConvertOptions{ emphasis:true, ..base }).
+#must_use
+fn _shabda_engine_opts_with_emphasis(base): i64 {
+    var o = alloc(SHABDA_OPT_SIZE);
+    store64(o + SHABDA_OPT_EMPHASIS, 1);
+    store64(o + SHABDA_OPT_HAS_RATE, load64(base + SHABDA_OPT_HAS_RATE));
+    store64(o + SHABDA_OPT_RATE_WPM, load64(base + SHABDA_OPT_RATE_WPM));
+    store64(o + SHABDA_OPT_TIMING, load64(base + SHABDA_OPT_TIMING));
+    return o;
+}
+
+# Clone `base` options, set speaking_rate=wpm (Rust ConvertOptions{ speaking_rate_wpm:Some(r), ..base }).
+#must_use
+fn _shabda_engine_opts_with_rate(base, wpm): i64 {
+    var o = alloc(SHABDA_OPT_SIZE);
+    store64(o + SHABDA_OPT_EMPHASIS, load64(base + SHABDA_OPT_EMPHASIS));
+    store64(o + SHABDA_OPT_HAS_RATE, 1);
+    store64(o + SHABDA_OPT_RATE_WPM, wpm);
+    store64(o + SHABDA_OPT_TIMING, load64(base + SHABDA_OPT_TIMING));
+    return o;
+}
+
+# apply_emphasis over events[start..] (Rust prosody::apply_emphasis on the tail).
+fn _shabda_engine_apply_emphasis_range(events, start): i64 {
+    var n = vec_len(events);
+    var i = start;
+    while (i < n) {
+        var ev = vec_get(events, i);
+        var ph = SvPhonemeEvent_phoneme(ev);
+        var c = svara_phoneme_class(ph);
+        if (c == SVARA_CLASS_VOWEL || c == SVARA_CLASS_DIPHTHONG) {
+            var dur = f64_mul(SvPhonemeEvent_duration(ev), SHABDA_PROSODY_EMPHASIS_DURATION_SCALE);
+            vec_set(events, i, svara_phoneme_event_new(ph, dur, SVARA_STRESS_PRIMARY));
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+# De-stress events[start..] to Unstressed (Rust Reduced: event.stress = Unstressed).
+fn _shabda_engine_destress_range(events, start): i64 {
+    var n = vec_len(events);
+    var i = start;
+    while (i < n) {
+        var ev = vec_get(events, i);
+        var dph = SvPhonemeEvent_phoneme(ev);
+        var ddur = SvPhonemeEvent_duration(ev);
+        vec_set(events, i, svara_phoneme_event_new(dph, ddur, SVARA_STRESS_UNSTRESSED));
+        i = i + 1;
+    }
+    return 0;
+}
+
+# ================================================================
+# convert_streaming(e, text, callback_fp) -> 0 (ok) | packed error.
+# Simpler than convert_with (NO heteronym/foreign/emphasis) — matches engine.rs.
+# callback_fp is a fn pointer called as callptr(fp, word, word_events).
+# ================================================================
+#must_use
+fn shabda_convert_streaming(e, text, callback_fp): i64 {
+    # trim empty -> InvalidInput.
+    var n = strlen(text);
+    var ts = 0;
+    var te = n;
+    while (ts < te && _shabda_engine_is_ws(load8(text + ts)) == 1) { ts = ts + 1; }
+    while (te > ts && _shabda_engine_is_ws(load8(text + te - 1)) == 1) { te = te - 1; }
+    if (te <= ts) { return shabda_err_invalid_input(); }
+
+    var language = load64(e + SHABDA_ENGINE_LANG);
+    var dict = load64(e + SHABDA_ENGINE_DICT);
+
+    var normalized = shabda_normalize(text);
+    var words = _shabda_engine_split_ws(normalized);
+    var nwords = vec_len(words);
+
+    var i = 0;
+    while (i < nwords) {
+        var word = vec_get(words, i);
+
+        if (streq(word, SHABDA_COMMA_PAUSE) == 1) {
+            var cev = vec_new();
+            vec_push(cev, _shabda_engine_silence(SHABDA_ENGINE_COMMA_DUR));
+            var cr = callptr(callback_fp, word, cev);
+            i = i + 1;
+            continue;
+        }
+        if (streq(word, SHABDA_PERIOD_PAUSE) == 1) {
+            var pev = vec_new();
+            vec_push(pev, _shabda_engine_silence(SHABDA_ENGINE_PERIOD_DUR));
+            var pr = callptr(callback_fp, word, pev);
+            i = i + 1;
+            continue;
+        }
+
+        # dict.lookup | <lang>_rules (no heteronym/foreign/emphasis).
+        var phonemes = shbdk_dict_lookup(dict, word);
+        if (phonemes != 0) {
+            phonemes = _shabda_engine_copy_vec(phonemes);
+        } else {
+            phonemes = _shabda_engine_rules(language, word);
+        }
+
+        if (vec_len(phonemes) == 0) {
+            i = i + 1;
+            continue;
+        }
+
+        var is_content = shabda_is_content_word(word);
+        var syllables = shabda_syllabify(phonemes);
+        var word_events = 0;
+        if (vec_len(syllables) == 0) {
+            word_events = shabda_assign_stress(phonemes, is_content);
+        } else {
+            word_events = shabda_assign_stress_syllabic(syllables, is_content);
+        }
+
+        var wr = callptr(callback_fp, word, word_events);
+        i = i + 1;
+    }
+
+    return 0;
+}

@@ -5,7 +5,7 @@ description = "shabda — grapheme-to-phoneme (G2P) conversion for AGNOS text-to
 license = "GPL-3.0-only"
 repository = "https://github.com/MacCracken/shabda"
 language = "cyrius"
-cyrius = "6.4.10"
+cyrius = "6.4.11"
 
 [build]
 entry = "src/main.cyr"

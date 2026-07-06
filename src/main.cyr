@@ -14,6 +14,14 @@ include "lib/varna.cyr"
 include "lib/shabdakosh.cyr"
 
 include "src/error.cyr"
+include "src/normalize.cyr"
+include "src/syllable.cyr"
+include "src/heteronym.cyr"
+include "src/ssml.cyr"
+include "src/rules.cyr"
+include "src/prosody.cyr"
+include "src/validate.cyr"
+include "src/engine.cyr"
 
 fn main() {
     alloc_init();
@@ -21,7 +29,35 @@ fn main() {
     # L0 smoke — sakshi-backed error surface (the 5 Display strings + ok)
     println(shabda_err_name(shabda_err_invalid_input()));
     println(shabda_err_name(shabda_err_dict_parse()));
-    println(shabda_err_name(0));
+    # L1 smoke — normalize roundtrip
+    println(shabda_normalize("Hello, World!"));
+    # L1 smoke — english rules "cat" -> phoneme count, then syllabify -> syllable count
+    var ph = shabda_english_rules("cat");
+    println_int(vec_len(ph));
+    println_int(vec_len(shabda_syllabify(ph)));
+    # L1 smoke — heteronym "read" is a known heteronym (non-zero rule)
+    if (shabda_heteronym_lookup("read") == 0) { println("het: none"); }
+    if (shabda_heteronym_lookup("read") != 0) { println("het: read"); }
+    # L1 smoke — ssml parse plain text -> 1 node
+    println_int(vec_len(shabda_ssml_parse("Hello world")));
+    # L2 smoke — prosody: is_content_word "the"->0 "cat"->1
+    println_int(shabda_is_content_word("the"));
+    println_int(shabda_is_content_word("cat"));
+    # L2 smoke — validate: English IPA of PlosiveP -> "p"; inventory has it
+    println(shabda_phoneme_to_ipa(SVARA_PH_PLOSIVE_P));
+    # L3 smoke — engine: convert "hello world" (English) -> event count
+    var eng = shabda_g2p_new(SHABDA_LANG_ENGLISH);
+    var slot = alloc(8);
+    var cerr = shabda_convert(eng, "hello world", slot);
+    println_int(vec_len(load64(slot)));
+    # L3 smoke — native-script Hindi convert (the normalize is_alpha fix): non-empty
+    var heng = shabda_g2p_new(SHABDA_LANG_HINDI);
+    var herr = shabda_convert(heng, "नमस्ते", slot);
+    println_int(vec_len(load64(slot)));
+    # L3 smoke — native-script Arabic convert: non-empty
+    var aeng = shabda_g2p_new(SHABDA_LANG_ARABIC);
+    var aerr = shabda_convert(aeng, "كتاب", slot);
+    println_int(vec_len(load64(slot)));
     return 0;
 }
 
