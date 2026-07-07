@@ -5,9 +5,10 @@
 
 ## Version
 
-**3.0.0** (RELEASED 2026-07-06) — Rust→Cyrius port. Full behavioral parity with
-the Rust 2.0.0 surface. ~5,000 lines of Rust preserved at `rust-old/` as the
-parity oracle.
+**3.0.1** (2026-07-06) — dependency + toolchain pin refresh over the 3.0.0 port
+(svara 3.1.0, shabdakosh 3.0.2, cyrius 6.4.12). **3.0.0** (RELEASED 2026-07-06) was
+the Rust→Cyrius port: full behavioral parity with the Rust 2.0.0 surface, ~5,000
+lines of Rust preserved at `rust-old/` as the parity oracle.
 
 ## Toolchain
 
@@ -93,7 +94,7 @@ Run one suite with `cyrius test tests/<mod>.tcyr`, all with `cyrius tests tests`
 
 ## Distlib bundle
 
-`cyrius distlib` → `dist/shabda.cyr` (v3.0.0) + `dist/shabda.deps` sidecar (folds
+`cyrius distlib` → `dist/shabda.cyr` (v3.0.1) + `dist/shabda.deps` sidecar (folds
 hisab/goonj/naad). Module order is the `[lib].modules` list in `cyrius.cyml`.
 Consumers pull the bundle rather than rebuilding from `src/`.
 

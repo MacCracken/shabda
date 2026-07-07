@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.1] — 2026-07-06
+
+Dependency + toolchain pin refresh over the 3.0.0 port. No shabda API or behavior
+change; the 653-assertion suite passes unchanged.
+
+- **Changed**: svara pin 3.0.1 → **3.1.0** (control-rate glide synthesis) and
+  shabdakosh 3.0.1 → **3.0.2** (which re-pins svara 3.1.0). shabda picks up svara's
+  faster diphthong synthesis end to end — **`speak` of a diphthong word (e.g.
+  "hello") drops ~3× (22.4 ms → 7.65 ms)**; convert/g2p is unchanged (render-independent).
+- **Changed**: toolchain pin 6.4.11 → **6.4.12** (current release; aligns the whole
+  shabda/shabdakosh/svara chain on one toolchain, removes drift).
+
 ## [3.0.0] — 2026-07-06
 
 Complete port of shabda from Rust to the **CYRIUS** language (AGNOS toolchain). A

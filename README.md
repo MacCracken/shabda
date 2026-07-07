@@ -1,6 +1,6 @@
 # shabda
 
-[![version](https://img.shields.io/badge/version-3.0.0-blue.svg)](VERSION)
+[![version](https://img.shields.io/badge/version-3.0.1-blue.svg)](VERSION)
 [![license](https://img.shields.io/badge/license-GPL--3.0--only-green.svg)](LICENSE)
 [![language](https://img.shields.io/badge/language-CYRIUS-orange.svg)](cyrius.cyml)
 
@@ -13,7 +13,7 @@ normalize → dictionary lookup ([shabdakosh](https://github.com/MacCracken/shab
 subset, heteronym disambiguation, and [varna](https://github.com/MacCracken/varna)
 phoneme-inventory validation.
 
-> v3.0.0 is a full-parity **CYRIUS port** of a ~5,000-line Rust library. It is no
+> shabda is a full-parity **CYRIUS port** of a ~5,000-line Rust library. It is no
 > longer a Rust crate: the API is flat, `shabda_`-prefixed C-style functions
 > (`shabda_g2p_new`, `shabda_convert`, `shabda_speak`, …) — no methods, traits,
 > generics, `Cargo.toml`, or crates.io. Consumers pull `dist/shabda.cyr`.
