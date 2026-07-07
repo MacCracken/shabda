@@ -5,7 +5,7 @@ description = "shabda — grapheme-to-phoneme (G2P) conversion for AGNOS text-to
 license = "GPL-3.0-only"
 repository = "https://github.com/MacCracken/shabda"
 language = "cyrius"
-cyrius = "6.4.11"
+cyrius = "6.4.12"
 
 [build]
 entry = "src/main.cyr"
@@ -45,7 +45,7 @@ stdlib = ["syscalls", "string", "alloc", "str", "fmt", "vec", "io", "args", "ass
 [deps.shabdakosh]
 git = "https://github.com/MacCracken/shabdakosh.git"
 path = "../shabdakosh"
-tag = "3.0.1"
+tag = "3.0.2"
 modules = ["dist/shabdakosh.cyr"]
 
 # svara — SVARA_PH_* phoneme identities (the PhonemeEvent-compat contract),
@@ -54,7 +54,7 @@ modules = ["dist/shabdakosh.cyr"]
 [deps.svara]
 git = "https://github.com/MacCracken/svara.git"
 path = "../svara"
-tag = "3.0.1"
+tag = "3.1.0"
 modules = ["dist/svara.cyr"]
 
 # varna — phoneme inventories (phoneme_english/spanish/german/hindi/

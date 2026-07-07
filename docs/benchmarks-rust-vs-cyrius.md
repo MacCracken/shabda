@@ -8,7 +8,7 @@
 >   svara 2.0.0, varna 1.0.0 (the 2.x-era stack the crate shipped against).
 >   Default features (`std`) — so the `#[cfg(feature="varna")]` validation in
 >   `convert_with` is `debug_assert!`-gated and **elided in release**.
-> - **Cyrius**: cycc 6.4.11, `bench.cyr`. Deps: shabdakosh 3.0.1, svara 3.0.1,
+> - **Cyrius**: cycc 6.4.12, `bench.cyr`. Deps: shabdakosh 3.0.2, svara 3.1.0,
 >   varna 2.0.0 (the ported bundles). No feature flags — the varna inventory +
 >   phonotactic **validation always runs** inside `shabda_convert`.
 > - **Platform**: x86_64 Linux. Numbers are per-operation.
@@ -23,8 +23,8 @@
 |-----------|------|--------|-------|-------|
 | `g2p_hello_world` (convert 2 words) | 838 ns | 21.88 µs | **26×** | per-word heap vecs + always-on validation |
 | `g2p_sentence` (convert 10 words) | 3.28 µs | 83.6 µs | **25×** | scales linearly with words |
-| `speak_hello` (convert + render audio) | 1.47 ms | 22.44 ms | **15×** | dominated by svara formant synthesis (a dep) |
-| `speak_sentence` | 1.27 ms | 24.71 ms | **19×** | svara render; f64 vs f32 x87/SSE |
+| `speak_hello` (convert + render audio) | 1.47 ms | 7.65 ms | **5.2×** | svara **3.1.0** control-rate diphthong (was 22.4 ms / 15×); "hello" ends /oʊ/ |
+| `speak_sentence` | 1.27 ms | 24.79 ms | **19×** | svara render; monophthong-heavy, so little diphthong benefit |
 | `dict_english_construction` (load 10k) | 1.59 ms | 9.40 ms | **5.9×** | hashmap inserts; closest ratio |
 | `dict_lookup` (hit) | ~10.6 ns/word¹ | 127 ns | **~12×** | O(1) hashmap both sides; alloc-free |
 | `dict_lookup_miss` | 9.83 ns | 249 ns | **25×** | miss path |
@@ -45,14 +45,14 @@
 | dict_lookup_5k (6 words) | 63.74 ns | [63.35, 64.18] |
 | dict_lookup_miss | 9.834 ns | [9.758, 9.934] |
 
-## Full Cyrius set (`cyrius bench tests/shabda.bcyr`, cycc 6.4.11)
+## Full Cyrius set (`cyrius bench tests/shabda.bcyr`, cycc 6.4.12)
 
 | Benchmark | avg | iterations |
 |-----------|-----|------------|
 | g2p_hello_world | 21.876 µs | 5,000 |
 | g2p_sentence | 83.595 µs | 2,000 |
-| speak_hello | 22.439 ms | 200 |
-| speak_sentence | 24.714 ms | 100 |
+| speak_hello | 7.651 ms (svara 3.1.0; was 22.4 ms) | 200 |
+| speak_sentence | 24.788 ms | 100 |
 | dict_english_construction | 9.395 ms | 50 |
 | dict_lookup_hit | 127 ns | 200,000 |
 | dict_lookup_miss | 249 ns | 200,000 |
@@ -66,7 +66,7 @@
 | **Validation always-on** | 2 varna passes / word | `convert_*` — Rust release `debug_assert!`-elides `validate_phonemes_for` + `validate_phonotactics`; Cyrius runs them every convert. A large slice of the 25× G2P gap. |
 | **Heap allocation** | ~100–250 ns per `alloc` | G2P is alloc-heavy: per word a phoneme vec (lookup copy / rules output), a syllables vec (each syllable = struct + onset/coda vecs), an events vec (each event = an `SvPhonemeEvent` alloc). Rust reuses buffers / stacks / SmallVec. |
 | **f64 vs f32** | ~1.5–2× | prosody durations + svara synthesis math widened f32→f64 (x87/SSE2, no SIMD). |
-| **svara synthesis** | dominates `speak_*` | `shabda_speak` → `svara_sequence_render` is svara's (Cyrius-ported) formant synthesizer; the 15–19× `speak` gap is mostly the dependency, not shabda logic. |
+| **svara synthesis** | dominates `speak_*` | `shabda_speak` → `svara_sequence_render` is svara's (Cyrius-ported) formant synthesizer; the residual `speak` gap is mostly the dependency, not shabda logic. svara **3.1.0** control-rate glide coefficients already cut `speak_hello` 22.4→7.65 ms (diphthong words); the rest tracks svara-side. |
 | **UTF-8 string work** | per char | `normalize` decodes UTF-8 into a code-point vec and rebuilds NUL-terminated cstrings; Rust operates on `&str`/`String` in place. |
 
 The multiplier is smallest where the work is bounded by data movement, not
@@ -76,9 +76,9 @@ alloc-free O(1) `dict_lookup` hit (~12×).
 ### Does it matter for the workload?
 
 For real-time TTS, yes — it's comfortably fast. `speak_hello` renders a word of
-audio (~0.5 s at 44.1 kHz) in **22 ms**: a real-time factor around **0.045**
-(≈22× faster than playback). Converting a 10-word sentence to phonemes takes
-**84 µs**. Absolute latency, not the ratio to Rust, is what a speech pipeline
+audio (~0.5 s at 44.1 kHz) in **7.7 ms** (svara 3.1.0): a real-time factor around
+**0.015** (≈65× faster than playback). Converting a 10-word sentence to phonemes
+takes **84 µs**. Absolute latency, not the ratio to Rust, is what a speech pipeline
 feels — and there is ample headroom.
 
 ### Where Cyrius wins

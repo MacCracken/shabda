@@ -11,7 +11,7 @@ parity oracle.
 
 ## Toolchain
 
-- **Cyrius pin**: `6.4.11` (in `cyrius.cyml [package].cyrius`).
+- **Cyrius pin**: `6.4.12` (in `cyrius.cyml [package].cyrius`).
 
 ## Port decisions (Rust → Cyrius)
 
