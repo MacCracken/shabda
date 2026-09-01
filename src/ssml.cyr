@@ -138,16 +138,25 @@ fn shabda_ssml_node_children(node): i64 { return load64(node + SHABDA_SSML_OFF_C
 # ================================================================
 # Byte-scan primitives (over a raw cstring, mirroring `input.as_bytes()`).
 # ================================================================
-# ASCII whitespace test (Rust char::is_whitespace, ASCII subset the parser hits):
-# space, tab, newline, carriage return, form feed, vertical tab.
-#must_use
-fn _shabda_ssml_is_ws(c): i64 {
-    if (c == 32)  { return 1; }
-    if (c == 9)   { return 1; }
-    if (c == 10)  { return 1; }
-    if (c == 13)  { return 1; }
-    if (c == 12)  { return 1; }
-    if (c == 11)  { return 1; }
+# Rust str::trim over input[start..end). Writes the trimmed bounds through the two
+# out-params. Codepoint-aware: Rust trims the Unicode White_Space property, so an
+# attribute list separated from its tag name by U+00A0 — or a text run padded with
+# U+3000 — must trim exactly as the oracle does.
+fn _shabda_ssml_trim(input, start, end, out_s, out_e): i64 {
+    var s = start;
+    var e = end;
+    var n = shabda_ws_len_at(input, s, e);
+    while (n > 0) {
+        s = s + n;
+        n = shabda_ws_len_at(input, s, e);
+    }
+    var m = shabda_ws_len_before(input, s, e);
+    while (m > 0) {
+        e = e - m;
+        m = shabda_ws_len_before(input, s, e);
+    }
+    store64(out_s, s);
+    store64(out_e, e);
     return 0;
 }
 
@@ -255,7 +264,7 @@ fn _shabda_slice_eq_at(input, off, name, n): i64 {
 fn _shabda_tag_name_len(input, start, end): i64 {
     var i = start;
     while (i < end) {
-        if (_shabda_ssml_is_ws(load8(input + i)) == 1) { return i - start; }
+        if (shabda_ws_len_at(input, i, end) > 0) { return i - start; }
         i = i + 1;
     }
     return end - start;
@@ -274,6 +283,17 @@ fn _shabda_name_eq(input, start, n, lit): i64 {
 # ================================================================
 var SHABDA_SSML_PARSE_ERR = (0 - 1);
 
+# Maximum element nesting depth the parser will descend. _shabda_parse_until and
+# _shabda_parse_tag are mutually recursive once per level, so without a ceiling the
+# depth is whatever the caller's string says: ~19,400 levels (a ~408 KB document)
+# exhausts an 8 MB stack and the process takes SIGSEGV. rust-old/src/ssml.rs has the
+# same shape and the same crash — capping is a deliberate divergence from the oracle,
+# recorded in the 3.0.3 CHANGELOG entry. 256 is the depth libxml2 defaults to and is ~50x deeper than
+# any real SSML document; past it the parse fails as SHABDA_SSML_PARSE_ERR, which
+# shabda_ssml_parse reports as 0 and shabda_convert_ssml as InvalidInput. A document
+# nested exactly 256 deep parses; 257 does not.
+var SHABDA_SSML_MAX_DEPTH = 256;
+
 #must_use
 fn _shabda_parse_break_duration(input, astart, aend): i64 {
     var time_str = _shabda_extract_attr(input, astart, aend, "time");
@@ -283,23 +303,23 @@ fn _shabda_parse_break_duration(input, astart, aend): i64 {
         # strip_suffix("ms")
         if (tlen >= 2 && load8(tcstr + tlen - 2) == 109 && load8(tcstr + tlen - 1) == 115) {
             # ms_str = tcstr[..tlen-2]; parse::<u32>. Must be all digits.
-            if (_shabda_all_digits(tcstr, tlen - 2) == 1) {
-                return _shabda_atoi_n(tcstr, tlen - 2);
-            }
-            return SHABDA_SSML_PARSE_ERR;        # invalid break time
+            var mok = alloc(8);
+            if (mok == 0) { return SHABDA_SSML_PARSE_ERR; }
+            var mv = _shabda_atoi_u32(tcstr, tlen - 2, mok);
+            if (load64(mok) == 1) { return mv; }
+            return SHABDA_SSML_PARSE_ERR;        # invalid break time (Rust parse::<u32> Err)
         }
         # strip_suffix('s')
         if (tlen >= 1 && load8(tcstr + tlen - 1) == 115) {
             # s_str = tcstr[..tlen-1]; parse::<f32>. (secs * 1000.0) as u32.
             var sbuf = alloc(tlen);
+            if (sbuf == 0) { return SHABDA_SSML_PARSE_ERR; }
             memcpy(sbuf, tcstr, tlen - 1);
             store8(sbuf + tlen - 1, 0);
             var fout = alloc(8);
             var ok = f64_parse_ok(sbuf, fout);
             if (ok == 0) { return SHABDA_SSML_PARSE_ERR; }
-            var secs = load64(fout);
-            var ms = f64_to(f64_mul(secs, f64_from(1000)));
-            return ms;
+            return _shabda_secs_to_ms_u32(load64(fout));
         }
         # unknown time unit
         return SHABDA_SSML_PARSE_ERR;
@@ -331,18 +351,56 @@ fn _shabda_all_digits(s, n): i64 {
     return 1;
 }
 
-# atoi over the first n bytes only.
+# u32::MAX — the domain of Rust's `ms_str.parse::<u32>()`.
+var SHABDA_SSML_U32_MAX = 4294967295;
+
+# Rust `parse::<u32>()` over the first n bytes: returns the value and sets *ok_out
+# to 1, or sets it to 0 for an empty string, a non-digit, or a value above
+# u32::MAX. The old form accumulated into an i64 with no ceiling, so
+# `<break time="5000000000ms">` returned 5,000,000,000 where Rust returns Err, and
+# a 20-digit run wrapped the i64 outright.
 #must_use
-fn _shabda_atoi_n(s, n): i64 {
+fn _shabda_atoi_u32(s, n, ok_out): i64 {
+    store64(ok_out, 0);
+    if (n <= 0) { return 0; }
     var v = 0;
     var i = 0;
     while (i < n) {
         var c = load8(s + i);
-        if (c < 48 || c > 57) { return v; }
+        if (c < 48 || c > 57) { return 0; }
         v = v * 10 + (c - 48);
+        if (v > SHABDA_SSML_U32_MAX) { return 0; }   # cannot wrap: v <= u32::MAX*10+9
         i = i + 1;
     }
+    store64(ok_out, 1);
     return v;
+}
+
+# Rust `(secs * 1000.0) as u32` on an f32. `as` on a float is a SATURATING cast in
+# Rust: NaN -> 0, negative -> 0, above u32::MAX -> u32::MAX. The port used a bare
+# f64_to, so `<break time="-5s">` produced -5000 — which is not just wrong but
+# collides with SHABDA_SSML_PARSE_ERR (-1) for `time="-0.001s"`.
+#
+# The multiply is done in NATIVE single precision because Rust's is:
+# `s_str.parse::<f32>()` then an f32 multiply. Typing the params `f32` puts the bit
+# patterns in xmm lanes as singles and `a * b` emits `mulss`; the result comes back
+# as its bit pattern through an i64 return (cyrius accepts f32 params but not an f32
+# return type). Same shape ganita 1.2.0 uses for its arithmetic tier.
+#must_use
+fn _shabda_f32_mul(a: f32, b: f32): i64 {
+    var s: f32 = a * b;
+    return s;
+}
+
+#must_use
+fn _shabda_secs_to_ms_u32(secs_f64): i64 {
+    var secs32 = f32_from(secs_f64);                             # parse::<f32>()
+    var k1000 = f32_from(f64_from(1000));
+    var ms32 = f32_to(_shabda_f32_mul(secs32, k1000));           # * 1000.0f32
+    if (f64_eq(ms32, ms32) == 0) { return 0; }                   # NaN -> 0 (NaN != NaN)
+    if (f64_lt(ms32, f64_from(0)) == 1) { return 0; }            # negative -> 0
+    if (f64_ge(ms32, f64_from(SHABDA_SSML_U32_MAX)) == 1) { return SHABDA_SSML_U32_MAX; }
+    return f64_to(ms32);
 }
 
 # ================================================================
@@ -404,11 +462,15 @@ fn _shabda_children_to_text(children): i64 {
 # the Rust text-run branch shared by parse() and parse_until()).
 # ================================================================
 fn _shabda_push_text(nodes, input, start, end): i64 {
-    # Trim ASCII whitespace both ends.
+    # Trim Unicode whitespace both ends (Rust str::trim).
     var s = start;
     var e = end;
-    while (s < e && _shabda_ssml_is_ws(load8(input + s)) == 1) { s = s + 1; }
-    while (e > s && _shabda_ssml_is_ws(load8(input + e - 1)) == 1) { e = e - 1; }
+    var pso = alloc(8);
+    var peo = alloc(8);
+    if (pso == 0 || peo == 0) { return 0; }
+    _shabda_ssml_trim(input, s, e, pso, peo);
+    s = load64(pso);
+    e = load64(peo);
     if (e > s) {
         var ts = str_from_buf(input + s, e - s);
         vec_push(nodes, shabda_ssml_text(ts));
@@ -422,8 +484,9 @@ fn _shabda_push_text(nodes, input, start, end): i64 {
 # returns the new position, OR returns SHABDA_SSML_PARSE_ERR on malformed input.
 # ================================================================
 #must_use
-fn _shabda_parse_tag(input, len, pos, node_out): i64 {
+fn _shabda_parse_tag(input, len, pos, node_out, depth): i64 {
     store64(node_out, 0);
+    if (depth >= SHABDA_SSML_MAX_DEPTH) { return SHABDA_SSML_PARSE_ERR; }
     var tag_end = _shabda_find_tag_end(input, len, pos);
     if (tag_end < 0) { return SHABDA_SSML_PARSE_ERR; }   # unclosed tag bracket
 
@@ -438,15 +501,23 @@ fn _shabda_parse_tag(input, len, pos, node_out): i64 {
         cend = cend - 1;                          # drop trailing '/'
     }
     # trim the (possibly '/'-stripped) content
-    while (cstart < cend && _shabda_ssml_is_ws(load8(input + cstart)) == 1) { cstart = cstart + 1; }
-    while (cend > cstart && _shabda_ssml_is_ws(load8(input + cend - 1)) == 1) { cend = cend - 1; }
+    var cso = alloc(8);
+    var ceo = alloc(8);
+    if (cso == 0 || ceo == 0) { return SHABDA_SSML_PARSE_ERR; }
+    _shabda_ssml_trim(input, cstart, cend, cso, ceo);
+    cstart = load64(cso);
+    cend = load64(ceo);
 
     # split tag name / attrs
     var name_len = _shabda_tag_name_len(input, cstart, cend);
     var astart = cstart + name_len;
     var aend = cend;
-    while (astart < aend && _shabda_ssml_is_ws(load8(input + astart)) == 1) { astart = astart + 1; }
-    while (aend > astart && _shabda_ssml_is_ws(load8(input + aend - 1)) == 1) { aend = aend - 1; }
+    var aso = alloc(8);
+    var aeo = alloc(8);
+    if (aso == 0 || aeo == 0) { return SHABDA_SSML_PARSE_ERR; }
+    _shabda_ssml_trim(input, astart, aend, aso, aeo);
+    astart = load64(aso);
+    aend = load64(aeo);
 
     # break
     if (_shabda_name_eq(input, cstart, name_len, "break") == 1) {
@@ -463,7 +534,7 @@ fn _shabda_parse_tag(input, len, pos, node_out): i64 {
             return tag_end + 1;
         }
         var kids = vec_new();
-        var np = _shabda_parse_until(input, len, tag_end + 1, "emphasis", kids);
+        var np = _shabda_parse_until(input, len, tag_end + 1, "emphasis", kids, depth + 1);
         if (np == SHABDA_SSML_PARSE_ERR) { return SHABDA_SSML_PARSE_ERR; }
         store64(node_out, shabda_ssml_emphasis(level, kids));
         return np;
@@ -476,7 +547,7 @@ fn _shabda_parse_tag(input, len, pos, node_out): i64 {
             return tag_end + 1;
         }
         var pkids = vec_new();
-        var pnp = _shabda_parse_until(input, len, tag_end + 1, "prosody", pkids);
+        var pnp = _shabda_parse_until(input, len, tag_end + 1, "prosody", pkids, depth + 1);
         if (pnp == SHABDA_SSML_PARSE_ERR) { return SHABDA_SSML_PARSE_ERR; }
         store64(node_out, shabda_ssml_prosody(rate, pkids));
         return pnp;
@@ -491,7 +562,7 @@ fn _shabda_parse_tag(input, len, pos, node_out): i64 {
             return tag_end + 1;
         }
         var phkids = vec_new();
-        var phnp = _shabda_parse_until(input, len, tag_end + 1, "phoneme", phkids);
+        var phnp = _shabda_parse_until(input, len, tag_end + 1, "phoneme", phkids, depth + 1);
         if (phnp == SHABDA_SSML_PARSE_ERR) { return SHABDA_SSML_PARSE_ERR; }
         store64(node_out, shabda_ssml_text(_shabda_children_to_text(phkids)));
         return phnp;
@@ -503,7 +574,7 @@ fn _shabda_parse_tag(input, len, pos, node_out): i64 {
     var ukids = vec_new();
     # parse_until with the unknown tag name (as a fresh cstr for the closer match)
     var uname = _shabda_dup_name(input, cstart, name_len);
-    var unp = _shabda_parse_until(input, len, tag_end + 1, uname, ukids);
+    var unp = _shabda_parse_until(input, len, tag_end + 1, uname, ukids, depth + 1);
     if (unp == SHABDA_SSML_PARSE_ERR) { return SHABDA_SSML_PARSE_ERR; }
     if (vec_len(ukids) == 0) {
         return unp;
@@ -517,6 +588,7 @@ fn _shabda_parse_tag(input, len, pos, node_out): i64 {
 #must_use
 fn _shabda_dup_name(input, start, n): i64 {
     var buf = alloc(n + 1);
+    if (buf == 0) { return ""; }
     memcpy(buf, input + start, n);
     store8(buf + n, 0);
     return buf;
@@ -526,10 +598,11 @@ fn _shabda_dup_name(input, start, n): i64 {
 # parse_until (was parse_until): parse content into `nodes` until a matching
 # </tag_name> closer. Returns position after the closer, OR the end-of-input
 # position if no closer (Rust "return what we have"), OR SHABDA_SSML_PARSE_ERR.
-# tag_name is a cstr.
+# tag_name is a cstr. `depth` is the current nesting level (see
+# SHABDA_SSML_MAX_DEPTH).
 # ================================================================
 #must_use
-fn _shabda_parse_until(input, len, start, tag_name, nodes): i64 {
+fn _shabda_parse_until(input, len, start, tag_name, nodes, depth): i64 {
     var pos = start;
     while (pos < len) {
         if (load8(input + pos) == 60) {          # '<'
@@ -541,8 +614,12 @@ fn _shabda_parse_until(input, len, start, tag_name, nodes): i64 {
                 # close_name = content[1..].trim()
                 var ns = cstart + 1;
                 var ne = tag_end;
-                while (ns < ne && _shabda_ssml_is_ws(load8(input + ns)) == 1) { ns = ns + 1; }
-                while (ne > ns && _shabda_ssml_is_ws(load8(input + ne - 1)) == 1) { ne = ne - 1; }
+                var nso = alloc(8);
+                var neo = alloc(8);
+                if (nso == 0 || neo == 0) { return SHABDA_SSML_PARSE_ERR; }
+                _shabda_ssml_trim(input, ns, ne, nso, neo);
+                ns = load64(nso);
+                ne = load64(neo);
                 if (_shabda_name_eq(input, ns, ne - ns, tag_name) == 1) {
                     return tag_end + 1;
                 }
@@ -550,7 +627,7 @@ fn _shabda_parse_until(input, len, start, tag_name, nodes): i64 {
                 pos = tag_end + 1;
             } else {
                 var node_out = alloc(8);
-                var np = _shabda_parse_tag(input, len, pos, node_out);
+                var np = _shabda_parse_tag(input, len, pos, node_out, depth);
                 if (np == SHABDA_SSML_PARSE_ERR) { return SHABDA_SSML_PARSE_ERR; }
                 var node = load64(node_out);
                 if (node != 0) { vec_push(nodes, node); }
@@ -597,7 +674,7 @@ fn shabda_ssml_parse(input): i64 {
             } elif (_shabda_is_speak(input, len, cstart) == 1) {
                 pos = tag_end + 1;
                 var kids = vec_new();
-                var np = _shabda_parse_until(input, len, pos, "speak", kids);
+                var np = _shabda_parse_until(input, len, pos, "speak", kids, 1);
                 if (np == SHABDA_SSML_PARSE_ERR) { return 0; }
                 var kn = vec_len(kids);
                 var ki = 0;
@@ -608,7 +685,7 @@ fn shabda_ssml_parse(input): i64 {
                 pos = np;
             } else {
                 var node_out = alloc(8);
-                var tnp = _shabda_parse_tag(input, len, pos, node_out);
+                var tnp = _shabda_parse_tag(input, len, pos, node_out, 0);
                 if (tnp == SHABDA_SSML_PARSE_ERR) { return 0; }
                 var node = load64(node_out);
                 if (node != 0) { vec_push(nodes, node); }
@@ -674,11 +751,11 @@ fn shabda_ssml_node_clone(node): i64 {
     }
     if (tag == SHABDA_SSML_EMPHASIS) {
         return shabda_ssml_emphasis(shabda_ssml_node_level(node),
-        _shabda_clone_children(shabda_ssml_node_children(node)));
+          _shabda_clone_children(shabda_ssml_node_children(node)));
     }
     if (tag == SHABDA_SSML_PROSODY) {
         return shabda_ssml_prosody(shabda_ssml_node_rate(node),
-        _shabda_clone_children(shabda_ssml_node_children(node)));
+          _shabda_clone_children(shabda_ssml_node_children(node)));
     }
     return 0;                                      # #[non_exhaustive] fallback
 }

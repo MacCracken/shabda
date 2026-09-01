@@ -23,6 +23,9 @@ include "src/prosody.cyr"
 include "src/validate.cyr"
 include "src/engine.cyr"
 
+# Smoke entry: exercises one call per ported layer (L0 errors -> L1 normalize/rules/
+# syllable/heteronym/ssml -> L2 prosody/validate -> L3 engine convert, incl. the two
+# native-script paths). Prints one line per probe; returns 0. Not part of [lib].modules.
 fn main() {
     alloc_init();
     println("shabda ready");

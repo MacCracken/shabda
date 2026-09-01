@@ -131,19 +131,21 @@ fn _shabda_slice(v, start, end): i64 {
     return out;
 }
 
-# Checks if a consonant cluster (vec) is a legal English onset: sonority rises
-# left-to-right. Exception: /s/ + plosive clusters (sp, st, sk, spl, spr, str,
-# skr) where cluster[0] == FricativeS and sonority(next) <= 2.
-fn _shabda_is_legal_onset(cluster): i64 {
-    var len = vec_len(cluster);
-    if (len == 0) { return 1; }
-    if (len == 1) { return 1; }
+# Checks if v[start..end) is a legal English onset: sonority rises left-to-right.
+# Exception: /s/ + plosive clusters (sp, st, sk, spl, spr, str, skr) where the
+# first element is FricativeS and sonority(next) <= 2.
+#
+# Range-based on purpose. Rust's `is_legal_onset(&cluster[start..])` borrows a
+# sub-slice for free; materialising one here (the shape this replaced) made the
+# caller below quadratic in BOTH time and permanent bump-allocator bytes.
+fn _shabda_is_legal_onset_range(v, start, end): i64 {
+    if (end - start <= 1) { return 1; }          # empty or single: always legal
 
-    var first = vec_get(cluster, 0);
-    var i = 1;
-    while (i < len) {
-        var son_cur = _shabda_sonority(vec_get(cluster, i));
-        var son_prev = _shabda_sonority(vec_get(cluster, i - 1));
+    var first = vec_get(v, start);
+    var i = start + 1;
+    while (i < end) {
+        var son_cur = _shabda_sonority(vec_get(v, i));
+        var son_prev = _shabda_sonority(vec_get(v, i - 1));
         if (son_cur <= son_prev) {
             # Exception: /s/ + plosive clusters.
             if (first == SVARA_PH_FRIC_S) {
@@ -159,24 +161,33 @@ fn _shabda_is_legal_onset(cluster): i64 {
     return 1;
 }
 
-# Maximum number of consonants from the END of a cluster (vec) that form a legal
-# English onset (rising sonority toward the nucleus). Returns a count.
-fn _shabda_max_legal_onset(cluster): i64 {
-    var len = vec_len(cluster);
-    if (len == 0) { return 0; }
+# Whole-vec form (Rust `is_legal_onset(cluster)`).
+fn _shabda_is_legal_onset(cluster): i64 {
+    return _shabda_is_legal_onset_range(cluster, 0, vec_len(cluster));
+}
 
-    # Try from the full cluster down to 1 consonant.
-    var start = 0;
-    while (start < len) {
-        var candidate = _shabda_slice(cluster, start, len);
-        if (_shabda_is_legal_onset(candidate) == 1) {
-            return len - start;
+# Maximum number of consonants from the END of v[start..end) that form a legal
+# English onset (rising sonority toward the nucleus). Returns a count.
+fn _shabda_max_legal_onset_range(v, start, end): i64 {
+    if (end <= start) { return 0; }
+
+    # Try from the full range down to 1 consonant. Rust borrows &cluster[i..]
+    # here; we pass the bounds instead of copying.
+    var i = start;
+    while (i < end) {
+        if (_shabda_is_legal_onset_range(v, i, end) == 1) {
+            return end - i;
         }
-        start = start + 1;
+        i = i + 1;
     }
 
     # Single consonant is always a legal onset.
     return 1;
+}
+
+# Whole-vec form (Rust `max_legal_onset(cluster)`).
+fn _shabda_max_legal_onset(cluster): i64 {
+    return _shabda_max_legal_onset_range(cluster, 0, vec_len(cluster));
 }
 
 # ---- Syllabification ---------------------------------------------------------
@@ -212,8 +223,8 @@ fn shabda_syllabify(phonemes): i64 {
         } else {
             var prev_nucleus = vec_get(nuclei, syl_idx - 1);
             var cluster_start = prev_nucleus + 1;
-            var cluster = _shabda_slice(phonemes, cluster_start, nucleus_idx);
-            var onset_len = _shabda_max_legal_onset(cluster);
+            # Rust borrows &phonemes[cluster_start..nucleus_idx]; pass the bounds.
+            var onset_len = _shabda_max_legal_onset_range(phonemes, cluster_start, nucleus_idx);
             # PORT-RISK: nucleus_idx - onset_len must not go negative. The cluster
             # spans [cluster_start, nucleus_idx), so onset_len <= that span length,
             # which is <= nucleus_idx; guard anyway.
@@ -231,8 +242,8 @@ fn shabda_syllabify(phonemes): i64 {
         var coda = vec_new();
         if (syl_idx < nn - 1) {
             var next_nucleus = vec_get(nuclei, syl_idx + 1);
-            var gap = _shabda_slice(phonemes, nucleus_idx + 1, next_nucleus);
-            var next_onset_len = _shabda_max_legal_onset(gap);
+            # Rust borrows &phonemes[nucleus_idx+1..next_nucleus]; pass the bounds.
+            var next_onset_len = _shabda_max_legal_onset_range(phonemes, nucleus_idx + 1, next_nucleus);
             # PORT-RISK: next_nucleus - next_onset_len must not go negative. The
             # gap spans [nucleus_idx+1, next_nucleus); next_onset_len <= gap len,
             # so next_nucleus - next_onset_len >= nucleus_idx+1; guard anyway.

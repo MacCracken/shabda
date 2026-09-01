@@ -35,7 +35,7 @@ modules = [
 # hisab/goonj/naad are NOT stdlib — they are svara's git deps, auto-vendored by
 # `cyrius deps` via svara's manifest and `include`d in src/main.cyr.
 [deps]
-stdlib = ["syscalls", "string", "alloc", "str", "fmt", "vec", "io", "args", "assert", "fnptr", "atomic", "sakshi", "math", "ganita", "tagged", "hashmap", "bayan", "mmap", "bench", "slice", "result", "callback"]
+stdlib = ["syscalls", "string", "alloc", "str", "fmt", "vec", "io", "args", "assert", "fnptr", "atomic", "sakshi", "math", "ganita", "tagged", "hashmap", "bayan", "mmap", "bench", "slice", "result", "callback", "unicode"]
 
 # shabdakosh — the pronunciation dictionary (shbdk_* symbols). Re-exported by the
 # Rust crate as shabda::arpabet and shabda::dictionary; shabda calls shbdk_arpabet_*

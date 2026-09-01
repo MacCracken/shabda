@@ -121,5 +121,21 @@ vec_push(prons1, shbdk_pronunciation_new(pv0));
 var fb_ph = shabda_select_phonemes(r_read, _words2("want", "to"), prons1);
 assert_eq(vec_get(fb_ph, 0), 10, "fallback to prons[0]");
 
+# ================================================================
+# 3.0.3 regression
+# ================================================================
+test_group("3.0.3: select_phonemes survives an empty pronunciation vec");
+# Rust's fallback arm is `pronunciations[0]`, which panics on an empty slice. Here
+# vec_get(v, 0) reaches lib/vec.cyr's _vec_die() -> syscall(SYS_EXIT, 1): it does
+# not unwind and does not return a code, it terminates the HOST process. An empty
+# vec is reachable — shbdk_dict_lookup_all returns shbdk_dict_entry_all(e) verbatim
+# and a caller-built entry can hold zero pronunciations. Reaching this assertion at
+# all is the test.
+var empty_prons = vec_new();
+var r_read2 = shabda_heteronym_lookup("read");
+assert_eq(r_read2 != 0, 1, "'read' is a heteronym");
+var ep = shabda_select_phonemes(r_read2, _words2("the", "book"), empty_prons);
+assert_eq(vec_len(ep), 0, "empty pronunciations -> empty phonemes, not a process exit");
+
 var rc = assert_summary();
-syscall(60, rc);
+syscall(SYS_EXIT, rc);

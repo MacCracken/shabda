@@ -74,26 +74,38 @@ fn _shabda_decode_chars(word, lower): i64 {
         var b0 = load8(word + i);
         var cp = 0;
         var adv = 1;
+        # Every continuation byte is bounds-checked against `n`. A sequence whose
+        # lead byte promises more bytes than the string holds decodes as the lead
+        # byte alone and advances 1 — exactly what _shabda_utf8_next (normalize.cyr)
+        # does at its NUL guard, so the crate's two decoders agree. Without this the
+        # loads ran up to 3 bytes past the NUL terminator, reading whatever the bump
+        # allocator held there and turning it into phonemes.
         if (b0 < 0x80) {
             cp = b0;
         } elif (b0 < 0xE0) {
             # 2-byte sequence
-            var b1 = load8(word + i + 1);
-            cp = ((b0 & 0x1F) << 6) | (b1 & 0x3F);
-            adv = 2;
+            if (i + 1 >= n) { cp = b0; } else {
+                var b1 = load8(word + i + 1);
+                cp = ((b0 & 0x1F) << 6) | (b1 & 0x3F);
+                adv = 2;
+            }
         } elif (b0 < 0xF0) {
             # 3-byte sequence (Devanagari, Arabic presentation etc.)
-            var b1b = load8(word + i + 1);
-            var b2b = load8(word + i + 2);
-            cp = ((b0 & 0x0F) << 12) | ((b1b & 0x3F) << 6) | (b2b & 0x3F);
-            adv = 3;
+            if (i + 2 >= n) { cp = b0; } else {
+                var b1b = load8(word + i + 1);
+                var b2b = load8(word + i + 2);
+                cp = ((b0 & 0x0F) << 12) | ((b1b & 0x3F) << 6) | (b2b & 0x3F);
+                adv = 3;
+            }
         } else {
             # 4-byte sequence
-            var b1c = load8(word + i + 1);
-            var b2c = load8(word + i + 2);
-            var b3c = load8(word + i + 3);
-            cp = ((b0 & 0x07) << 18) | ((b1c & 0x3F) << 12) | ((b2c & 0x3F) << 6) | (b3c & 0x3F);
-            adv = 4;
+            if (i + 3 >= n) { cp = b0; } else {
+                var b1c = load8(word + i + 1);
+                var b2c = load8(word + i + 2);
+                var b3c = load8(word + i + 3);
+                cp = ((b0 & 0x07) << 18) | ((b1c & 0x3F) << 12) | ((b2c & 0x3F) << 6) | (b3c & 0x3F);
+                adv = 4;
+            }
         }
         if (lower != 0) {
             cp = _shabda_ascii_lower(cp);

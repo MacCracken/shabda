@@ -172,5 +172,58 @@ assert_eq(vec_get(moflat, 1), SVARA_PH_PLOSIVE_T, "moflat[1] = T");
 assert_eq(vec_get(moflat, 2), SVARA_PH_APPROX_R, "moflat[2] = R");
 assert_eq(vec_get(moflat, 3), SVARA_PH_VOWEL_A, "moflat[3] = nucleus A");
 
+# ================================================================
+# 3.0.3 regression — _shabda_max_legal_onset no longer copies per suffix
+# ================================================================
+test_group("3.0.3: max_legal_onset is range-based (was O(n^2) permanent bytes)");
+# Rust borrows &cluster[start..]; the port materialised a fresh vec on EVERY
+# iteration, so a long consonant run cost ~21.6*L^2 bytes out of a bump allocator
+# that never frees — 858 MB for a 6 KB word, reachable straight from shabda_convert.
+# Behaviour must be bit-identical; only the allocation changed.
+fn _cluster(n, ph): i64 {
+    var v = vec_new();
+    var i = 0;
+    while (i < n) { vec_push(v, ph); i = i + 1; }
+    return v;
+}
+# The whole-vec and range forms must agree.
+var c3 = vec_new();
+vec_push(c3, SVARA_PH_FRIC_S);
+vec_push(c3, SVARA_PH_PLOSIVE_T);
+vec_push(c3, SVARA_PH_APPROX_R);
+assert_eq(_shabda_max_legal_onset(c3), _shabda_max_legal_onset_range(c3, 0, vec_len(c3)),
+  "whole-vec form == range form (str)");
+assert_eq(_shabda_is_legal_onset(c3), _shabda_is_legal_onset_range(c3, 0, vec_len(c3)),
+  "is_legal_onset: whole-vec form == range form");
+assert_eq(_shabda_max_legal_onset(c3), 3, "str is a legal 3-consonant onset");
+assert_eq(_shabda_max_legal_onset(vec_new()), 0, "empty cluster -> 0");
+var c1 = _cluster(1, SVARA_PH_PLOSIVE_T);
+assert_eq(_shabda_max_legal_onset(c1), 1, "single consonant -> 1");
+# The pathological shape: equal sonority throughout, so the scan runs the full length.
+var cbb = _cluster(2, SVARA_PH_PLOSIVE_B);
+assert_eq(_shabda_max_legal_onset(cbb), 1, "bb -> 1 (flat sonority splits)");
+# Sub-range semantics: a range must behave exactly like the slice it names.
+var mixed = vec_new();
+vec_push(mixed, SVARA_PH_PLOSIVE_K);
+vec_push(mixed, SVARA_PH_FRIC_S);
+vec_push(mixed, SVARA_PH_PLOSIVE_T);
+vec_push(mixed, SVARA_PH_APPROX_R);
+var tail = vec_new();
+vec_push(tail, SVARA_PH_FRIC_S);
+vec_push(tail, SVARA_PH_PLOSIVE_T);
+vec_push(tail, SVARA_PH_APPROX_R);
+assert_eq(_shabda_max_legal_onset_range(mixed, 1, 4), _shabda_max_legal_onset(tail),
+  "range(v,1,4) == whole-vec on the same three elements");
+
+# A 600-consonant run: before the fix this alone cost ~7.8 MB of arena. The
+# assertion is that it completes and syllabifies to the expected shape.
+var big = vec_new();
+vec_push(big, SVARA_PH_VOWEL_A);
+var bi = 0;
+while (bi < 600) { vec_push(big, SVARA_PH_PLOSIVE_B); bi = bi + 1; }
+vec_push(big, SVARA_PH_VOWEL_A);
+var bsyl = shabda_syllabify(big);
+assert_eq(vec_len(bsyl), 2, "600-consonant cluster between two nuclei -> 2 syllables");
+
 var rc = assert_summary();
-syscall(60, rc);
+syscall(SYS_EXIT, rc);

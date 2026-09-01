@@ -1,6 +1,13 @@
 # shabda.fcyr — fuzz harness. Feeds arbitrary bytes into the text-parsing entry
 # points (normalize, SSML parser, the full convert pipeline). None may crash,
 # over-read, or loop forever on hostile input — robustness, not correctness.
+#
+# The driver has three parts: a fixed CORPUS of every shape that produced a defect
+# (kept as permanent regressions), random BYTE input including invalid UTF-8, and
+# random MARKUP assembled from SSML fragments so the parser meets half-formed and
+# mismatched structure rather than only noise. The generator is a seeded xorshift,
+# so a failure is reproducible. Before 3.0.3 the driver was two literals and could
+# not reach a single one of the defects this release fixed.
 
 include "lib/hisab.cyr"
 include "lib/goonj.cyr"
@@ -47,13 +54,170 @@ fn fuzz_main(data, len) {
     return 0;
 }
 
+# ---- corpus -----------------------------------------------------------------
+# Every shape that produced a defect in 3.0.3, kept as a permanent regression
+# corpus. Each must return; the harness completing IS the assertion, because the
+# failure mode for all of them was a process kill (SIGSEGV, or lib/vec.cyr's
+# _vec_die -> syscall(SYS_EXIT, 1)) rather than a value we could check.
+fn _fz(lit): i64 {
+    return fuzz_main(lit, strlen(lit));
+}
+
+# Repeat `unit` n times, then `tail`.
+fn _fz_rep(unit, n, tail): i64 {
+    var sb = str_builder_new();
+    var i = 0;
+    while (i < n) { str_builder_add_cstr(sb, unit); i = i + 1; }
+    str_builder_add_cstr(sb, tail);
+    var s = str_cstr(str_builder_build(sb));
+    return fuzz_main(s, strlen(s));
+}
+
+fn _corpus(): i64 {
+    # Baseline.
+    _fz("hello, world.");
+    _fz("42 <emph>CATS</emph>");
+
+    # Malformed / truncated UTF-8 — the rules decoder used to read past the NUL.
+    _fz("ab\xC3");
+    _fz("x\xE0\xA4");
+    _fz("\xF0\x9F\x98");
+    _fz("\xFF\xFE\xFD");
+    _fz("\x80\x80\x80");
+    _fz("caf\xC3");
+
+    # Unicode whitespace — word splitting, the empty guard, trim_end.
+    _fz("hello\xC2\xA0world");
+    _fz("\xE3\x80\x80");
+    _fz("really?\xC2\xA0");
+    _fz("\xC2\xA0\xE3\x80\x80\xE2\x80\x89");
+
+    # Non-Latin scripts, including the ones normalize used to delete.
+    _fz("\xE0\xA4\xA8\xE0\xA4\xAE\xE0\xA4\xB8\xE0\xA5\x8D\xE0\xA4\xA4\xE0\xA5\x87");
+    _fz("\xD9\x83\xD8\xAA\xD8\xA7\xD8\xA8");
+    _fz("\xCE\x91\xCE\x92\xCE\x93");
+    _fz("\xD0\x9C\xD0\xBE\xD1\x81\xD0\xBA\xD0\xB2\xD0\xB0");
+
+    # <break> time domain: u32 bound, negative saturation, the sentinel collision.
+    _fz("<break time=\"5000000000ms\"/>");
+    _fz("<break time=\"99999999999999999999ms\"/>");
+    _fz("<break time=\"-0.001s\"/>");
+    _fz("<break time=\"1e30s\"/>");
+    _fz("<break time=\"s\"/>");
+    _fz("<break time=\"ms\"/>");
+    _fz("<break time=\"\"/>");
+
+    # Malformed markup.
+    _fz("<emphasis>");
+    _fz("</emphasis>");
+    _fz("<");
+    _fz("<>");
+    _fz("< >");
+    _fz("<emphasis level=>x</emphasis>");
+    _fz("<prosody rate=\"\">x</prosody>");
+    _fz("<unknown><unknown/></unknown>");
+    _fz("<speak><speak></speak></speak>");
+
+    # Deep nesting, on both sides of SHABDA_SSML_MAX_DEPTH. The last one is the
+    # ~420 KB document that used to take the process down with SIGSEGV.
+    _fz_rep("<emphasis>", 255, "x");
+    _fz_rep("<emphasis>", 257, "x");
+    _fz_rep("<x>", 20000, "y");
+
+    # Long single tokens — the quadratic onset scan lived entirely inside one token.
+    _fz_rep("b", 2000, "");
+    _fz_rep("st", 1000, "a");
+    _fz_rep("9", 400, "");
+    _fz_rep("*", 500, "");
+
+    # Numbers, at and past the i64 boundary.
+    _fz("9223372036854775807");
+    _fz("9223372036854775808");
+    _fz("3.14159");
+    _fz("0.0000001");
+    _fz("...");
+    return 0;
+}
+
+# ---- generated input ---------------------------------------------------------
+# xorshift64*, seeded from a constant so a CI failure is reproducible from the
+# iteration number alone. Cyrius has no clock-seeded RNG in scope here and we do
+# not want one: a fuzz run that cannot be replayed is not much use.
+var _FZ_STATE = 0x2545F4914F6CDD1D;
+
+fn _fz_rand(): i64 {
+    var x = _FZ_STATE;
+    x = x ^ (x << 13);
+    x = x ^ ((x >> 7) & 0x01FFFFFFFFFFFFFF);
+    x = x ^ (x << 17);
+    _FZ_STATE = x;
+    if (x < 0) { return 0 - x; }
+    return x;
+}
+
+# Random bytes, deliberately including invalid UTF-8 and embedded markup bytes.
+fn _fz_random(rounds, maxlen): i64 {
+    var r = 0;
+    while (r < rounds) {
+        var n = (_fz_rand() % maxlen) + 1;
+        var buf = alloc(n + 1);
+        if (buf == 0) { return 0; }
+        var i = 0;
+        while (i < n) {
+            store8(buf + i, _fz_rand() & 0xFF);
+            i = i + 1;
+        }
+        store8(buf + n, 0);
+        fuzz_main(buf, strlen(buf));
+        r = r + 1;
+    }
+    return 0;
+}
+
+# Random SSML-shaped input: markup fragments drawn at random, so the parser sees
+# well-formed, half-formed and mismatched structure rather than only noise.
+fn _fz_frag(k): cstring {
+    if (k == 0)  { return "<emphasis>"; }
+    if (k == 1)  { return "</emphasis>"; }
+    if (k == 2)  { return "<prosody rate=\"slow\">"; }
+    if (k == 3)  { return "</prosody>"; }
+    if (k == 4)  { return "<break time=\"100ms\"/>"; }
+    if (k == 5)  { return "<speak>"; }
+    if (k == 6)  { return "</speak>"; }
+    if (k == 7)  { return "<phoneme ph=\"AH0\"/>"; }
+    if (k == 8)  { return "hello "; }
+    if (k == 9)  { return "\xC2\xA0"; }
+    if (k == 10) { return "<"; }
+    if (k == 11) { return ">"; }
+    if (k == 12) { return "<break time=\"-1s\"/>"; }
+    return "x";
+}
+
+fn _fz_markup(rounds, frags): i64 {
+    var r = 0;
+    while (r < rounds) {
+        var sb = str_builder_new();
+        var n = (_fz_rand() % frags) + 1;
+        var i = 0;
+        while (i < n) {
+            str_builder_add_cstr(sb, _fz_frag(_fz_rand() % 14));
+            i = i + 1;
+        }
+        var s = str_cstr(str_builder_build(sb));
+        fuzz_main(s, strlen(s));
+        r = r + 1;
+    }
+    return 0;
+}
+
 fn main() {
     alloc_init();
-    fuzz_main("hello, world.", 13);
-    fuzz_main("42 <emph>CATS</emph>", 20);
+    _corpus();
+    _fz_random(400, 64);
+    _fz_markup(400, 24);
     println("fuzz: ok");
     return 0;
 }
 
 var r = main();
-syscall(60, r);
+syscall(SYS_EXIT, r);

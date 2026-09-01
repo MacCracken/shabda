@@ -205,7 +205,10 @@ fn shabda_is_content_word(word): i64 {
 
 # ---- apply_emphasis ----------------------------------------------------------
 # Boost every vowel-like event to Primary stress and scale its duration by 1.3x.
-# Rebuilds each mutated event in place (immutable-by-handle).
+# Mutates each event IN PLACE, as Rust does over its `&mut [PhonemeEvent]`. These
+# three fns used to mint a replacement SvPhonemeEvent per mutated element — an
+# allocation per event per call, out of a bump allocator that never frees, where the
+# oracle allocates nothing.
 fn shabda_apply_emphasis(events): i64 {
     var n = vec_len(events);
     var i = 0;
@@ -213,8 +216,8 @@ fn shabda_apply_emphasis(events): i64 {
         var e = vec_get(events, i);
         var ph = SvPhonemeEvent_phoneme(e);
         if (_shabda_prosody_is_vowel_like(ph) == 1) {
-            var dur = f64_mul(SvPhonemeEvent_duration(e), SHABDA_PROSODY_EMPHASIS_DURATION_SCALE);
-            vec_set(events, i, svara_phoneme_event_new(ph, dur, SVARA_STRESS_PRIMARY));
+            SvPhonemeEvent_set_duration(e, f64_mul(SvPhonemeEvent_duration(e), SHABDA_PROSODY_EMPHASIS_DURATION_SCALE));
+            SvPhonemeEvent_set_stress(e, SVARA_STRESS_PRIMARY);
         }
         i = i + 1;
     }
@@ -238,8 +241,7 @@ fn shabda_apply_rate(events, target_wpm): i64 {
         if (_shabda_prosody_is_vowel_like(ph) == 1) {
             min = SHABDA_PROSODY_MIN_VOWEL_DURATION;
         }
-        var dur = _shabda_prosody_f64_max(scaled, min);
-        vec_set(events, i, svara_phoneme_event_new(ph, dur, SvPhonemeEvent_stress(e)));
+        SvPhonemeEvent_set_duration(e, _shabda_prosody_f64_max(scaled, min));
         i = i + 1;
     }
     return 0;
@@ -267,8 +269,7 @@ fn shabda_apply_timing(events, profile): i64 {
         } else {
             scale = consonant_scale;
         }
-        var dur = f64_mul(SvPhonemeEvent_duration(e), scale);
-        vec_set(events, i, svara_phoneme_event_new(ph, dur, SvPhonemeEvent_stress(e)));
+        SvPhonemeEvent_set_duration(e, f64_mul(SvPhonemeEvent_duration(e), scale));
         i = i + 1;
     }
     return 0;

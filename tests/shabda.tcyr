@@ -87,5 +87,45 @@ var g_empty = shabda_g2p_new(SHABDA_LANG_ENGLISH);
 var empty_slot = alloc(8);
 assert_eq(shabda_is_err(shabda_convert(g_empty, "", empty_slot)), 1, "empty input errors");
 
+# ================================================================
+# 3.0.3 — cross-module invariant: the two UTF-8 decoders must agree
+# ================================================================
+test_group("3.0.3: decode_chars (rules) and utf8_next (normalize) agree");
+# THE INVARIANT: the crate's two UTF-8 decoders must agree byte for byte. They
+# disagreed before this fix — utf8_next stopped at the NUL, decode_chars ran past it.
+fn _cps_via_utf8_next(w): i64 {
+    var out = vec_new();
+    var cpo = alloc(8);
+    var p = w;
+    var adv = _shabda_utf8_next(p, cpo);
+    while (adv > 0) {
+        vec_push(out, load64(cpo));
+        p = p + adv;
+        adv = _shabda_utf8_next(p, cpo);
+    }
+    return out;
+}
+fn _decoders_agree(w): i64 {
+    var a = _shabda_decode_chars(w, 0);
+    var b = _cps_via_utf8_next(w);
+    if (vec_len(a) != vec_len(b)) { return 0; }
+    var i = 0;
+    while (i < vec_len(a)) {
+        if (vec_get(a, i) != vec_get(b, i)) { return 0; }
+        i = i + 1;
+    }
+    return 1;
+}
+assert_eq(_decoders_agree("hello"), 1, "decoders agree: ASCII");
+assert_eq(_decoders_agree("\xE0\xA4\xA8\xE0\xA4\xAE"), 1, "decoders agree: Devanagari");
+assert_eq(_decoders_agree("\xD9\x83\xD8\xAA"), 1, "decoders agree: Arabic");
+assert_eq(_decoders_agree("ab\xC3"), 1, "decoders agree: truncated 2-byte lead");
+assert_eq(_decoders_agree("x\xE0\xA4"), 1, "decoders agree: truncated 3-byte lead");
+assert_eq(_decoders_agree("\xF0\x9F\x98"), 1, "decoders agree: truncated 4-byte lead");
+# A well-formed sequence must be unaffected.
+var okdev = _shabda_decode_chars("\xE0\xA4\xA8", 0);
+assert_eq(vec_len(okdev), 1, "a complete 3-byte sequence is still one code point");
+assert_eq(vec_get(okdev, 0), 0x0928, "DEVANAGARI LETTER NA decodes correctly");
+
 var rc = assert_summary();
-syscall(60, rc);
+syscall(SYS_EXIT, rc);

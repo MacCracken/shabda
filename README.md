@@ -1,6 +1,6 @@
 # shabda
 
-[![version](https://img.shields.io/badge/version-3.0.2-blue.svg)](VERSION)
+[![version](https://img.shields.io/badge/version-3.0.3-blue.svg)](VERSION)
 [![license](https://img.shields.io/badge/license-GPL--3.0--only-green.svg)](LICENSE)
 [![language](https://img.shields.io/badge/language-CYRIUS-orange.svg)](cyrius.cyml)
 
@@ -149,8 +149,8 @@ Direct dependencies (path for local dev + git+tag for CI):
 
 ## Tests & Benchmarks
 
-- **653 assertions** across 11 `.tcyr` suites — error (25), normalize (40), syllable (47), heteronym (21), ssml (45), rules (126), prosody (50), validate (127), engine (133), crate-level shabda (29) + fuzz. All green.
-- **Benchmarks** (`tests/shabda.bcyr`, x86_64, cycc 6.5.36): `g2p_hello_world` 15.4 µs, `g2p_sentence` 60.0 µs, `speak_hello` 7.28 ms, `speak_sentence` 23.4 ms, `dict_english_construction` 7.17 ms, `dict_lookup_hit` 123 ns, `dict_lookup_miss` 237 ns.
+- **737 assertions** across 10 `.tcyr` suites — error (25), normalize (60), syllable (55), heteronym (23), ssml (66), rules (133), prosody (50), validate (127), engine (151), crate-level shabda (37). All green, plus a fuzz corpus (`cyrius fuzz`) of every shape that produced a defect, 400 random-byte rounds and 400 random-markup rounds.
+- **Benchmarks** (`tests/shabda.bcyr`, x86_64, cycc 6.5.36): `g2p_hello_world` 15.7 µs, `g2p_sentence` 61.4 µs, `speak_hello` 7.40 ms, `speak_sentence` 23.7 ms, `dict_english_construction` 7.62 ms, `dict_lookup_hit` 123 ns, `dict_lookup_miss` 258 ns.
 
 ## Consumers
 

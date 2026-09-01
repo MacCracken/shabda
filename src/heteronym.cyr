@@ -90,10 +90,10 @@ fn shabda_heteronym_rule_clone(r): i64 {
         i = i + 1;
     }
     return shabda_heteronym_rule_new(
-        load64(r + SHABDA_HET_WORD),
-        load64(r + SHABDA_HET_DEFAULT),
-        load64(r + SHABDA_HET_CONTEXT),
-        out_trig);
+      load64(r + SHABDA_HET_WORD),
+      load64(r + SHABDA_HET_DEFAULT),
+      load64(r + SHABDA_HET_CONTEXT),
+      out_trig);
 }
 
 # PartialEq — every field equal (word cstr, both indices, trigger cstr lists).
@@ -344,8 +344,19 @@ fn shabda_select_variant(rule, preceding_words): i64 {
 # ================================================================
 #must_use
 fn shabda_select_phonemes(rule, preceding_words, pronunciations): i64 {
+    var n = vec_len(pronunciations);
+    # DIVERGENCE (hardening). Rust's fallback arm is `pronunciations[0]`, which
+    # panics on an empty slice. Here vec_get(v, 0) on an empty vec reaches
+    # lib/vec.cyr's _vec_die() -> syscall(SYS_EXIT, 1), which does not unwind and
+    # does not return a code — it terminates the HOST process, so a consumer like
+    # dhvani would lose its audio daemon. An empty pronunciation vec is reachable:
+    # shbdk_dict_lookup_all returns shbdk_dict_entry_all(e) verbatim, and a
+    # caller-built entry can hold zero pronunciations. Returning an empty vec keeps
+    # the crate's zero-panic contract (CLAUDE.md) and leaves the caller with
+    # "no phonemes", which its rules fallback already handles.
+    if (n == 0) { return vec_new(); }
     var idx = shabda_select_variant(rule, preceding_words);
-    if (idx < vec_len(pronunciations)) {
+    if (idx < n) {
         return shbdk_pronunciation_phonemes(vec_get(pronunciations, idx));
     }
     return shbdk_pronunciation_phonemes(vec_get(pronunciations, 0));

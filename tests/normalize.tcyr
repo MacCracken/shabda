@@ -74,5 +74,58 @@ assert_eq(strstr(emres, SHABDA_EMPHASIS_START) >= 0, 1, "emph start present");
 assert_eq(strstr(emres, "hello") >= 0, 1, "emph lowercased word present");
 assert_eq(strstr(emres, SHABDA_EMPHASIS_END) >= 0, 1, "emph end present");
 
+# ================================================================
+# 3.0.3 regressions — Unicode parity with char::is_whitespace /
+# to_lowercase / is_uppercase / is_alphabetic
+# ================================================================
+test_group("3.0.3: whitespace is the Unicode White_Space property, not ASCII");
+# Rust splits on char::is_whitespace, so NBSP separates two words. The ASCII-only
+# predicate glued them into one token, which then went to the rules engine whole.
+assert_eq(streq(shabda_normalize("hello\xC2\xA0world"), "hello world"), 1,
+  "U+00A0 NBSP separates words (was glued)");
+assert_eq(streq(shabda_normalize("hello\xE3\x80\x80world"), "hello world"), 1,
+  "U+3000 IDEOGRAPHIC SPACE separates words");
+assert_eq(streq(shabda_normalize("a\xE2\x80\x89b"), "a b"), 1,
+  "U+2009 THIN SPACE separates words");
+assert_eq(shabda_is_ws_cp(0xA0), 1, "U+00A0 is whitespace");
+assert_eq(shabda_is_ws_cp(0x3000), 1, "U+3000 is whitespace");
+assert_eq(shabda_is_ws_cp(0x2028), 1, "U+2028 LINE SEPARATOR is whitespace");
+assert_eq(shabda_is_ws_cp(0x200B), 0, "U+200B ZERO WIDTH SPACE is NOT White_Space");
+assert_eq(shabda_is_ws_cp(0x0B), 1, "VT is whitespace");
+assert_eq(shabda_is_ws_cp(0x0C), 1, "FF is whitespace");
+
+test_group("3.0.3: trailing Unicode whitespace no longer hides the terminal mark");
+# detect_intonation inlined an ASCII-only trim_end, so a trailing NBSP left the
+# last byte as 0xA0 and every such question read as a Statement.
+assert_eq(shabda_detect_intonation("really?\xC2\xA0"), SHABDA_STYPE_QUESTION,
+  "'really?' + NBSP is still a Question");
+assert_eq(shabda_detect_intonation("wow!\xE3\x80\x80"), SHABDA_STYPE_EXCLAMATION,
+  "'wow!' + U+3000 is still an Exclamation");
+assert_eq(shabda_detect_intonation("plain."), SHABDA_STYPE_STATEMENT, "'.' is a Statement");
+assert_eq(shabda_detect_intonation("really? "), SHABDA_STYPE_QUESTION, "ASCII space still works");
+
+test_group("3.0.3: case folding covers Unicode, not just ASCII");
+# to_lowercase() is Unicode in Rust; the ASCII-only fold left accented capitals
+# unchanged, so "CAFÉ" reached the letter-to-sound rules as "cafÉ".
+assert_eq(streq(shabda_normalize("CAF\xC3\x89"), "caf\xC3\xA9"), 1, "CAFE-acute lowers to cafe-acute");
+assert_eq(streq(shabda_normalize("\xC3\x9CBER"), "\xC3\xBCber"), 1, "U-umlaut lowers");
+
+test_group("3.0.3: is_alphabetic covers every script, not five hard-coded ranges");
+# Greek / Cyrillic / Hebrew were in NO range, so normalize deleted them outright
+# and the whole word became empty.
+assert_eq(streq(shabda_normalize("\xCE\x91\xCE\x92\xCE\x93"), "\xCE\xB1\xCE\xB2\xCE\xB3"), 1,
+  "Greek survives normalize and lowercases (was deleted)");
+assert_eq(streq(shabda_normalize("\xD0\x9C\xD0\xBE\xD1\x81"), "\xD0\xBC\xD0\xBE\xD1\x81"), 1,
+  "Cyrillic survives normalize and lowercases (was deleted)");
+# The scripts that DID have ranges must be unchanged — this is the regression the
+# module header warns about (dropping them made native-script convert emit 0 events).
+assert_eq(strlen(shabda_normalize("\xE0\xA4\xA8\xE0\xA4\xAE\xE0\xA4\xB8\xE0\xA5\x8D\xE0\xA4\xA4\xE0\xA5\x87")) > 0, 1,
+  "Devanagari still survives (matras are Other_Alphabetic)");
+assert_eq(strlen(shabda_normalize("\xD9\x83\xD8\xAA\xD8\xA7\xD8\xA8")) > 0, 1, "Arabic still survives");
+
+test_group("3.0.3: ALL-CAPS emphasis reaches non-ASCII scripts");
+var gem = shabda_normalize_with_emphasis("\xCE\x94\xCE\x95\xCE\x96 ok");
+assert_eq(strstr(gem, SHABDA_EMPHASIS_START) >= 0, 1, "Greek ALL-CAPS gets an emphasis marker");
+
 var rc = assert_summary();
-syscall(60, rc);
+syscall(SYS_EXIT, rc);

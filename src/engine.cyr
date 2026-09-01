@@ -117,24 +117,55 @@ fn shabda_convert_options_default(): i64 {
     return shabda_convert_options_new();
 }
 
+# Shallow copy of an options block — the value semantics the builders below need.
 #must_use
-fn shabda_convert_options_with_emphasis(o, emphasis): i64 {
-    store64(o + SHABDA_OPT_EMPHASIS, emphasis);
-    return o;
+fn _shabda_options_clone(o): i64 {
+    var c = alloc(SHABDA_OPT_SIZE);
+    if (c == 0) { return 0; }
+    store64(c + SHABDA_OPT_EMPHASIS, load64(o + SHABDA_OPT_EMPHASIS));
+    store64(c + SHABDA_OPT_HAS_RATE, load64(o + SHABDA_OPT_HAS_RATE));
+    store64(c + SHABDA_OPT_RATE_WPM, load64(o + SHABDA_OPT_RATE_WPM));
+    store64(c + SHABDA_OPT_TIMING, load64(o + SHABDA_OPT_TIMING));
+    return c;
 }
 
-# wpm is an f64 bit pattern (Rust took f32; promoted).
+# The three builders take `mut self` and return `Self` BY VALUE in Rust, so the
+# receiver is moved and cannot be reused. The port used to mutate the caller's block
+# and hand the SAME pointer back, which turns two option sets built from one base
+# into one aliased block:
+#     var base = shabda_convert_options_new();
+#     var fast = shabda_convert_options_with_speaking_rate(base, wpm200);
+#     var slow = shabda_convert_options_with_speaking_rate(base, wpm100);
+#     # base, fast and slow were all one block, all at 100 wpm
+# That program does not compile in Rust (base is moved), so there was no oracle
+# behaviour to preserve. Each builder now clones first, restoring value semantics.
+# All three are #must_use, so discarding the returned handle was already an error.
+#must_use
+fn shabda_convert_options_with_emphasis(o, emphasis): i64 {
+    var c = _shabda_options_clone(o);
+    if (c == 0) { return o; }
+    store64(c + SHABDA_OPT_EMPHASIS, emphasis);
+    return c;
+}
+
+# wpm is an f64 bit pattern. Rust took f32; the widening is chain-wide and owned by
+# svara (SvPhonemeEvent.duration is f64), not something shabda can undo alone — see
+# the 3.0.3 CHANGELOG entry.
 #must_use
 fn shabda_convert_options_with_speaking_rate(o, wpm): i64 {
-    store64(o + SHABDA_OPT_HAS_RATE, 1);
-    store64(o + SHABDA_OPT_RATE_WPM, wpm);
-    return o;
+    var c = _shabda_options_clone(o);
+    if (c == 0) { return o; }
+    store64(c + SHABDA_OPT_HAS_RATE, 1);
+    store64(c + SHABDA_OPT_RATE_WPM, wpm);
+    return c;
 }
 
 #must_use
 fn shabda_convert_options_with_timing(o, timing): i64 {
-    store64(o + SHABDA_OPT_TIMING, timing);
-    return o;
+    var c = _shabda_options_clone(o);
+    if (c == 0) { return o; }
+    store64(c + SHABDA_OPT_TIMING, timing);
+    return c;
 }
 
 #must_use
@@ -185,11 +216,11 @@ fn shabda_language_from_str(s): i64 {
 fn shabda_detect_language(text): i64 {
     # trim empty -> None
     var n = strlen(text);
-    var s = 0;
-    var e = n;
-    while (s < e && _shabda_engine_is_ws(load8(text + s)) == 1) { s = s + 1; }
-    while (e > s && _shabda_engine_is_ws(load8(text + e - 1)) == 1) { e = e - 1; }
-    if (e <= s) { return (0 - 1); }
+    var tso = alloc(8);
+    var teo = alloc(8);
+    if (tso == 0 || teo == 0) { return (0 - 1); }
+    _shabda_engine_trim(text, 0, n, tso, teo);
+    if (load64(teo) <= load64(tso)) { return (0 - 1); }
 
     # Only ("Latn", English) is wired.
     var best_lang = (0 - 1);
@@ -205,14 +236,25 @@ fn shabda_detect_language(text): i64 {
     return best_lang;
 }
 
-# ASCII whitespace (Rust str::trim on the inputs this crate sees).
-fn _shabda_engine_is_ws(c): i64 {
-    if (c == 32) { return 1; }
-    if (c == 9)  { return 1; }
-    if (c == 10) { return 1; }
-    if (c == 13) { return 1; }
-    if (c == 12) { return 1; }
-    if (c == 11) { return 1; }
+# Rust str::trim over a byte buffer. Advances `s` past leading whitespace
+# CODEPOINTS and pulls `e` back past trailing ones, writing both through the two
+# out-params. Was an ASCII-only byte test, so a string of nothing but U+3000 read
+# as non-empty and slipped past convert_with's InvalidInput guard.
+fn _shabda_engine_trim(buf, start, end, out_s, out_e): i64 {
+    var s = start;
+    var e = end;
+    var n = shabda_ws_len_at(buf, s, e);
+    while (n > 0) {
+        s = s + n;
+        n = shabda_ws_len_at(buf, s, e);
+    }
+    var m = shabda_ws_len_before(buf, s, e);
+    while (m > 0) {
+        e = e - m;
+        m = shabda_ws_len_before(buf, s, e);
+    }
+    store64(out_s, s);
+    store64(out_e, e);
     return 0;
 }
 
@@ -289,24 +331,29 @@ fn _shabda_engine_split_ws(text): i64 {
     var start = 0;
     var inword = 0;
     while (i < n) {
-        var c = load8(text + i);
-        if (_shabda_engine_is_ws(c) == 1) {
+        # Rust split_whitespace splits on Unicode whitespace CODEPOINTS, so step
+        # over the whole sequence rather than one byte.
+        var wlen = shabda_ws_len_at(text, i, n);
+        if (wlen > 0) {
             if (inword == 1) {
                 var len = i - start;
                 var buf = alloc(len + 1);
+                if (buf == 0) { return words; }
                 memcpy(buf, text + start, len);
                 store8(buf + len, 0);
                 vec_push(words, buf);
                 inword = 0;
             }
+            i = i + wlen;
         } else {
             if (inword == 0) { start = i; inword = 1; }
+            i = i + 1;
         }
-        i = i + 1;
     }
     if (inword == 1) {
         var len2 = n - start;
         var buf2 = alloc(len2 + 1);
+        if (buf2 == 0) { return words; }
         memcpy(buf2, text + start, len2);
         store8(buf2 + len2, 0);
         vec_push(words, buf2);
@@ -415,11 +462,11 @@ fn shabda_convert(e, text, out_events): i64 {
 fn shabda_convert_with(e, text, options, out_events): i64 {
     # 1. empty text -> InvalidInput error.
     var tn = strlen(text);
-    var ts = 0;
-    var te = tn;
-    while (ts < te && _shabda_engine_is_ws(load8(text + ts)) == 1) { ts = ts + 1; }
-    while (te > ts && _shabda_engine_is_ws(load8(text + te - 1)) == 1) { te = te - 1; }
-    if (te <= ts) { return shabda_err_invalid_input(); }
+    var tso = alloc(8);
+    var teo = alloc(8);
+    if (tso == 0 || teo == 0) { return shabda_err_invalid_input(); }
+    _shabda_engine_trim(text, 0, tn, tso, teo);
+    if (load64(teo) <= load64(tso)) { return shabda_err_invalid_input(); }
 
     var language = load64(e + SHABDA_ENGINE_LANG);
 
@@ -574,11 +621,11 @@ fn shabda_speak_with(e, text, voice, sample_rate, options, out_samples): i64 {
 fn shabda_convert_ssml(e, ssml, out_events): i64 {
     # trim empty -> InvalidInput.
     var n = strlen(ssml);
-    var s = 0;
-    var en = n;
-    while (s < en && _shabda_engine_is_ws(load8(ssml + s)) == 1) { s = s + 1; }
-    while (en > s && _shabda_engine_is_ws(load8(ssml + en - 1)) == 1) { en = en - 1; }
-    if (en <= s) { return shabda_err_invalid_input(); }
+    var sso = alloc(8);
+    var seo = alloc(8);
+    if (sso == 0 || seo == 0) { return shabda_err_invalid_input(); }
+    _shabda_engine_trim(ssml, 0, n, sso, seo);
+    if (load64(seo) <= load64(sso)) { return shabda_err_invalid_input(); }
 
     var nodes = shabda_ssml_parse(ssml);
     if (nodes == 0) { return shabda_err_invalid_input(); }   # Rust parse Err
@@ -607,11 +654,11 @@ fn _shabda_engine_render_ssml_nodes(e, nodes, base_options, events): i64 {
             var text = str_cstr(text_str);
             # non-empty (trimmed) text only.
             var tn = strlen(text);
-            var ts = 0;
-            var te = tn;
-            while (ts < te && _shabda_engine_is_ws(load8(text + ts)) == 1) { ts = ts + 1; }
-            while (te > ts && _shabda_engine_is_ws(load8(text + te - 1)) == 1) { te = te - 1; }
-            if (te > ts) {
+            var rso = alloc(8);
+            var reo = alloc(8);
+            if (rso == 0 || reo == 0) { return shabda_err_invalid_input(); }
+            _shabda_engine_trim(text, 0, tn, rso, reo);
+            if (load64(reo) > load64(rso)) {
                 var teslot = alloc(8);
                 var terr = shabda_convert_with(e, text, base_options, teslot);
                 if (shabda_is_err(terr) == 1) { return terr; }
@@ -687,8 +734,13 @@ fn _shabda_engine_apply_emphasis_range(events, start): i64 {
         var ph = SvPhonemeEvent_phoneme(ev);
         var c = svara_phoneme_class(ph);
         if (c == SVARA_CLASS_VOWEL || c == SVARA_CLASS_DIPHTHONG) {
-            var dur = f64_mul(SvPhonemeEvent_duration(ev), SHABDA_PROSODY_EMPHASIS_DURATION_SCALE);
-            vec_set(events, i, svara_phoneme_event_new(ph, dur, SVARA_STRESS_PRIMARY));
+            # In place, as Rust does (`event.stress = ...; event.duration *= ...`).
+            # Allocating a replacement made NESTED <emphasis> quadratic in permanent
+            # bump-allocator bytes: every level re-walks the whole event tail its
+            # children already produced, and each visit minted a fresh SvPhonemeEvent.
+            var edur = f64_mul(SvPhonemeEvent_duration(ev), SHABDA_PROSODY_EMPHASIS_DURATION_SCALE);
+            SvPhonemeEvent_set_duration(ev, edur);
+            SvPhonemeEvent_set_stress(ev, SVARA_STRESS_PRIMARY);
         }
         i = i + 1;
     }
@@ -700,10 +752,8 @@ fn _shabda_engine_destress_range(events, start): i64 {
     var n = vec_len(events);
     var i = start;
     while (i < n) {
-        var ev = vec_get(events, i);
-        var dph = SvPhonemeEvent_phoneme(ev);
-        var ddur = SvPhonemeEvent_duration(ev);
-        vec_set(events, i, svara_phoneme_event_new(dph, ddur, SVARA_STRESS_UNSTRESSED));
+        # In place, as Rust does — see the note in _shabda_engine_apply_emphasis_range.
+        SvPhonemeEvent_set_stress(vec_get(events, i), SVARA_STRESS_UNSTRESSED);
         i = i + 1;
     }
     return 0;
@@ -718,11 +768,11 @@ fn _shabda_engine_destress_range(events, start): i64 {
 fn shabda_convert_streaming(e, text, callback_fp): i64 {
     # trim empty -> InvalidInput.
     var n = strlen(text);
-    var ts = 0;
-    var te = n;
-    while (ts < te && _shabda_engine_is_ws(load8(text + ts)) == 1) { ts = ts + 1; }
-    while (te > ts && _shabda_engine_is_ws(load8(text + te - 1)) == 1) { te = te - 1; }
-    if (te <= ts) { return shabda_err_invalid_input(); }
+    var cso = alloc(8);
+    var ceo = alloc(8);
+    if (cso == 0 || ceo == 0) { return shabda_err_invalid_input(); }
+    _shabda_engine_trim(text, 0, n, cso, ceo);
+    if (load64(ceo) <= load64(cso)) { return shabda_err_invalid_input(); }
 
     var language = load64(e + SHABDA_ENGINE_LANG);
     var dict = load64(e + SHABDA_ENGINE_DICT);

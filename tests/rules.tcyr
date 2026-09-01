@@ -343,5 +343,28 @@ assert_eq(vec_get(sp_j, 0), SVARA_PH_FRIC_H, "spanish j[0]=H");
 var sp_ge = shabda_spanish_rules("gente");
 assert_eq(vec_get(sp_ge, 0), SVARA_PH_FRIC_H, "spanish ge[0]=H");
 
+# ================================================================
+# 3.0.3 regression
+# ================================================================
+test_group("3.0.3: the UTF-8 decoder stops at the terminator");
+# _shabda_decode_chars read continuation bytes at word+i+1..+3 with no bound, so a
+# lead byte at the end of the string ran up to 3 bytes PAST the NUL into whatever
+# the bump allocator held there — a heap over-read whose phoneme output depended on
+# neighbouring allocations. Its sibling _shabda_utf8_next always bailed at the NUL;
+# the two decoders now agree. A truncated sequence decodes as its lead byte.
+var trunc2 = _shabda_word_chars("ab\xC3");          # 2-byte lead, nothing after it
+assert_eq(vec_len(trunc2), 3, "a truncated 2-byte lead yields exactly 3 code points");
+assert_eq(vec_get(trunc2, 2), 0xC3, "the dangling lead byte decodes as itself");
+# A truncated sequence degrades one byte at a time: the lead decodes as itself and
+# the scan resumes at the next byte, which does the same. That is exactly what
+# _shabda_utf8_next does at its NUL guard, and matching it is the point.
+var trunc3 = _shabda_word_chars("x\xE0\xA4");      # 3-byte lead, one continuation
+assert_eq(vec_len(trunc3), 3, "x + a dangling 3-byte lead + its orphan continuation = 3 code points");
+assert_eq(vec_get(trunc3, 1), 0xE0, "the dangling 3-byte lead decodes as itself");
+assert_eq(vec_get(trunc3, 2), 0xA4, "the orphaned continuation decodes as itself");
+var trunc4 = _shabda_word_chars("\xF0\x9F\x98");  # 4-byte lead, two continuations
+assert_eq(vec_len(trunc4), 2, "a dangling 4-byte lead + the pair behind it = 2 code points");
+assert_eq(vec_get(trunc4, 0), 0xF0, "the dangling 4-byte lead decodes as itself");
+
 var rc = assert_summary();
-syscall(60, rc);
+syscall(SYS_EXIT, rc);

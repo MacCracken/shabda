@@ -234,4 +234,4 @@ assert_eq(vec_len(co), 1, "coda overflow -> 1 violation");
 assert_streq(vec_get(co, 0), "consonant cluster too long for coda: tttttt", "coda overflow message");
 
 var rc = assert_summary();
-syscall(60, rc);
+syscall(SYS_EXIT, rc);

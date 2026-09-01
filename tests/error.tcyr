@@ -51,4 +51,4 @@ assert_eq(SHABDA_TIMING_SIZE, 24, "timing struct size");
 assert_eq(SHABDA_PH_NONE, (0 - 1), "phoneme none sentinel");
 
 var rc = assert_summary();
-syscall(60, rc);
+syscall(SYS_EXIT, rc);

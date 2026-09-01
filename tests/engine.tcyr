@@ -526,5 +526,62 @@ assert_eq(shabda_detect_language(""), (0 - 1), "empty -> none");
 test_group("is_content the");
 assert_eq(shabda_is_content_word("the"), 0, "the is function word");
 
+# ================================================================
+# 3.0.3 regressions
+# ================================================================
+test_group("3.0.3: ConvertOptions builders have value semantics (were aliasing)");
+# Rust's builders take `mut self` and return `Self` BY VALUE, so the receiver is
+# moved. The port returned the SAME pointer, so two option sets built from one base
+# were one block and the second build silently overwrote the first.
+var ob = shabda_convert_options_new();
+var o_fast = shabda_convert_options_with_speaking_rate(ob, f64_from(200));
+var o_slow = shabda_convert_options_with_speaking_rate(ob, f64_from(100));
+assert_eq(o_fast != o_slow, 1, "two builds from one base are distinct blocks");
+assert_eq(f64_to(shabda_convert_options_rate_wpm(o_fast)), 200, "the first build kept 200 wpm");
+assert_eq(f64_to(shabda_convert_options_rate_wpm(o_slow)), 100, "the second build is 100 wpm");
+assert_eq(shabda_convert_options_has_rate(ob), 0, "the base is untouched");
+var o_em = shabda_convert_options_with_emphasis(ob, 1);
+assert_eq(shabda_convert_options_emphasis(o_em), 1, "with_emphasis sets the copy");
+assert_eq(shabda_convert_options_emphasis(ob), 0, "with_emphasis leaves the base alone");
+var o_tm = shabda_convert_options_with_timing(ob, shabda_timing_default());
+assert_eq(shabda_convert_options_timing(ob), 0, "with_timing leaves the base alone");
+assert_eq(shabda_convert_options_timing(o_tm) != 0, 1, "with_timing sets the copy");
+
+test_group("3.0.3: the empty-input guard trims Unicode whitespace");
+# Rust: `if text.trim().is_empty() { return Err(InvalidInput) }` — trim() is Unicode.
+# The ASCII-only guard let a U+3000-only string through and returned Ok with 0 events.
+var ueng = shabda_g2p_new(SHABDA_LANG_ENGLISH);
+var uslot = alloc(8);
+assert_eq(shabda_is_err(shabda_convert(ueng, "\xE3\x80\x80", uslot)), 1,
+  "U+3000 only -> InvalidInput (was Ok with 0 events)");
+assert_eq(shabda_is_err(shabda_convert(ueng, "\xC2\xA0\xC2\xA0", uslot)), 1, "NBSP only -> InvalidInput");
+assert_eq(shabda_is_err(shabda_convert(ueng, "   ", uslot)), 1, "ASCII spaces only -> InvalidInput");
+assert_eq(shabda_is_err(shabda_convert(ueng, "", uslot)), 1, "empty -> InvalidInput");
+assert_eq(shabda_is_err(shabda_convert(ueng, "hello", uslot)), 0, "real text still converts");
+
+test_group("3.0.3: NBSP splits words in convert, as split_whitespace does");
+var nb1 = alloc(8);
+var nb2 = alloc(8);
+assert_eq(shabda_is_err(shabda_convert(ueng, "hello world", nb1)), 0, "ascii-space form converts");
+assert_eq(shabda_is_err(shabda_convert(ueng, "hello\xC2\xA0world", nb2)), 0, "NBSP form converts");
+assert_eq(vec_len(load64(nb1)), vec_len(load64(nb2)),
+  "NBSP-separated text yields the same event count as space-separated");
+
+test_group("3.0.3: convert_ssml refuses a document past the nesting cap");
+fn _nestx(d): i64 {
+    var sb = str_builder_new();
+    var i = 0;
+    while (i < d) { str_builder_add_cstr(sb, "<emphasis>"); i = i + 1; }
+    str_builder_add_cstr(sb, "hi");
+    i = 0;
+    while (i < d) { str_builder_add_cstr(sb, "</emphasis>"); i = i + 1; }
+    return str_cstr(str_builder_build(sb));
+}
+var sslot = alloc(8);
+assert_eq(shabda_is_err(shabda_convert_ssml(ueng, _nestx(4), sslot)), 0, "depth 4 renders");
+# This document used to take the process down with SIGSEGV.
+assert_eq(shabda_is_err(shabda_convert_ssml(ueng, _nestx(20000), sslot)), 1,
+  "depth 20,000 returns InvalidInput instead of crashing");
+
 var rc = assert_summary();
-syscall(60, rc);
+syscall(SYS_EXIT, rc);

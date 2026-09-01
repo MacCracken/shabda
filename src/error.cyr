@@ -130,3 +130,82 @@ fn shabda_err_name(err): cstring {
     if (code == 0)                                { return "ok"; }
     return "unknown error";
 }
+
+# ================================================================
+# Shared Unicode predicates (L0 so every later module gets ONE definition).
+#
+# The port originally hand-rolled an ASCII-only whitespace test per module
+# (normalize / ssml / engine, three byte-identical copies). Rust uses
+# `char::is_whitespace` / `str::trim` / `str::split_whitespace`, all of which are
+# the Unicode White_Space property — so NBSP-separated words were glued into one
+# token, a U+3000-only string slipped past the "empty input" guard, and a trailing
+# U+00A0 hid the terminal '?' from sentence-type detection. These are the exact
+# property, not an approximation.
+# ================================================================
+# Rust `char::is_whitespace` — the Unicode White_Space property, in full.
+#must_use
+fn shabda_is_ws_cp(cp): i64 {
+    if (cp == 0x20) { return 1; }                     # SPACE
+    if (cp >= 0x09 && cp <= 0x0D) { return 1; }       # TAB LF VT FF CR
+    if (cp == 0x85) { return 1; }                     # NEXT LINE
+    if (cp == 0xA0) { return 1; }                     # NO-BREAK SPACE
+    if (cp == 0x1680) { return 1; }                   # OGHAM SPACE MARK
+    if (cp >= 0x2000 && cp <= 0x200A) { return 1; }   # EN QUAD .. HAIR SPACE
+    if (cp == 0x2028) { return 1; }                   # LINE SEPARATOR
+    if (cp == 0x2029) { return 1; }                   # PARAGRAPH SEPARATOR
+    if (cp == 0x202F) { return 1; }                   # NARROW NO-BREAK SPACE
+    if (cp == 0x205F) { return 1; }                   # MEDIUM MATHEMATICAL SPACE
+    if (cp == 0x3000) { return 1; }                   # IDEOGRAPHIC SPACE
+    return 0;
+}
+
+# Byte length of the whitespace codepoint starting at buf[i], or 0 if buf[i] does
+# not begin one. `end` bounds the read, so a sequence truncated by the end of the
+# buffer decodes to nothing rather than reading past it. An invalid or overlong
+# sequence is never whitespace, so it also returns 0 — which is what Rust's
+# lossy-free `&str` guarantees for the same bytes.
+#must_use
+fn shabda_ws_len_at(buf, i, end): i64 {
+    if (i >= end) { return 0; }
+    var b0 = load8(buf + i) & 0xFF;
+    if (b0 < 0x80) {
+        if (shabda_is_ws_cp(b0) == 1) { return 1; }
+        return 0;
+    }
+    if (b0 >= 0xC2 && b0 <= 0xDF) {
+        if (i + 1 >= end) { return 0; }
+        var b1 = load8(buf + i + 1) & 0xFF;
+        if (b1 < 0x80 || b1 > 0xBF) { return 0; }
+        if (shabda_is_ws_cp(((b0 & 0x1F) << 6) | (b1 & 0x3F)) == 1) { return 2; }
+        return 0;
+    }
+    if (b0 >= 0xE0 && b0 <= 0xEF) {
+        if (i + 2 >= end) { return 0; }
+        var c1 = load8(buf + i + 1) & 0xFF;
+        var c2 = load8(buf + i + 2) & 0xFF;
+        if (c1 < 0x80 || c1 > 0xBF) { return 0; }
+        if (c2 < 0x80 || c2 > 0xBF) { return 0; }
+        if (shabda_is_ws_cp(((b0 & 0x0F) << 12) | ((c1 & 0x3F) << 6) | (c2 & 0x3F)) == 1) { return 3; }
+        return 0;
+    }
+    return 0;                                          # 4-byte: no White_Space there
+}
+
+# Byte length of the whitespace codepoint ENDING at buf[end-1], or 0. Walks back
+# over at most three continuation bytes to find the lead byte, then re-decodes
+# forward so the answer is exactly shabda_ws_len_at's.
+#must_use
+fn shabda_ws_len_before(buf, start, end): i64 {
+    if (end <= start) { return 0; }
+    var i = end - 1;
+    var back = 0;
+    while (i > start && back < 3) {
+        var b = load8(buf + i) & 0xFF;
+        if (b < 0x80 || b > 0xBF) { break; }
+        i = i - 1;
+        back = back + 1;
+    }
+    var n = shabda_ws_len_at(buf, i, end);
+    if (n == end - i) { return n; }                    # must land exactly on end
+    return 0;
+}

@@ -107,6 +107,10 @@ fn _shabda_sb_reserve(sb, extra): i64 {
     while (newcap < need) { newcap = newcap * 2; }
     var old = load64(sb + SHABDA_SB_DATA);
     var buf = alloc(newcap);
+    # alloc returns 0 for a request over ALLOC_MAX (2 GiB) or on exhaustion. Leaving
+    # the old buffer in place keeps the SB usable at its current capacity; the caller
+    # sees a truncated build rather than a write through address 0.
+    if (buf == 0) { return 0; }
     memcpy(buf, old, len);
     store8(buf + len, 0);
     store64(sb + SHABDA_SB_DATA, buf);
@@ -195,35 +199,39 @@ fn _shabda_sb_last(sb): i64 {
 # Rust char::is_alphabetic. Covers the scripts this crate feeds: ASCII letters,
 # Latin-1/Extended accented letters, and — for the Hindi/Sanskrit (Devanagari) and
 # Arabic G2P engines — those scripts' letters + alphabetic combining marks. Rust's
-# is_alphabetic() = Lu+Ll+Lt+Lm+Lo+Nl+Other_Alphabetic, so Devanagari matras /
-# anusvara / visarga and Arabic harakat / shadda (Other_Alphabetic) COUNT, while
-# nukta (093C), virama (094D), Vedic tone marks (0951..0954), Arabic tatweel (0640)
-# and sukun (0652) do NOT. normalize keeps exactly the alphabetic code points, so
-# matching this is load-bearing for native-script convert (regression: dropping
-# Devanagari/Arabic here made "नमस्ते"/"كتاب" normalize to empty -> 0 events).
+# Rust char::is_alphabetic() = Alphabetic = L* + Nl + Other_Alphabetic. normalize
+# keeps exactly the alphabetic code points, so matching this is load-bearing for
+# native-script convert (regression: dropping Devanagari/Arabic here made
+# "नमस्ते"/"كتاب" normalize to empty -> 0 events).
+#
+# L* and Nl come from the stdlib's Unicode 17 GeneralCategory table, so every
+# script is covered rather than the five ranges this used to hard-code (which
+# silently deleted Greek, Cyrillic, Hebrew, Thai, Han, Hangul ... from normalize
+# output). Other_Alphabetic is a derived property the table does not carry, so the
+# marks that belong to it stay listed by range below — Devanagari matras /
+# anusvara / visarga and Arabic harakat / shadda COUNT, while nukta (093C),
+# virama (094D), Vedic tone marks (0951..0954) and sukun (0652) do NOT.
 fn _shabda_is_alpha(cp): i64 {
+    # ASCII fast path — by far the hottest input, and it skips a binary search.
     if (cp >= 65 && cp <= 90) { return 1; }
     if (cp >= 97 && cp <= 122) { return 1; }
-    if (cp >= 0x00C0 && cp <= 0x024F) {
-        if (cp == 0x00D7) { return 0; }   # multiplication sign (Sm)
-        if (cp == 0x00F7) { return 0; }   # division sign (Sm)
-        return 1;
-    }
-    # Devanagari (U+0900..U+0963): letters + matras + anusvara/visarga/chandrabindu.
+    if (cp < 128) { return 0; }
+
+    # L* (Lu Ll Lt Lm Lo) + Nl.
+    var gc = unicode_category(cp);
+    if (gc <= GC_LO) { return 1; }
+    if (gc == GC_NL) { return 1; }
+
+    # Other_Alphabetic, for the two mark-bearing scripts shabda converts.
+    # Devanagari (U+0900..U+0963): matras + anusvara/visarga/chandrabindu.
     if (cp >= 0x0900 && cp <= 0x0963) {
         if (cp == 0x093C) { return 0; }                  # nukta (Mn, not alphabetic)
         if (cp == 0x094D) { return 0; }                  # virama / halant (Mn)
         if (cp >= 0x0951 && cp <= 0x0954) { return 0; }  # Vedic tone/accent marks (Mn)
         return 1;
     }
-    # Arabic (U+0620..U+0651): letters + harakat (fatha/kasra/damma/tanween) + shadda.
-    if (cp >= 0x0620 && cp <= 0x0651) {
-        if (cp == 0x0640) { return 0; }                  # tatweel / kashida (Lm join, not alphabetic)
-        return 1;
-    }
-    # Arabic extended letters (superscript alef .. ha with small tah) — skips the
-    # sukun (0652), Arabic-Indic digits (0660..0669) and punctuation in between.
-    if (cp >= 0x0671 && cp <= 0x06D3) { return 1; }
+    # Arabic harakat (fatha/kasra/damma/tanween) + shadda, U+064B..U+0651.
+    if (cp >= 0x064B && cp <= 0x0651) { return 1; }
     return 0;
 }
 
@@ -250,36 +258,34 @@ fn _shabda_is_alnum(cp): i64 {
     return 0;
 }
 
-# Rust char::is_whitespace on ASCII inputs: space/tab/nl/cr/ff/vt.
+# Rust char::is_whitespace — the full Unicode White_Space property (shabda_is_ws_cp
+# in L0). Was ASCII-only, which glued NBSP-separated words into one token.
 fn _shabda_is_ws(cp): i64 {
-    if (cp == 32) { return 1; }
-    if (cp == 9) { return 1; }
-    if (cp == 10) { return 1; }
-    if (cp == 13) { return 1; }
-    if (cp == 12) { return 1; }
-    if (cp == 11) { return 1; }
-    return 0;
+    return shabda_is_ws_cp(cp);
 }
 
-# Rust char::is_uppercase for our alpha inputs: ASCII A-Z (accented uppercase in
-# the Latin block are not used by expand_acronyms's ASCII-only tokens; the ALL-CAPS
-# emphasis path uses is_uppercase over alpha chars — accented uppercase counts).
+# Rust char::is_uppercase — the Uppercase property, via the stdlib GeneralCategory
+# table. Was ASCII + Latin-1 only, so an ALL-CAPS word in Greek, Cyrillic, or even
+# Latin Extended-A (U+0100..U+024F) was silently not emphasised. Residual: Uppercase
+# is Lu + Other_Uppercase, and the ~130 Other_Uppercase code points (Roman-numeral
+# forms U+2160..216F, circled capitals U+24B6..24CF, some math alphanumerics) are
+# not GeneralCategory Lu; none of them is a letter shabda pronounces.
 fn _shabda_is_upper(cp): i64 {
-    if (cp >= 65 && cp <= 90) { return 1; }
-    # Latin-1 uppercase 0x00C0..0x00DE excluding 0x00D7 (multiplication sign).
-    if (cp >= 0x00C0 && cp <= 0x00DE) {
-        if (cp == 0x00D7) { return 0; }
-        return 1;
-    }
-    return 0;
+    if (cp >= 65 && cp <= 90) { return 1; }      # ASCII fast path
+    if (cp < 128) { return 0; }
+    return unicode_category(cp) == GC_LU;
 }
 
-# ASCII lowercase of a code point (Rust to_lowercase().next() over the letters
-# this crate handles: ASCII upper -> ASCII lower; everything else unchanged, which
-# preserves accented letters as-is like the Rust default lowering keeps its scalar).
+# Rust `ch.to_lowercase().next().unwrap_or(ch)` — the simple lowercase mapping,
+# via the stdlib casefold table. Was ASCII-only, so "CAFÉ" lowered to "cafÉ" and
+# every accented capital reached the letter-to-sound rules in the wrong case.
+# Residual: Rust takes the first char of the FULL mapping; the two differ only
+# where a full mapping expands to several chars, and there the first char is the
+# simple mapping anyway (e.g. U+0130 -> 'i' both ways).
 fn _shabda_to_lower_cp(cp): i64 {
-    if (cp >= 65 && cp <= 90) { return cp + 32; }
-    return cp;
+    if (cp >= 65 && cp <= 90) { return cp + 32; }    # ASCII fast path
+    if (cp < 128) { return cp; }
+    return unicode_to_lower(cp);
 }
 
 # ================================================================
@@ -290,6 +296,7 @@ fn _shabda_to_lower_cp(cp): i64 {
 fn _shabda_lower_cstr(s): cstring {
     var n = strlen(s);
     var out = alloc(n + 1);
+    if (out == 0) { return ""; }
     var i = 0;
     var c = 0;
     while (i < n) {
@@ -493,10 +500,12 @@ fn _shabda_expand_number_token(sb, token): i64 {
         var tlen = strlen(token);
         # integer_part = token[..dot], decimal_part = token[dot+1..]
         var intbuf = alloc(dot + 1);
+        if (intbuf == 0) { return 0; }
         memcpy(intbuf, token, dot);
         store8(intbuf + dot, 0);
         var declen = tlen - dot - 1;
         var decbuf = alloc(declen + 1);
+        if (decbuf == 0) { return 0; }
         memcpy(decbuf, token + dot + 1, declen);
         store8(decbuf + declen, 0);
 
@@ -921,6 +930,7 @@ fn shabda_expand_acronyms(text): cstring {
         _shabda_split_trailing_punct(word, endslot);
         var end = load64(endslot);
         var core = alloc(end + 1);
+        if (core == 0) { return _shabda_sb_cstr(sb); }
         memcpy(core, word, end);
         store8(core + end, 0);
         var trailing = word + end;
@@ -1110,6 +1120,7 @@ fn shabda_normalize_with_emphasis(text): cstring {
             # inner = token[1..len-1].
             var ilen = tlen - 2;
             var inner = alloc(ilen + 1);
+            if (inner == 0) { return _shabda_sb_cstr(sb); }
             memcpy(inner, token + 1, ilen);
             store8(inner + ilen, 0);
             # inner non-empty and all chars alphabetic.
@@ -1174,19 +1185,15 @@ fn shabda_normalize_with_emphasis(text): cstring {
 # ================================================================
 #must_use
 fn shabda_detect_intonation(text): i64 {
-    # trim_end: find last non-ws byte.
+    # Rust str::trim_end — the Unicode White_Space property, not an ASCII subset.
+    # A trailing U+00A0 or U+3000 used to hide the terminal '?' / '!' and make every
+    # such sentence read as a Statement.
     var n = strlen(text);
     var end = n;
-    var brk = 0;
-    while (end > 0 && brk == 0) {
-        var c = load8(text + end - 1);
-        # ASCII ws only for trailing trim (Rust trim_end trims Unicode ws, but our
-        # inputs use ASCII ws before the terminal '?'/'!').
-        if (c == 32 || c == 9 || c == 10 || c == 13 || c == 12 || c == 11) {
-            end = end - 1;
-        } else {
-            brk = 1;
-        }
+    var m = shabda_ws_len_before(text, 0, end);
+    while (m > 0) {
+        end = end - m;
+        m = shabda_ws_len_before(text, 0, end);
     }
     if (end == 0) { return SHABDA_STYPE_STATEMENT; }
     var lastc = load8(text + end - 1);

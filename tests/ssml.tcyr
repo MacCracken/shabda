@@ -142,5 +142,70 @@ test_group("phoneme self-closing ph attr");
 var nph = shabda_ssml_parse("<phoneme ph=\"AH0\"/>");
 assert_eq(_text_is(vec_get(nph, 0), "AH0"), 1, "ph attr -> text");
 
+# ================================================================
+# 3.0.3 regressions
+# ================================================================
+# Build "<emphasis>" x d + "x" + "</emphasis>" x d.
+fn _nest(d): i64 {
+    var sb = str_builder_new();
+    var i = 0;
+    while (i < d) { str_builder_add_cstr(sb, "<emphasis>"); i = i + 1; }
+    str_builder_add_cstr(sb, "x");
+    i = 0;
+    while (i < d) { str_builder_add_cstr(sb, "</emphasis>"); i = i + 1; }
+    return str_cstr(str_builder_build(sb));
+}
+
+test_group("3.0.3: SSML nesting depth is bounded (was SIGSEGV at ~19,400)");
+# The parser and parse_tag are mutually recursive once per level. Unbounded, a
+# ~408 KB document (depth 19,437) exhausted an 8 MB stack and the process took
+# SIGSEGV — reachable from shabda_ssml_parse and shabda_convert_ssml, both public.
+# Capping is a deliberate divergence from rust-old, which has the same shape and the
+# same crash — recorded in the 3.0.3 CHANGELOG entry.
+assert_eq(shabda_ssml_parse(_nest(1)) != 0, 1, "depth 1 parses");
+assert_eq(shabda_ssml_parse(_nest(255)) != 0, 1, "depth 255 parses");
+assert_eq(shabda_ssml_parse(_nest(SHABDA_SSML_MAX_DEPTH)) != 0, 1, "depth 256 (the cap) parses");
+assert_eq(shabda_ssml_parse(_nest(SHABDA_SSML_MAX_DEPTH + 1)), 0, "depth 257 is refused, not crashed");
+# Far past the cap: this is the size that used to segfault. Reaching this
+# assertion at all is the regression test.
+assert_eq(shabda_ssml_parse(_nest(20000)), 0, "depth 20,000 (~420 KB) is refused, not crashed");
+assert_eq(shabda_ssml_parse(_nest(200000)), 0, "depth 200,000 (~4.2 MB) is refused, not crashed");
+
+test_group("3.0.3: <break> duration keeps Rust's u32 domain");
+fn _brk(lit): i64 {
+    var ns = shabda_ssml_parse(lit);
+    if (ns == 0) { return (0 - 999); }
+    if (vec_len(ns) == 0) { return (0 - 998); }
+    var n0 = vec_get(ns, 0);
+    if (shabda_ssml_node_tag(n0) != SHABDA_SSML_BREAK) { return (0 - 997); }
+    return shabda_ssml_node_duration(n0);
+}
+assert_eq(_brk("<break time=\"250ms\"/>"), 250, "250ms");
+assert_eq(_brk("<break time=\"0.25s\"/>"), 250, "0.25s = 250ms");
+assert_eq(_brk("<break strength=\"weak\"/>"), 200, "strength=weak = 200ms");
+# parse::<u32>() rejects anything above u32::MAX; the old atoi accumulated into an
+# i64 with no ceiling and returned 5,000,000,000.
+assert_eq(_brk("<break time=\"4294967295ms\"/>"), 4294967295, "u32::MAX ms is accepted");
+assert_eq(_brk("<break time=\"4294967296ms\"/>"), (0 - 999), "u32::MAX+1 ms is Err");
+assert_eq(_brk("<break time=\"5000000000ms\"/>"), (0 - 999), "5e9 ms is Err (was returned as-is)");
+assert_eq(_brk("<break time=\"99999999999999999999ms\"/>"), (0 - 999), "20 digits is Err (was an i64 wrap)");
+# Rust's `as u32` on a float SATURATES: negative -> 0, over u32::MAX -> u32::MAX.
+assert_eq(_brk("<break time=\"-5s\"/>"), 0, "-5s saturates to 0 (was -5000)");
+# -0.001s produced exactly -1, which IS the SHABDA_SSML_PARSE_ERR sentinel — a legal
+# parse was indistinguishable from a parse failure.
+assert_eq(_brk("<break time=\"-0.001s\"/>"), 0, "-0.001s saturates to 0 (was -1, the error sentinel)");
+assert_eq(_brk("<break time=\"1e30s\"/>"), 4294967295, "1e30s saturates to u32::MAX");
+
+test_group("3.0.3: SSML trims Unicode whitespace, as Rust str::trim does");
+# U+3000 IDEOGRAPHIC SPACE around a text run.
+var nu = shabda_ssml_parse("\xE3\x80\x80hello\xE3\x80\x80");
+assert_eq(vec_len(nu), 1, "one text node");
+assert_eq(_text_is(vec_get(nu, 0), "hello"), 1, "U+3000 trimmed from both ends");
+# U+00A0 between the tag name and its attributes.
+var na = shabda_ssml_parse("<break\xC2\xA0time=\"100ms\"/>");
+assert_eq(vec_len(na), 1, "NBSP-separated attrs still parse as one node");
+assert_eq(shabda_ssml_node_tag(vec_get(na, 0)), SHABDA_SSML_BREAK, "tag name is 'break', not 'break\u00A0time=...'");
+assert_eq(shabda_ssml_node_duration(vec_get(na, 0)), 100, "its time attr was read");
+
 var rc = assert_summary();
-syscall(60, rc);
+syscall(SYS_EXIT, rc);

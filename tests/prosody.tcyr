@@ -195,4 +195,4 @@ assert_eq(shabda_sentence_intonation(SHABDA_STYPE_QUESTION), SVARA_INTONATION_IN
 assert_eq(shabda_sentence_intonation(SHABDA_STYPE_EXCLAMATION), SVARA_INTONATION_EXCLAMATORY, "exclamation -> exclamatory");
 
 var rc = assert_summary();
-syscall(60, rc);
+syscall(SYS_EXIT, rc);

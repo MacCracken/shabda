@@ -5,6 +5,13 @@
 
 ## Version
 
+**3.0.3** (2026-09-01) — priority-1 audit sweep. 13 confirmed defects fixed
+(quadratic syllable allocation, the SSML nesting SIGSEGV, five ASCII-for-Unicode
+predicates, the `<break>` u32 domain, a UTF-8 over-read, `ConvertOptions` aliasing,
+five allocate-instead-of-mutate loops, 8 unguarded allocations, a host-process kill on
+an empty pronunciation vec), the test entry files' discarded exit status, and a fuzz
+driver that was two literals. 737 assertions (was 653); `cyrius audit` exits 0.
+
 **3.0.2** (2026-09-01) — dependency + toolchain pin refresh over 3.0.1 (svara 3.5.4,
 shabdakosh 3.0.5, varna 2.4.1, cyrius 6.5.36), plus [ADR-0001](../adr/0001-shabdakosh-declared-optional.md):
 shabdakosh is declared `optional` to work around the dep-sidecar resolver.
@@ -28,7 +35,22 @@ lines of Rust preserved at `rust-old/` as the parity oracle.
   vec, so it returns the packed error directly and drives its work through an `fnptr` callback.
 - **Traits**: → function-pointer / enum-tag dispatch. No serde derive — serialization is
   hand-written where needed.
-- **Numerics**: `f32` prosody/rate scalars widened to `f64`.
+- **Numerics**: `f32` prosody/rate scalars widened to `f64`. ⚠ **This was never a
+  decision** — Cyrius had no scalar f32 when the port was written. It does now
+  (`f32_from` / `f32_to` plus native `addss`/`mulss` on `f32`-typed params). 3.0.3
+  restored native f32 where shabda owns the whole computation — the
+  `<break time="Xs">` multiply. The rest is **svara's to undo, not shabda's**:
+  `SvPhonemeEvent.duration` is `f64` and svara's base durations are f64 constants
+  (0.08 / 0.12 / 0.18) where the Rust svara used f32 throughout, so shabda rounding its
+  own prosody arithmetic to f32 would match neither the oracle nor the current stack.
+  Restoring f32 end to end is a svara-first change, and breaking for
+  `shabda_convert_options_with_speaking_rate` / `shabda_timing_new`, which take f64 bit
+  patterns.
+- **Deliberate divergences from `rust-old/`** (both from 3.0.3, both toward the
+  zero-panic contract; the oracle crashes in each case): the SSML parser caps element
+  nesting at `SHABDA_SSML_MAX_DEPTH = 256` instead of recursing until the stack is gone,
+  and `shabda_select_phonemes` returns an empty vec on an empty pronunciation vec instead
+  of reaching `_vec_die()`, which kills the host process rather than panicking.
 - **Feature flags COLLAPSE**: CYRIUS has no feature flags, so the Rust `std` / `varna` / `json` /
   `logging` / `full` gates are gone — varna phoneme-inventory validation, language detection, and
   every other capability are always compiled into the one bundle.
@@ -63,23 +85,27 @@ Leaf-first order (`src/main.cyr` / `[lib].modules`):
 
 ## Tests
 
-**653 assertions** across 11 `.tcyr` suites — all green:
+**737 assertions** across 10 `.tcyr` suites + the fuzz harness — all green:
 
 | Suite | Assertions |
 |-------|-----------|
 | error | 25 |
-| normalize | 40 |
-| syllable | 47 |
-| heteronym | 21 |
-| ssml | 45 |
-| rules | 126 |
+| normalize | 60 |
+| syllable | 55 |
+| heteronym | 23 |
+| ssml | 66 |
+| rules | 133 |
 | prosody | 50 |
 | validate | 127 |
-| engine | 133 |
-| shabda (crate-level) | 29 |
-| fuzz (`shabda.fcyr`) | — |
+| engine | 151 |
+| shabda (crate-level) | 37 |
+| fuzz (`shabda.fcyr`) | corpus + 800 generated cases |
 
-Run one suite with `cyrius test tests/<mod>.tcyr`, all with `cyrius tests tests`.
+Run one suite with `cyrius test tests/<mod>.tcyr`, all with `cyrius tests tests`, the
+fuzz corpus with `cyrius fuzz`. Every entry file exits through the target-resolved
+`SYS_EXIT`; before 3.0.3 they used a raw `syscall(60, rc)`, which is `exit` only on
+x86-64 Linux/macOS — on AGNOS the pass/fail result was discarded and a failing suite
+read as green.
 
 ## Benchmarks
 
@@ -103,10 +129,9 @@ outside the noise.
 
 ## Distlib bundle
 
-`cyrius distlib` → `dist/shabda.cyr` (v3.0.2) + `dist/shabda.deps` sidecar. Module
+`cyrius distlib` → `dist/shabda.cyr` (v3.0.3) + `dist/shabda.deps` sidecar. Module
 order is the `[lib].modules` list in `cyrius.cyml`. Consumers pull the bundle rather
-than rebuilding from `src/`. The bundle is byte-identical to 3.0.1 apart from its
-version line — no shabda source changed this release.
+than rebuilding from `src/`.
 
 The 6.5.36 generator writes the full stdlib leaf set into the sidecar (22 entries)
 where 6.4.12 wrote only the three folds. hisab/goonj/naad still lead the list, so a
@@ -120,7 +145,16 @@ Direct (path for local dev + git+tag for CI, declared in `cyrius.cyml`):
 - **shabdakosh** 3.0.5 (`dist/shabdakosh.cyr`) — pronunciation dictionary (`shbdk_*`). Folds hisab/goonj/naad (its `.deps` sidecar). Declared `optional` — see [ADR-0001](../adr/0001-shabdakosh-declared-optional.md); `lib/shabdakosh.cyr` is refreshed by hand.
 - **svara** 3.5.4 (`dist/svara.cyr`) — `SVARA_PH_*` phonemes, `PhonemeEvent`, sequence/voice/render for `speak()`. Folds hashmap/bayan (its `.deps` sidecar). Its manifest carries the hisab 2.11.2 / goonj 2.0.4 / naad 2.2.1 git pins the whole chain folds.
 - **varna** 2.4.1 (`dist/varna.cyr`) — phoneme inventories, phonotactics, script detection. Self-contained on the stdlib folds.
-- **stdlib**: syscalls, string, alloc, str, fmt, vec, io, args, assert, fnptr, atomic, sakshi, math, ganita, tagged, hashmap, bayan, mmap, bench, slice, result, callback.
+- **stdlib**: syscalls, string, alloc, str, fmt, vec, io, args, assert, fnptr, atomic, sakshi, math, ganita, tagged, hashmap, bayan, mmap, bench, slice, result, callback, **unicode**.
+  `unicode` is new at 3.0.3 — `unicode_category` (GeneralCategory) and `unicode_to_lower`
+  (casefold) back `_shabda_is_alpha` / `_shabda_is_upper` / `_shabda_to_lower_cp`. It does
+  NOT grow `dist/shabda.cyr`; stdlib leaves are named in the sidecar, not bundled, so
+  consumers must have the leaf in scope.
+- ⚠ `lib/sakshi.cyr` is **2.4.11**, resolved transitively through svara, while the 6.5.36
+  snapshot folds **2.4.12** — so `cyrius build` prints one `./lib/ shadows version-pinned`
+  line. That is intended: 2.4.11 is what shabdakosh 3.0.5 and svara 3.5.4 were built
+  against, and taking 2.4.12 from the snapshot would upgrade one link of the chain
+  unilaterally. Do not "fix" it by re-syncing.
 
 ## Consumers
 
