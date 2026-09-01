@@ -5,7 +5,7 @@ description = "shabda — grapheme-to-phoneme (G2P) conversion for AGNOS text-to
 license = "GPL-3.0-only"
 repository = "https://github.com/MacCracken/shabda"
 language = "cyrius"
-cyrius = "6.4.12"
+cyrius = "6.5.36"
 
 [build]
 entry = "src/main.cyr"
@@ -30,23 +30,25 @@ modules = [
 # stdlib grows as modules arrive. Mirrors the shabdakosh reference port's proven
 # set. sakshi = packed-i64 errors. math/ganita = f64 prosody/rate scaling. tagged =
 # Option/Result-shaped returns. fnptr = the convert_streaming callback. hashmap +
-# bayan are transitive folds required by the svara dist bundle (svara.deps). NOTE:
-# hisab/goonj/naad are NOT stdlib — they are shabdakosh's transitive folds
-# (shabdakosh.deps), auto-vendored by `cyrius deps` and `include`d in src/main.cyr.
+# bayan are transitive folds required by the svara dist bundle (svara.deps); slice +
+# result by varna's, callback by hisab's/naad's. NOTE:
+# hisab/goonj/naad are NOT stdlib — they are svara's git deps, auto-vendored by
+# `cyrius deps` via svara's manifest and `include`d in src/main.cyr.
 [deps]
-stdlib = ["syscalls", "string", "alloc", "str", "fmt", "vec", "io", "args", "assert", "fnptr", "atomic", "sakshi", "math", "ganita", "tagged", "hashmap", "bayan", "mmap", "bench"]
+stdlib = ["syscalls", "string", "alloc", "str", "fmt", "vec", "io", "args", "assert", "fnptr", "atomic", "sakshi", "math", "ganita", "tagged", "hashmap", "bayan", "mmap", "bench", "slice", "result", "callback"]
 
 # shabdakosh — the pronunciation dictionary (shbdk_* symbols). Re-exported by the
 # Rust crate as shabda::arpabet and shabda::dictionary; shabda calls shbdk_arpabet_*
 # / shbdk_dict_* directly. Consumed by engine.cyr (dict lookup), heteronym.cyr
 # (Pronunciation), error.cyr (SHBDK_ERR_* codes for the From<ShabdakoshError> map).
 # Its dist bundle folds hisab/goonj/naad (shabdakosh.deps sidecar). BOTH path (local
-# dev) AND git+tag (CI).
+# dev) AND git+tag (CI). `optional` is a toolchain workaround — see ADR-0001.
 [deps.shabdakosh]
 git = "https://github.com/MacCracken/shabdakosh.git"
 path = "../shabdakosh"
-tag = "3.0.2"
+tag = "3.0.5"
 modules = ["dist/shabdakosh.cyr"]
+optional = true
 
 # svara — SVARA_PH_* phoneme identities (the PhonemeEvent-compat contract),
 # phoneme class/duration, Stress, IntonationPattern, and the sequence/voice/render
@@ -54,7 +56,7 @@ modules = ["dist/shabdakosh.cyr"]
 [deps.svara]
 git = "https://github.com/MacCracken/svara.git"
 path = "../svara"
-tag = "3.1.0"
+tag = "3.5.4"
 modules = ["dist/svara.cyr"]
 
 # varna — phoneme inventories (phoneme_english/spanish/german/hindi/
@@ -65,5 +67,5 @@ modules = ["dist/svara.cyr"]
 [deps.varna]
 git = "https://github.com/MacCracken/varna.git"
 path = "../varna"
-tag = "2.0.0"
+tag = "2.4.1"
 modules = ["dist/varna.cyr"]

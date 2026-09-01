@@ -40,7 +40,7 @@ text-to-speech. Consumers pull `dist/shabda.cyr` (the distlib bundle).
 
 ## Dependencies
 
-- **shabdakosh** (`shbdk_*`) — pronunciation dictionary (dict lookup, ARPABET/IPA, heteronym pronunciations, `SHBDK_ERR_*` codes). Consumed by engine/heteronym/error. Folds hisab/goonj/naad.
+- **shabdakosh** (`shbdk_*`) — pronunciation dictionary (dict lookup, ARPABET/IPA, heteronym pronunciations, `SHBDK_ERR_*` codes). Consumed by engine/heteronym/error. Folds hisab/goonj/naad. Declared `optional` — `cyrius deps` does NOT refresh `lib/shabdakosh.cyr`; copy it by hand, see [ADR-0001](docs/adr/0001-shabdakosh-declared-optional.md).
 - **svara** (`SVARA_PH_*`) — phoneme identities (the `PhonemeEvent`-compat contract), phoneme class/duration, stress, intonation, and the sequence/voice/render surface for `speak()`. Folds hashmap/bayan.
 - **varna** — phoneme inventories, phonotactics, and script detection. Consumed by validate and `detect_language`.
 

@@ -1,6 +1,6 @@
 # shabda
 
-[![version](https://img.shields.io/badge/version-3.0.1-blue.svg)](VERSION)
+[![version](https://img.shields.io/badge/version-3.0.2-blue.svg)](VERSION)
 [![license](https://img.shields.io/badge/license-GPL--3.0--only-green.svg)](LICENSE)
 [![language](https://img.shields.io/badge/language-CYRIUS-orange.svg)](cyrius.cyml)
 
@@ -135,16 +135,22 @@ the sidecar leaves the required stdlib folds (hisab/goonj/naad) in scope. The
 bundle's module order is the `[lib].modules` list in
 [`cyrius.cyml`](cyrius.cyml). Regenerate it with `cyrius distlib`.
 
+> **Consumers on cyrius ≥ 6.5.36**: `dist/shabda.deps` names hisab / goonj / naad,
+> which `cyrius deps` resolves only against the stdlib snapshot — three fatal
+> errors. Declare shabda `optional = true` and vendor `lib/shabda.cyr` by hand
+> until the toolchain is fixed. Same workaround shabda applies to shabdakosh —
+> see [ADR-0001](docs/adr/0001-shabdakosh-declared-optional.md).
+
 Direct dependencies (path for local dev + git+tag for CI):
 
-- **shabdakosh** 3.0.1 — pronunciation dictionary (`shbdk_*`; dict lookup, ARPABET/IPA, heteronym pronunciations). Folds hisab/goonj/naad.
-- **svara** 3.0.1 — `SVARA_PH_*` phoneme identities, `PhonemeEvent`, and the sequence/voice/render surface for `speak()`. Folds hashmap/bayan.
-- **varna** 2.0.0 — phoneme inventories, phonotactics, and script detection (self-contained on the stdlib folds).
+- **shabdakosh** 3.0.5 — pronunciation dictionary (`shbdk_*`; dict lookup, ARPABET/IPA, heteronym pronunciations). Folds hisab/goonj/naad.
+- **svara** 3.5.4 — `SVARA_PH_*` phoneme identities, `PhonemeEvent`, and the sequence/voice/render surface for `speak()`. Folds hashmap/bayan.
+- **varna** 2.4.1 — phoneme inventories, phonotactics, and script detection (self-contained on the stdlib folds).
 
 ## Tests & Benchmarks
 
 - **653 assertions** across 11 `.tcyr` suites — error (25), normalize (40), syllable (47), heteronym (21), ssml (45), rules (126), prosody (50), validate (127), engine (133), crate-level shabda (29) + fuzz. All green.
-- **Benchmarks** (`tests/shabda.bcyr`, x86_64): `g2p_hello_world` 21.6 µs, `g2p_sentence` 82 µs, `speak_hello` 22.7 ms, `speak_sentence` 25.5 ms, `dict_english_construction` ~10 ms, `dict_lookup_hit` 127 ns, `dict_lookup_miss` 258 ns.
+- **Benchmarks** (`tests/shabda.bcyr`, x86_64, cycc 6.5.36): `g2p_hello_world` 15.4 µs, `g2p_sentence` 60.0 µs, `speak_hello` 7.28 ms, `speak_sentence` 23.4 ms, `dict_english_construction` 7.17 ms, `dict_lookup_hit` 123 ns, `dict_lookup_miss` 237 ns.
 
 ## Consumers
 

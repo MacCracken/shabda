@@ -19,4 +19,6 @@ Decisions about shabda — what we chose, the context, and the consequences we a
 
 ## Index
 
-_No ADRs yet. Add the first as `0001-kebab-case-title.md`._
+| ADR | Title | Status |
+|---|---|---|
+| [0001](0001-shabdakosh-declared-optional.md) | shabdakosh is declared `optional` to work around the dep-sidecar resolver | Accepted |

@@ -16,6 +16,14 @@
 > This is an honest real-world comparison (old Rust stack vs current Cyrius
 > stack), not a version-matched one — behaviour is full parity, dependency
 > versions differ.
+>
+> **Both columns are the 2026-07-06 measurement and are kept as recorded.** The
+> Cyrius side has since moved on: at 3.0.2 (cycc 6.5.36, shabdakosh 3.0.5, svara
+> 3.5.4, varna 2.4.1) the same seven workloads run 15.4 µs / 60.0 µs / 7.28 ms /
+> 23.4 ms / 7.17 ms / 123 ns / 237 ns — so every ratio below is a **ceiling**, and
+> the two G2P ones overstate the gap by roughly 30%. Current figures live in
+> [`docs/development/state.md`](development/state.md); re-running the Rust half is
+> what this document needs before the ratios are restated.
 
 ## Head-to-Head
 
