@@ -1,5 +1,66 @@
 # Changelog
 
+## [3.0.4] — 2026-09-01
+
+Toolchain pin to cyrius **6.5.37**, a sidecar correction that unblocks consumers, and a repair
+to this repo's own release tooling.
+
+### Fixed — `dist/shabda.deps` named three VENDORED deps as stdlib leaves
+
+The sidecar listed `hisab`, `goonj` and `naad` among its stdlib requirements. None is a cyrius
+stdlib module — they are vendored dependencies reached through `src/main.cyr`, the umbrella
+`cyrius distlib` scans for `include "lib/X.cyr"` lines. The scan correctly captured "these must
+be in scope" but tagged them as *stdlib*, so a consumer's `cyrius deps` hunted for them in the
+stdlib and failed outright:
+
+```
+error: dep shabda requires 'hisab' but it is not in the cyrius stdlib
+```
+
+⭐ **Over-reporting is the fatal direction.** An under-reported sidecar fails silently at the
+consumer's compile step; an over-reported one is a HARD resolver error *before* compilation is
+reached — the same shape that left `crab` and `puka` unable to resolve `dhancha` at all.
+
+Fixed upstream in cyrius 6.5.37, which validates every captured leaf against the stdlib snapshot
+at generation time, so the names are dropped by construction. Regenerating picks that up: the
+sidecar is now **23 leaves, all of which resolve**.
+
+⚠ No source change was needed or made. `src/main.cyr`'s includes are correct — they carry the
+dependency chain the bundled modules require. Only the published metadata was wrong.
+
+### Fixed — `scripts/version-bump.sh` had been BROKEN since the Rust port
+
+It was still the Rust-era script: after writing `VERSION` it ran `sed -i … "$REPO_ROOT/Cargo.toml"`
+followed by `cargo generate-lockfile`. `Cargo.toml` now lives under `rust-old/`, not the repo
+root, so under `set -euo pipefail` the sed failed and the script **died at that line** — writing
+`VERSION` and never regenerating the bundle. Any bump run through it left `dist/shabda.cyr`
+stamped with the *previous* version while `VERSION` claimed the new one.
+
+It failed loudly, which is the only reason this was caught; a `|| true` on that line would have
+made it silent. Rewritten cyrius-native (write `VERSION`, then `cyrius distlib --all`), matching
+shabdakosh's. `--all` rather than bare `distlib` so profile bundles cannot be left behind — the
+sankoch 2.7.6 shape.
+
+### Changed
+
+- `cyrius` pin **6.5.36 → 6.5.37**.
+- `lib/` re-synced from the 6.5.37 snapshot (42 files).
+- `dist/shabda.cyr` + `dist/shabda.deps` regenerated.
+
+### Known issue — `lib/sakshi.cyr` stays at 2.4.11
+
+The pinned 6.5.37 snapshot ships sakshi **2.4.12** (fixing a negative-depth buffer underflow in
+`sakshi_span_enter`), and `cyrius lib sync` writes it correctly — but the next `cyrius deps`
+reverts it to **2.4.11**, byte-identical to a named dep's own vendored copy. The resolver pulls a
+declared *stdlib* leaf from the dep's `lib/` instead of the pinned snapshot, so the two commands
+fight and `deps` wins.
+
+A cyrius resolver defect, not a shabda one, filed upstream as
+`cyrius/docs/development/issues/2026-09-01-deps-pulls-stdlib-leaf-from-dep-lib.md`. shabda is the
+**second** independent repo confirmed hitting it (shabdakosh 3.0.6 is the first). It does not
+affect this release: the build is clean and all 198 tests pass.
+
+
 All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
