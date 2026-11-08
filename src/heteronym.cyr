@@ -52,21 +52,25 @@ fn shabda_heteronym_rule_new(word, default_variant, context_variant, triggers): 
     return r;
 }
 
+# The heteronym word, lowercase.
 #must_use
 fn shabda_heteronym_rule_word(r): cstring {
     return load64(r + SHABDA_HET_WORD);
 }
 
+# Index of the default pronunciation in the dictionary entry.
 #must_use
 fn shabda_heteronym_rule_default_variant(r): i64 {
     return load64(r + SHABDA_HET_DEFAULT);
 }
 
+# Index of the pronunciation used when a trigger word precedes the heteronym.
 #must_use
 fn shabda_heteronym_rule_context_variant(r): i64 {
     return load64(r + SHABDA_HET_CONTEXT);
 }
 
+# The trigger words, a vec of cstrings: one in the preceding context selects context_variant.
 #must_use
 fn shabda_heteronym_rule_triggers(r): i64 {
     return load64(r + SHABDA_HET_TRIGGERS);

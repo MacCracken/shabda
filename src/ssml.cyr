@@ -88,6 +88,7 @@ fn shabda_ssml_text(text_str): i64 {
     return p;
 }
 
+# A Break node of `duration_ms` milliseconds.
 #must_use
 fn shabda_ssml_break(duration_ms): i64 {
     var p = alloc(16);
@@ -96,6 +97,7 @@ fn shabda_ssml_break(duration_ms): i64 {
     return p;
 }
 
+# An Emphasis node: `level` is a SHABDA_EMPH_* tag, `children` a vec of SsmlNode*.
 #must_use
 fn shabda_ssml_emphasis(level, children): i64 {
     var p = alloc(24);
@@ -105,6 +107,7 @@ fn shabda_ssml_emphasis(level, children): i64 {
     return p;
 }
 
+# A Prosody node: `rate` is a SHABDA_RATE_* tag or SHABDA_RATE_NONE, `children` a vec of SsmlNode*.
 #must_use
 fn shabda_ssml_prosody(rate, children): i64 {
     var p = alloc(24);
@@ -120,18 +123,24 @@ fn shabda_ssml_prosody(rate, children): i64 {
 #must_use
 fn shabda_ssml_node_tag(node): i64 { return load64(node + SHABDA_SSML_OFF_TAG); }
 
+# A Text node's payload, a Str. These accessors do not check the tag: read only the slot
+# that shabda_ssml_node_tag says the node has.
 #must_use
 fn shabda_ssml_node_text(node): i64 { return load64(node + SHABDA_SSML_OFF_TEXT); }
 
+# A Break node's duration in milliseconds.
 #must_use
 fn shabda_ssml_node_duration(node): i64 { return load64(node + SHABDA_SSML_OFF_DURATION); }
 
+# An Emphasis node's SHABDA_EMPH_* level.
 #must_use
 fn shabda_ssml_node_level(node): i64 { return load64(node + SHABDA_SSML_OFF_LEVEL); }
 
+# A Prosody node's SHABDA_RATE_* rate, or SHABDA_RATE_NONE.
 #must_use
 fn shabda_ssml_node_rate(node): i64 { return load64(node + SHABDA_SSML_OFF_RATE); }
 
+# An Emphasis or Prosody node's children, a vec of SsmlNode*.
 #must_use
 fn shabda_ssml_node_children(node): i64 { return load64(node + SHABDA_SSML_OFF_CHILDREN); }
 
@@ -717,6 +726,7 @@ fn _shabda_is_speak(input, len, cstart): i64 {
 # EmphasisLevel <-> code (identity; tags are the wire form).
 #must_use
 fn shabda_emphasis_level_encode(level): i64 { return level; }
+# SHABDA_EMPH_* tag for a wire code; an unknown code gives SHABDA_EMPH_MODERATE.
 #must_use
 fn shabda_emphasis_level_decode(code): i64 {
     if (code == SHABDA_EMPH_STRONG)   { return SHABDA_EMPH_STRONG; }
@@ -728,6 +738,7 @@ fn shabda_emphasis_level_decode(code): i64 {
 # SpeakingRate <-> code (identity; tags are the wire form).
 #must_use
 fn shabda_speaking_rate_encode(rate): i64 { return rate; }
+# SHABDA_RATE_* tag for a wire code; an unknown code gives SHABDA_RATE_NONE.
 #must_use
 fn shabda_speaking_rate_decode(code): i64 {
     if (code == SHABDA_RATE_XSLOW)  { return SHABDA_RATE_XSLOW; }

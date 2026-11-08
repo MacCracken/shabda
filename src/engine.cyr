@@ -89,12 +89,15 @@ fn shabda_timing_default(): i64 {
     return shabda_timing_new(f64_from(1), f64_from(1), f64_from(1));
 }
 
+# Vowel / diphthong duration scale, an f64 bit pattern (1.0 = unchanged). (Rust vowel_scale)
 #must_use
 fn shabda_timing_vowel_scale(p): i64 { return load64(p + SHABDA_TIMING_VOWEL); }
 
+# Consonant duration scale, an f64 bit pattern (1.0 = unchanged). (Rust consonant_scale)
 #must_use
 fn shabda_timing_consonant_scale(p): i64 { return load64(p + SHABDA_TIMING_CONSONANT); }
 
+# Pause / silence duration scale, an f64 bit pattern (1.0 = unchanged). (Rust pause_scale)
 #must_use
 fn shabda_timing_pause_scale(p): i64 { return load64(p + SHABDA_TIMING_PAUSE); }
 
@@ -112,6 +115,8 @@ fn shabda_convert_options_new(): i64 {
     return o;
 }
 
+# Same as shabda_convert_options_new: emphasis off, no speaking rate, no timing profile.
+# (Rust ConvertOptions::default)
 #must_use
 fn shabda_convert_options_default(): i64 {
     return shabda_convert_options_new();
@@ -160,6 +165,8 @@ fn shabda_convert_options_with_speaking_rate(o, wpm): i64 {
     return c;
 }
 
+# A copy of `o` with timing profile `timing` (0 = svara's default durations). `o` is
+# unchanged; if the copy cannot be allocated, `o` is returned. (Rust with_timing)
 #must_use
 fn shabda_convert_options_with_timing(o, timing): i64 {
     var c = _shabda_options_clone(o);
@@ -168,15 +175,19 @@ fn shabda_convert_options_with_timing(o, timing): i64 {
     return c;
 }
 
+# 1 if emphasis detection (ALL-CAPS and *asterisk* words) is on, 0 if off.
 #must_use
 fn shabda_convert_options_emphasis(o): i64 { return load64(o + SHABDA_OPT_EMPHASIS); }
 
+# 1 if a speaking rate is set, 0 if not (Rust speaking_rate_wpm is Some / None).
 #must_use
 fn shabda_convert_options_has_rate(o): i64 { return load64(o + SHABDA_OPT_HAS_RATE); }
 
+# Speaking rate in words per minute, an f64 bit pattern. Meaningful only when has_rate is 1.
 #must_use
 fn shabda_convert_options_rate_wpm(o): i64 { return load64(o + SHABDA_OPT_RATE_WPM); }
 
+# The timing profile, or 0 when none is set (svara's default durations).
 #must_use
 fn shabda_convert_options_timing(o): i64 { return load64(o + SHABDA_OPT_TIMING); }
 
@@ -195,6 +206,8 @@ fn shabda_language_to_str(lang): cstring {
     return "English";                 # #[non_exhaustive] fallback
 }
 
+# SHABDA_LANG_* tag for a name shabda_language_to_str gives ("English" .. "Sanskrit").
+# An unknown name gives SHABDA_LANG_ENGLISH.
 #must_use
 fn shabda_language_from_str(s): i64 {
     if (streq(s, "English") == 1)  { return SHABDA_LANG_ENGLISH; }
@@ -289,9 +302,12 @@ fn shabda_g2p_new(language): i64 {
     return e;
 }
 
+# The engine's SHABDA_LANG_* tag. (Rust G2PEngine::language)
 #must_use
 fn shabda_g2p_language(e): i64 { return load64(e + SHABDA_ENGINE_LANG); }
 
+# The engine's shabdakosh dictionary handle, for the shbdk_dict_* calls: the built-in
+# English dictionary for English, an empty one otherwise. (Rust G2PEngine::dictionary)
 #must_use
 fn shabda_g2p_dictionary(e): i64 { return load64(e + SHABDA_ENGINE_DICT); }
 

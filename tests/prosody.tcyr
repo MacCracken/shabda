@@ -115,7 +115,8 @@ var s3c = shabda_syllable_new(vec_new(), SVARA_PH_VOWEL_I, vec_new());
 var three_light = _mk3(s3a, s3b, s3c);
 var tl_ev = shabda_assign_stress_syllabic(three_light, 1);
 assert_eq(vec_len(tl_ev), 3, "3 light syllables -> 3 nucleus events");
-assert_eq(SvPhonemeEvent_stress(vec_get(tl_ev, 0)), SVARA_STRESS_PRIMARY, "3-syl light penult: antepenult (idx0) primary");
+assert_eq(SvPhonemeEvent_stress(vec_get(tl_ev, 0)), SVARA_STRESS_PRIMARY,
+  "3-syl light penult: antepenult (idx0) primary");
 assert_eq(SvPhonemeEvent_stress(vec_get(tl_ev, 1)), SVARA_STRESS_UNSTRESSED, "3-syl light penult: penult unstressed");
 assert_eq(SvPhonemeEvent_stress(vec_get(tl_ev, 2)), SVARA_STRESS_UNSTRESSED, "3-syl light penult: final unstressed");
 
@@ -127,9 +128,11 @@ var three_heavy = _mk3(h3a, h3b, h3c);
 var th_ev = shabda_assign_stress_syllabic(three_heavy, 1);
 # penult carries a coda [t], so nucleus is event idx 1, coda event idx 2, final event idx 3.
 assert_eq(vec_len(th_ev), 4, "3-syl heavy penult -> 4 events (penult has coda)");
-assert_eq(SvPhonemeEvent_stress(vec_get(th_ev, 0)), SVARA_STRESS_UNSTRESSED, "3-syl heavy penult: antepenult unstressed");
+assert_eq(SvPhonemeEvent_stress(vec_get(th_ev, 0)), SVARA_STRESS_UNSTRESSED,
+  "3-syl heavy penult: antepenult unstressed");
 assert_eq(SvPhonemeEvent_stress(vec_get(th_ev, 1)), SVARA_STRESS_PRIMARY, "3-syl heavy penult: penult nucleus primary");
-assert_eq(SvPhonemeEvent_stress(vec_get(th_ev, 2)), SVARA_STRESS_UNSTRESSED, "3-syl heavy penult: penult coda unstressed");
+assert_eq(SvPhonemeEvent_stress(vec_get(th_ev, 2)), SVARA_STRESS_UNSTRESSED,
+  "3-syl heavy penult: penult coda unstressed");
 
 # HEAVY penult via diphthong nucleus (no coda) also attracts stress to penult.
 var d3a = shabda_syllable_new(vec_new(), SVARA_PH_VOWEL_ASH, vec_new());
@@ -137,8 +140,10 @@ var d3b = shabda_syllable_new(vec_new(), SVARA_PH_DIPH_AI, vec_new());
 var d3c = shabda_syllable_new(vec_new(), SVARA_PH_VOWEL_I, vec_new());
 var three_diph = _mk3(d3a, d3b, d3c);
 var td_ev = shabda_assign_stress_syllabic(three_diph, 1);
-assert_eq(SvPhonemeEvent_stress(vec_get(td_ev, 0)), SVARA_STRESS_UNSTRESSED, "3-syl diph penult: antepenult unstressed");
-assert_eq(SvPhonemeEvent_stress(vec_get(td_ev, 1)), SVARA_STRESS_PRIMARY, "3-syl diph penult: penult (diphthong) primary");
+assert_eq(SvPhonemeEvent_stress(vec_get(td_ev, 0)), SVARA_STRESS_UNSTRESSED,
+  "3-syl diph penult: antepenult unstressed");
+assert_eq(SvPhonemeEvent_stress(vec_get(td_ev, 1)), SVARA_STRESS_PRIMARY,
+  "3-syl diph penult: penult (diphthong) primary");
 
 # ================================================================
 # apply_emphasis: vowels -> Primary stress + 1.3x duration; consonants untouched.
@@ -184,15 +189,18 @@ var sil_ev = shabda_assign_stress(sil, 1);
 var sil_dur0 = SvPhonemeEvent_duration(vec_get(sil_ev, 0));
 var prof2 = _mk_profile(F64_1_0, F64_1_0, F64_2_0);
 shabda_apply_timing(sil_ev, prof2);
-assert_eq(f64_eq(SvPhonemeEvent_duration(vec_get(sil_ev, 0)), f64_mul(sil_dur0, F64_2_0)), 1, "silence uses pause scale");
+assert_eq(f64_eq(SvPhonemeEvent_duration(vec_get(sil_ev, 0)), f64_mul(sil_dur0, F64_2_0)), 1,
+  "silence uses pause scale");
 
 # ================================================================
 # sentence_intonation: Statement->Declarative, Question->Interrogative,
 # Exclamation->Exclamatory.
 test_group("sentence_intonation");
 assert_eq(shabda_sentence_intonation(SHABDA_STYPE_STATEMENT), SVARA_INTONATION_DECLARATIVE, "statement -> declarative");
-assert_eq(shabda_sentence_intonation(SHABDA_STYPE_QUESTION), SVARA_INTONATION_INTERROGATIVE, "question -> interrogative");
-assert_eq(shabda_sentence_intonation(SHABDA_STYPE_EXCLAMATION), SVARA_INTONATION_EXCLAMATORY, "exclamation -> exclamatory");
+assert_eq(shabda_sentence_intonation(SHABDA_STYPE_QUESTION), SVARA_INTONATION_INTERROGATIVE,
+  "question -> interrogative");
+assert_eq(shabda_sentence_intonation(SHABDA_STYPE_EXCLAMATION), SVARA_INTONATION_EXCLAMATORY,
+  "exclamation -> exclamatory");
 
 var rc = assert_summary();
 syscall(SYS_EXIT, rc);

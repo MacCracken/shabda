@@ -975,6 +975,8 @@ fn _shabda_is_latin_extended(cp): i64 {
     return 0;
 }
 
+# 1 if `word` contains a non-ASCII Latin letter (accented or extended Latin), suggesting a
+# foreign loan word; 0 otherwise. (Rust is_foreign_word)
 #must_use
 fn shabda_is_foreign_word(word): i64 {
     var p = word;
@@ -1012,6 +1014,8 @@ fn _shabda_strip_cp(cp): i64 {
     return cp;
 }
 
+# `word` with accented Latin letters mapped to their ASCII equivalents; other characters pass
+# through. (Rust strip_diacritics)
 #must_use
 fn shabda_strip_diacritics(word): cstring {
     var sb = _shabda_sb_new();
@@ -1063,6 +1067,9 @@ fn _shabda_normalize_token_into(token, sb): i64 {
     return 0;
 }
 
+# Normalizes text for G2P: expands abbreviations, acronyms and numbers, lowercases, keeps the
+# comma / period pause markers, strips non-alphabetic characters (keeping spaces, apostrophes and
+# hyphens) and collapses runs of spaces. (Rust normalize)
 #must_use
 fn shabda_normalize(text): cstring {
     var abbr = shabda_expand_abbreviations(text);
@@ -1097,6 +1104,9 @@ fn shabda_normalize(text): cstring {
     return _shabda_sb_cstr(sb);
 }
 
+# As shabda_normalize, but ALL-CAPS words (3+ letters) and *asterisk-wrapped* words are
+# wrapped in SHABDA_EMPHASIS_START / SHABDA_EMPHASIS_END, and acronyms are not expanded.
+# (Rust normalize_with_emphasis)
 #must_use
 fn shabda_normalize_with_emphasis(text): cstring {
     var abbr = shabda_expand_abbreviations(text);

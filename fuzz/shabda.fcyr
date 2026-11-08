@@ -39,6 +39,8 @@ fn _shabda_fuzz_cstr(data, len): i64 {
     return s;
 }
 
+# Feeds `len` bytes at `data` to every text entry point (normalize, expand_numbers, the SSML
+# parser, convert, convert_ssml). Returning at all is the pass; the results are discarded.
 fn fuzz_main(data, len) {
     if (len == 0) { return 0; }
     var s = _shabda_fuzz_cstr(data, len);
@@ -210,6 +212,8 @@ fn _fz_markup(rounds, frags): i64 {
     return 0;
 }
 
+# Fuzz driver: the regression corpus, 400 random-byte rounds and 400 random-markup rounds.
+# Prints "fuzz: ok" once all of them return.
 fn main() {
     alloc_init();
     _corpus();

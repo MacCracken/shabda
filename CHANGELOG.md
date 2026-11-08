@@ -1,5 +1,93 @@
 # Changelog
 
+## [3.1.1] — 2026-11-07
+
+Toolchain and dependency release, plus an audit cleanup. `cyrius` 6.7.9 -> **6.7.18**,
+`shabdakosh` 3.1.0 -> **3.1.1**, `svara` 3.6.0 -> **3.6.3**, `varna` 2.5.0 -> **2.5.2**, and
+transitively `hisab` 3.4.0 -> **3.4.1**, `naad` 2.3.0 -> **2.3.3**, `goonj` 2.1.0 -> **2.3.1**,
+`sakshi` 2.5.8 -> **2.5.10**. Each is its dep's newest tag and pins 6.7.18, and the lock's six
+commit pins are the ones shabdakosh 3.1.1 ships. `lib/` and `cyrius.lock` were regenerated from
+scratch. Every vendored dep is byte-identical to its tag's `dist/` bundle, every stdlib leaf is
+byte-identical to the 6.7.18 snapshot, `cyrius deps --verify` passes 53 of 53, and
+`cyrius deps --locked` is clean.
+
+No behavior, API or output change. **727 assertions / 10 suites**, the same as 3.1.0, and
+`cyrius fuzz` passes. svara 3.6.3 keeps the consumer floor at cyrius 6.7.2. **`cyrius audit` exits
+0**, which it last did at 3.0.3.
+
+### Fixed — `cyrius audit` is clean
+
+- **fmt**: `cyrius fmt` re-indented 3 continuation lines in `tests/engine.tcyr` and
+  `tests/syllable.tcyr`, from 4 spaces to 2.
+- **lint**: the 14 warnings in `tests/` are gone. 12 assert calls over 120 columns are split before
+  their message argument, and a doubled blank line in `tests/engine.tcyr` is removed. The
+  271-column expected string for `expand i64::MAX` in `tests/normalize.tcyr` is now built from
+  three literals with `str_builder` at run time, the way `tests/engine.tcyr` and `tests/ssml.tcyr`
+  already build their nesting inputs. Cyrius cannot split one literal across lines yet:
+  adjacent-literal concatenation is still a 6.7.x proposal. The assertion compares the same string.
+- **docs**: the 40 undocumented public fns now have doc comments. 37 are in `src/`: engine 12,
+  ssml 10, error 4, heteronym 4, normalize 4, syllable 3. Most are ported from the Rust doc comment
+  of the same item, and each states the Cyrius encoding: f64 bit patterns, sentinels, and the
+  fallback on an unknown name or code. The other 3 are entry points: `main` in `tests/shabda.bcyr`,
+  and `fuzz_main` and `main` in `fuzz/shabda.fcyr`.
+
+### Changed
+
+- **`lib/`**: 34 files change, and `simd.cyr` is added because goonj 2.3.1 includes it. shabda
+  already vendored `lib/unicode/`, which the 6.7.18 `bayan` now includes.
+- **`lib/shabdakosh.cyr` was copied by hand from the 3.1.1 tag**, per ADR-0001, after checking that
+  the local tag is the commit GitHub has (`7642b9b`). The 6.7.18 resolver now notes on every resolve
+  that this file is outside the declared footprint, because shabdakosh is `optional`. It keeps the
+  file and its lock line, so the note is expected.
+- **`dist/shabda.deps` is gone**, and `dist/shabda.cyr` no longer opens with the
+  `include "lib/unicode/*.cyr"` lines. The 6.7.18 compile-verify finds no stdlib leaf left to name:
+  the `unicode` tables now arrive with `bayan`, which svara's sidecar requires and which includes
+  `lib/unicode/` at 6.7.18. A consumer gets them through svara, which shabda needs anyway.
+  Otherwise the bundle changes only in its version header and the new doc comments.
+- **`build/shabda` grew from 4,010,864 to 4,842,184 bytes.** The default build keeps unreachable
+  functions, and the unreachable share grew from 3.02 MB (6,920 fns) to 3.62 MB (7,715 fns).
+- **`cyrius tests` was removed in cyrius 6.7.12.** CLAUDE.md, README and `state.md` now give
+  `cyrius test tests` for running every suite. CI already runs the bare `cyrius test`, which finds
+  the same 10 suites.
+
+### Checked — the 6.7.10–6.7.18 meaning changes do not reach shabda
+
+varna 2.5.1 lists what 6.7.10–6.7.18 changed in meaning: struct values, `Str`, multi-value returns,
+declaration zones, `f64`, `**T`, closures, `impl`, narrow scalar annotations, duplicate globals and
+fns, and include spellings. With comments and strings stripped, `src/`, `tests/` and `fuzz/` have
+no `struct`, `enum`, `#derive`, `Str` annotation, `ret2`, `: stack`, `**T`, closure, `impl` or
+narrow integer annotation. They have no duplicate global or fn, no fn that shadows a `lib/` one,
+and one spelling per include. `f64` goes only through the `f64_*` calls on i64 bit patterns.
+
+The one natively typed spot is the `f32` multiply behind `<break time="Xs">`
+(`_shabda_f32_mul` in `src/ssml.cyr`), and 6.7.x changed how an `f32` local is stored. A
+differential over 404,075 inputs to `_shabda_secs_to_ms_u32` was built under 3.1.0 (cyrius 6.7.9)
+and 3.1.1, and the two outputs are byte-identical. The inputs cover every millisecond from −2 s to
+200 s, the same range in sevenths of a second, 64 powers of two divided by three, NaN, ±inf, ±0,
+the smallest subnormal and the u32 boundary. The 10,647-input conversion differential from 3.1.0
+is byte-identical too.
+
+varna 2.5.2's breaking change is to its `-D MCP` tool surface, and `allophone_realize` now compares
+by value. shabda calls neither, and all 12 varna functions it does call exist in 2.5.2.
+
+### Benchmarks
+
+`tests/shabda.bcyr`, x86_64. Medians of **8** runs, with 3.1.0 (cyrius 6.7.9, its `lib/`) and
+3.1.1 alternated in one session. Each delta is toolchain and dependencies together. Every row's
+range overlaps between versions, so none of these is a measured change. The first three rounds
+alone made `dict_lookup_miss` look 27 % slower. The stdlib hashmap seeds itself per process, so a
+lookup row moves from run to run, and five more rounds put its medians 3 ns apart.
+
+| Benchmark | 3.1.0 | 3.1.1 | Δ (all overlap) |
+|-----------|-------|-------|-----------------|
+| g2p_hello_world | 15.29 µs | 15.32 µs | +0.2% |
+| g2p_sentence | 60.58 µs | 60.34 µs | −0.4% |
+| speak_hello | 5.30 ms | 5.18 ms | −2.4% |
+| speak_sentence | 17.39 ms | 16.95 ms | −2.6% |
+| dict_english_construction | 7.53 ms | 7.41 ms | −1.6% |
+| dict_lookup_hit | 136 ns | 136 ns | noise |
+| dict_lookup_miss | 152 ns | 155 ns | noise (3.1.1 ranged 148–525 ns) |
+
 ## [3.1.0] — 2026-11-07
 
 Toolchain and dependency release, moving to the cyrius 6.7 language minor. `cyrius` 6.6.20 ->

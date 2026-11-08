@@ -123,8 +123,8 @@ fn _mk6(a, b, c, d, e, f): i64 {
 }
 test_group("MOP: extra (s-cluster onset)");
 var extra = _mk6(
-    SVARA_PH_VOWEL_OPEN_E, SVARA_PH_PLOSIVE_K, SVARA_PH_FRIC_S,
-    SVARA_PH_PLOSIVE_T, SVARA_PH_APPROX_R, SVARA_PH_VOWEL_A);
+  SVARA_PH_VOWEL_OPEN_E, SVARA_PH_PLOSIVE_K, SVARA_PH_FRIC_S,
+  SVARA_PH_PLOSIVE_T, SVARA_PH_APPROX_R, SVARA_PH_VOWEL_A);
 var esyls = shabda_syllabify(extra);
 assert_eq(vec_len(esyls), 2, "extra -> 2 syllables");
 var e0 = vec_get(esyls, 0);

@@ -129,7 +129,6 @@ fn _stream_cb(word, events): i64 {
     return 0;
 }
 
-
 # ==============================================================================
 # test_hello_world
 # ==============================================================================
@@ -213,12 +212,15 @@ assert_eq(SvPhonemeEvent_stress(vec_get(tc_ev, 0)), SVARA_STRESS_UNSTRESSED, "th
 # test_serde_roundtrip_language (+ per-language variants)
 # ==============================================================================
 test_group("language roundtrip");
-assert_eq(shabda_language_from_str(shabda_language_to_str(SHABDA_LANG_ENGLISH)), SHABDA_LANG_ENGLISH, "English roundtrip");
-assert_eq(shabda_language_from_str(shabda_language_to_str(SHABDA_LANG_SPANISH)), SHABDA_LANG_SPANISH, "Spanish roundtrip");
+assert_eq(shabda_language_from_str(shabda_language_to_str(SHABDA_LANG_ENGLISH)), SHABDA_LANG_ENGLISH,
+  "English roundtrip");
+assert_eq(shabda_language_from_str(shabda_language_to_str(SHABDA_LANG_SPANISH)), SHABDA_LANG_SPANISH,
+  "Spanish roundtrip");
 assert_eq(shabda_language_from_str(shabda_language_to_str(SHABDA_LANG_GERMAN)), SHABDA_LANG_GERMAN, "German roundtrip");
 assert_eq(shabda_language_from_str(shabda_language_to_str(SHABDA_LANG_HINDI)), SHABDA_LANG_HINDI, "Hindi roundtrip");
 assert_eq(shabda_language_from_str(shabda_language_to_str(SHABDA_LANG_ARABIC)), SHABDA_LANG_ARABIC, "Arabic roundtrip");
-assert_eq(shabda_language_from_str(shabda_language_to_str(SHABDA_LANG_SANSKRIT)), SHABDA_LANG_SANSKRIT, "Sanskrit roundtrip");
+assert_eq(shabda_language_from_str(shabda_language_to_str(SHABDA_LANG_SANSKRIT)), SHABDA_LANG_SANSKRIT,
+  "Sanskrit roundtrip");
 assert_streq(shabda_language_to_str(SHABDA_LANG_ENGLISH), "English", "English to_str");
 
 # ==============================================================================
@@ -400,7 +402,7 @@ assert_eq(shabda_timing_vowel_scale(tpd), f64_from(1), "default vowel 1");
 # ==============================================================================
 test_group("convert_options roundtrip");
 var co_rt = shabda_convert_options_with_speaking_rate(
-    shabda_convert_options_with_emphasis(shabda_convert_options_new(), 1), f64_from(120));
+  shabda_convert_options_with_emphasis(shabda_convert_options_new(), 1), f64_from(120));
 assert_eq(shabda_convert_options_emphasis(co_rt), 1, "co emphasis on");
 assert_eq(shabda_convert_options_has_rate(co_rt), 1, "co has_rate on");
 assert_eq(shabda_convert_options_rate_wpm(co_rt), f64_from(120), "co rate 120");

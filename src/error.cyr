@@ -74,21 +74,25 @@ fn shabda_err_invalid_input(): i64 {
     return sakshi_err_new(SHABDA_ERR_INVALID_INPUT, ERR_CAT_PARSE);
 }
 
+# A word could not be converted to phonemes. Category RUNTIME. (Rust UnknownWord)
 #must_use
 fn shabda_err_unknown_word(): i64 {
     return sakshi_err_new(SHABDA_ERR_UNKNOWN_WORD, ERR_CAT_RUNTIME);
 }
 
+# The requested language is not supported. Category CONFIG. (Rust UnsupportedLanguage)
 #must_use
 fn shabda_err_unsupported_language(): i64 {
     return sakshi_err_new(SHABDA_ERR_UNSUPPORTED_LANGUAGE, ERR_CAT_CONFIG);
 }
 
+# A conversion rule failed. Category RUNTIME. (Rust RuleError)
 #must_use
 fn shabda_err_rule_error(): i64 {
     return sakshi_err_new(SHABDA_ERR_RULE_ERROR, ERR_CAT_RUNTIME);
 }
 
+# Dictionary parsing or I/O failed. Category PARSE. (Rust DictParseError)
 #must_use
 fn shabda_err_dict_parse(): i64 {
     return sakshi_err_new(SHABDA_ERR_DICT_PARSE, ERR_CAT_PARSE);

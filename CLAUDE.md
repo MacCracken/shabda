@@ -54,7 +54,7 @@ Project was scaffolded with `cyrius port`. Original Rust at `rust-old/` is the r
 cyrius deps                              # resolve dependencies
 cyrius build src/main.cyr build/shabda   # compile the smoke binary
 cyrius test tests/<mod>.tcyr             # run one suite
-cyrius tests tests                       # run all .tcyr
+cyrius test tests                        # run all .tcyr
 cyrius bench tests/shabda.bcyr           # run benchmarks
 cyrius distlib                           # regenerate dist/shabda.cyr
 ```

@@ -33,16 +33,19 @@ fn shabda_syllable_new(onset, nucleus, coda): i64 {
     return s;
 }
 
+# Onset consonants before the nucleus, a vec of phoneme ordinals.
 #must_use
 fn shabda_syllable_onset(s): i64 {
     return load64(s + SHABDA_SYLLABLE_ONSET);
 }
 
+# Nucleus vowel or diphthong ordinal, the stress-bearing element.
 #must_use
 fn shabda_syllable_nucleus(s): i64 {
     return load64(s + SHABDA_SYLLABLE_NUCLEUS);
 }
 
+# Coda consonants after the nucleus, a vec of phoneme ordinals.
 #must_use
 fn shabda_syllable_coda(s): i64 {
     return load64(s + SHABDA_SYLLABLE_CODA);

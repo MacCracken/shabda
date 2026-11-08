@@ -18,6 +18,7 @@ include "src/prosody.cyr"
 include "src/validate.cyr"
 include "src/engine.cyr"
 
+# Runs each benchmark (convert, speak, dictionary build and lookup) and prints its report.
 fn main(): i64 {
     alloc_init();
 
