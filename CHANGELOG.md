@@ -1,5 +1,87 @@
 # Changelog
 
+## [3.0.6] — 2026-11-07
+
+Toolchain and dependency release. `cyrius` 6.6.3 -> **6.6.20**, `shabdakosh` 3.0.5 -> **3.0.8**,
+`svara` 3.5.5 -> **3.5.6**, `varna` 2.4.2 -> **2.4.3**, and transitively `hisab` 2.22.1 -> **3.3.7**,
+`naad` 2.2.2 -> **2.2.5**, `goonj` 2.0.4 -> **2.0.6**, `sakshi` 2.5.2 -> **2.5.7**. This is the set
+matched to 6.6.20, the same one shabdakosh 3.0.8 ships: svara 3.5.6 and varna 2.4.3 are the last
+tags on 6.6.x, and their next tags need 6.7.x. svara's manifest supplies the hisab / naad / goonj
+versions. `lib/` and `cyrius.lock` were regenerated from scratch (`cyrius deps` into an empty
+`lib/`). Every vendored dep is byte-identical to its tag's `dist/` bundle, every stdlib leaf is
+byte-identical to the 6.6.20 snapshot, and `cyrius deps --verify` passes 52 of 52.
+
+No source change, no API change. **727 assertions / 10 suites**, the same as 3.0.5; `cyrius fuzz`
+passes.
+
+### Fixed
+
+- **The svara and varna tag pins were inert.** `[deps.svara]` and `[deps.varna]` set `path`
+  beside `git` and `tag`, and an existing `path` makes both inert: `cyrius deps` copies from the
+  sibling checkout with no clone and no commit pin, and every `cyrius build` / `test` / `tests`
+  resolves again. So 3.0.5 vendored svara 3.5.5 and varna 2.4.2 while the manifest said 3.5.4
+  and 2.4.1, and the lock had no svara or varna row. The siblings now sit at 3.6.3 and 2.5.2 on
+  cyrius 6.7.18, so running the suites would have pulled the 6.7.x chain into `lib/`.
+  `path` is dropped from all three deps, and svara and varna now resolve from their tags with a
+  commit pin. shabdakosh is `optional` and never resolved through its `path`; that line goes for
+  consistency.
+- **3.0.4's sakshi split is gone.** The 6.6.20 resolver keeps the stdlib snapshot's
+  `lib/sakshi.cyr` and skips the dep artifact. Both copies are 2.5.7 here, so nothing is split.
+  `cyrius build` / `test` / `deps` print a `refusing to overwrite stdlib leaf 'sakshi'` note on
+  every resolve. That note is expected, and shabdakosh 3.0.8 prints it too.
+- **Assertion count.** README and `state.md` said 737, but the per-suite counts they list add up
+  to 727, which is what the suites report. Both now say 727.
+
+### Changed
+
+- **`dist/shabda.deps`: 22 leaves -> 1 (`unicode`).** Since cyrius 6.6.18 a sidecar lists only
+  what the compile-verify proves the bundle needs beyond its named deps. `dist/shabda.cyr` now
+  opens with the `include "lib/unicode/*.cyr"` lines for that leaf.
+- **`lib/`**: `hashmap_fast.cyr` dropped (not declared; nothing includes it). `alloc_cx.cyr`,
+  `chrono.cyr` and `poison.cyr` added, because the 6.6.x stdlib leaves now include them. The lock
+  gains the svara and varna commit pins and a `cyrius 6.6.20` toolchain row.
+- **`lib/shabdakosh.cyr` was copied by hand from the 3.0.8 tag**
+  (`git -C ../shabdakosh show 3.0.8:dist/shabdakosh.cyr`), per ADR-0001. It was not copied from
+  `../shabdakosh/dist/`: that checkout is on 3.1.1 / cyrius 6.7.18, so the `cp` that ADR-0001
+  documents would vendor the wrong version.
+- svara's bundle no longer prints `#inline ignored: body exceeds 32 tokens` warnings.
+
+### Known issue — `cyrius distlib` reports 5 `shbdk_*` names as undefined
+
+shabdakosh is `optional`, so the sidecar verify never loads it. It therefore reports
+`shbdk_dict_new`, `shbdk_dict_english`, `shbdk_dict_lookup`, `shbdk_dict_lookup_all` and
+`shbdk_pronunciation_phonemes` as names a consumer must supply. That is accurate: a consumer that
+resolves shabda gets svara and varna through its manifest, but not shabdakosh. The consumer has
+to declare `[deps.shabdakosh]` at tag 3.0.8 itself.
+
+ADR-0001's precondition no longer holds, because shabdakosh 3.0.8's sidecar lists only `mmap`.
+In a scratch copy with `optional = true` removed, `cyrius deps` resolves and commit-pins
+shabdakosh 3.0.8 (byte-identical to the hand copy), the distlib warning disappears, and all 10
+suites pass. Retiring the workaround supersedes ADR-0001, so it is left for its own change.
+
+### Known issue — `cyrius audit` exits 1
+
+This predates the bump: 3.0.5 on 6.6.3 already failed three legs. **fmt**: `tests/engine.tcyr`
+and `tests/syllable.tcyr` need reformatting. **lint**: 14 warnings, all in `tests/`, mostly lines
+over 120 columns. **docs**: 3 undocumented public fns on 6.6.3, now **40** on 6.6.20, because
+cyrdoc stopped counting `#must_use` as documentation (shabdakosh 3.0.8 hit the same thing). On
+both, `src/` is fmt- and lint-clean. CI does not run `cyrius audit`.
+
+### Benchmarks
+
+`tests/shabda.bcyr`, x86_64. Medians of 3 runs, with 3.0.5 (cyrius 6.6.3, its committed `lib/`)
+and 3.0.6 alternated in one session:
+
+| Benchmark | 3.0.5 | 3.0.6 | Δ |
+|-----------|-------|-------|---|
+| g2p_hello_world | 16.51 µs | 15.42 µs | −6.6% |
+| g2p_sentence | 64.35 µs | 61.50 µs | −4.4% |
+| speak_hello | 5.51 ms | 5.38 ms | −2.4% |
+| speak_sentence | 17.94 ms | 17.64 ms | −1.7% |
+| dict_english_construction | 7.84 ms | 7.64 ms | −2.6% |
+| dict_lookup_hit | 138 ns | 141 ns | noise |
+| dict_lookup_miss | 167 ns | 185 ns | noise (3.0.5 alone ranged 147–298 ns) |
+
 ## [3.0.5] - Unblocked by cyrius 6.6.3
 
 Toolchain-pin release. `cyrius` 6.6.2 -> **6.6.3**; no source change.

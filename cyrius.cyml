@@ -5,7 +5,7 @@ description = "shabda — grapheme-to-phoneme (G2P) conversion for AGNOS text-to
 license = "GPL-3.0-only"
 repository = "https://github.com/MacCracken/shabda"
 language = "cyrius"
-cyrius = "6.6.3"
+cyrius = "6.6.20"
 
 [build]
 entry = "src/main.cyr"
@@ -41,12 +41,11 @@ stdlib = ["syscalls", "string", "alloc", "str", "fmt", "vec", "io", "args", "ass
 # Rust crate as shabda::arpabet and shabda::dictionary; shabda calls shbdk_arpabet_*
 # / shbdk_dict_* directly. Consumed by engine.cyr (dict lookup), heteronym.cyr
 # (Pronunciation), error.cyr (SHBDK_ERR_* codes for the From<ShabdakoshError> map).
-# Its dist bundle folds hisab/goonj/naad (shabdakosh.deps sidecar). BOTH path (local
-# dev) AND git+tag (CI). `optional` is a toolchain workaround — see ADR-0001.
+# Its dist bundle needs svara + varna in scope. git+tag only — a `path` makes the tag
+# inert. `optional` is a toolchain workaround — see ADR-0001.
 [deps.shabdakosh]
 git = "https://github.com/MacCracken/shabdakosh.git"
-path = "../shabdakosh"
-tag = "3.0.5"
+tag = "3.0.8"
 modules = ["dist/shabdakosh.cyr"]
 optional = true
 
@@ -55,8 +54,7 @@ optional = true
 # surface for speak(). Its dist bundle needs the hashmap + bayan folds (svara.deps).
 [deps.svara]
 git = "https://github.com/MacCracken/svara.git"
-path = "../svara"
-tag = "3.5.4"
+tag = "3.5.6"
 modules = ["dist/svara.cyr"]
 
 # varna — phoneme inventories (phoneme_english/spanish/german/hindi/
@@ -66,6 +64,5 @@ modules = ["dist/svara.cyr"]
 # sidecar — self-contained on alloc/string/vec (already declared).
 [deps.varna]
 git = "https://github.com/MacCracken/varna.git"
-path = "../varna"
-tag = "2.4.1"
+tag = "2.4.3"
 modules = ["dist/varna.cyr"]
