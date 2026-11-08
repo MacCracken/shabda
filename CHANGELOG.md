@@ -1,5 +1,89 @@
 # Changelog
 
+## [3.1.0] — 2026-11-07
+
+Toolchain and dependency release, moving to the cyrius 6.7 language minor. `cyrius` 6.6.20 ->
+**6.7.9**, `shabdakosh` 3.0.8 -> **3.1.0**, `svara` 3.5.6 -> **3.6.0**, `varna` 2.4.3 -> **2.5.0**,
+and transitively `hisab` 3.3.7 -> **3.4.0**, `naad` 2.2.5 -> **2.3.0**, `goonj` 2.0.6 -> **2.1.0**,
+`sakshi` 2.5.7 -> **2.5.8**. This is the 6.7.9 batch. svara 3.6.0, varna 2.5.0, hisab 3.4.0, naad
+2.3.0 and goonj 2.1.0 are the tags pinned to exactly 6.7.9, and the next tag of each needs 6.7.18.
+shabdakosh 3.1.0 ships the same set, and its lock carries the same six commit pins. `lib/` and
+`cyrius.lock` were regenerated from scratch. Every vendored dep is byte-identical to its tag's
+`dist/` bundle, every stdlib leaf is byte-identical to the 6.7.9 snapshot, `cyrius deps --verify`
+passes 52 of 52, and `cyrius deps --locked` confirms that `lib/` and the lock are exactly what the
+tags resolve.
+
+It is a minor because the floor for consumers moves: svara 3.6.0 needs cyrius 6.7.2 or later.
+Output changes for one word, which comes from shabdakosh (see *Fixed*).
+
+No source change, no API change. **727 assertions / 10 suites**, the same as 3.0.6; `cyrius fuzz`
+passes. `src/` stays fmt- and lint-clean, and `cyrius vet` and `cyrius deny` are clean.
+
+### Fixed
+
+- **`portuguese` now comes from the dictionary.** shabdakosh 3.0.8's generator stored the
+  one mixed-case CMUdict entry as `Portuguese`, which a lowercasing lookup never reaches, so shabda
+  fell back to the English letter-to-sound rules. Rust's `build.rs` lowercases, so the oracle
+  always took the dictionary path. shabdakosh 3.1.0 fixes the generator. A differential over the
+  10,617 words of shabdakosh's `data/cmudict-5k.txt`, plus 30 sentences and other-language inputs,
+  was built under 3.0.6 (cyrius 6.6.20) and under 3.1.0. Only the 3 `portuguese` rows differ: the
+  9 rule-derived events become the dictionary's 8. Every other row is byte-identical, durations
+  included.
+
+### Changed
+
+- **`lib/`**: 31 of its 52 files change and the file set does not: nothing is added or dropped.
+- **`lib/shabdakosh.cyr` was copied by hand from the 3.1.0 tag**
+  (`git -C ../shabdakosh show 3.1.0:dist/shabdakosh.cyr`), per ADR-0001, after checking that the
+  local tag is the commit GitHub has (`88cea94`).
+- **`cyrius.lock`**: the 6 commit pins move to the 6.7.9 batch, and the toolchain row is
+  `cyrius 6.7.9`. Re-resolving into the existing lock appends the new commit rows beside the old
+  ones (it held 12), so the lock was regenerated from an empty file.
+- **`lib/sakshi.cyr` is 2.5.8**, the 6.7.9 snapshot's copy, byte-identical to the sakshi 2.5.8
+  artifact the dep chain pins, so nothing is split. The `refusing to overwrite stdlib leaf 'sakshi'`
+  note still prints on every resolve, as expected.
+- `dist/shabda.cyr` changes only in its version header. `dist/shabda.deps` still names only
+  `unicode`.
+
+### Checked — the 6.7.x meaning changes do not reach shabda
+
+6.7.x changes what some existing code *means*, not just what compiles. As varna 2.5.0 did,
+`src/`, `tests/` and `fuzz/` were swept with comments and string literals stripped. They contain no
+lone `!` (a real operator since 6.7.3; before that `if (!ok)` meant `if (ok)`), no unary `-` or `~`
+(the 6.7.9 binding change), no `for` loops (the 6.7.8–6.7.9 step rule), no `*T` derefs or slices
+(6.7.8's element width), and none of the newly reserved words (`trait`, `const`, `true`, `false`,
+`do`, `dyn`). shabda negates as `0 - x` and loops with `while`.
+
+### Note — `cyrius distlib` lists 5 `shbdk_*` names for the consumer to supply
+
+Unchanged from 3.0.6: `shbdk_dict_new`, `shbdk_dict_english`, `shbdk_dict_lookup`,
+`shbdk_dict_lookup_all` and `shbdk_pronunciation_phonemes`, supplied by the consumer's
+`… → varna → shabdakosh → shabda` chain. Expected, and not a defect.
+
+### Known issue — `cyrius audit` exits 1
+
+Unchanged from 3.0.6, leg for leg: **fmt** (`tests/engine.tcyr`, `tests/syllable.tcyr`), **lint**
+(14 warnings, all in `tests/`), **docs** (40 undocumented public fns). CI does not run
+`cyrius audit`.
+
+### Benchmarks
+
+`tests/shabda.bcyr`, x86_64. Medians of 3 runs, with 3.0.6 (cyrius 6.6.20, its committed `lib/`)
+and 3.1.0 alternated in one session. Each delta is toolchain and dependencies together, not either
+one alone. `g2p_hello_world` and `speak_hello` were slower in every 3.1.0 run than in every 3.0.6
+run. The other rows overlap between versions, and the lookup rows are sub-µs noise (3.0.6's
+`dict_lookup_miss` alone ranged 141–219 ns).
+
+| Benchmark | 3.0.6 | 3.1.0 | Δ |
+|-----------|-------|-------|---|
+| g2p_hello_world | 15.05 µs | 15.18 µs | +0.9% |
+| g2p_sentence | 58.84 µs | 59.72 µs | +1.5% (overlaps) |
+| speak_hello | 5.17 ms | 5.32 ms | +2.8% |
+| speak_sentence | 16.94 ms | 17.16 ms | +1.3% (overlaps) |
+| dict_english_construction | 7.35 ms | 7.47 ms | +1.7% (overlaps) |
+| dict_lookup_hit | 135 ns | 133 ns | noise |
+| dict_lookup_miss | 147 ns | 133 ns | noise |
+
 ## [3.0.6] — 2026-11-07
 
 Toolchain and dependency release. `cyrius` 6.6.3 -> **6.6.20**, `shabdakosh` 3.0.5 -> **3.0.8**,
@@ -46,18 +130,14 @@ passes.
   documents would vendor the wrong version.
 - svara's bundle no longer prints `#inline ignored: body exceeds 32 tokens` warnings.
 
-### Known issue — `cyrius distlib` reports 5 `shbdk_*` names as undefined
+### Note — `cyrius distlib` lists 5 `shbdk_*` names for the consumer to supply
 
-shabdakosh is `optional`, so the sidecar verify never loads it. It therefore reports
 `shbdk_dict_new`, `shbdk_dict_english`, `shbdk_dict_lookup`, `shbdk_dict_lookup_all` and
-`shbdk_pronunciation_phonemes` as names a consumer must supply. That is accurate: a consumer that
-resolves shabda gets svara and varna through its manifest, but not shabdakosh. The consumer has
-to declare `[deps.shabdakosh]` at tag 3.0.8 itself.
-
-ADR-0001's precondition no longer holds, because shabdakosh 3.0.8's sidecar lists only `mmap`.
-In a scratch copy with `optional = true` removed, `cyrius deps` resolves and commit-pins
-shabdakosh 3.0.8 (byte-identical to the hand copy), the distlib warning disappears, and all 10
-suites pass. Retiring the workaround supersedes ADR-0001, so it is left for its own change.
+`shbdk_pronunciation_phonemes` are shabdakosh's dictionary surface, which `src/engine.cyr` and
+`src/heteronym.cyr` call (dictionary-first lookup, heteronym pronunciations). `dist/shabda.cyr`
+does not carry shabdakosh. A consumer supplies it from the chain it declares and includes in
+dependency order, `… → svara → varna → shabdakosh → shabda`, as dhvani does. This is expected
+and not a defect.
 
 ### Known issue — `cyrius audit` exits 1
 

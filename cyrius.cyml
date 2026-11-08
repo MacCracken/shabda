@@ -5,7 +5,7 @@ description = "shabda — grapheme-to-phoneme (G2P) conversion for AGNOS text-to
 license = "GPL-3.0-only"
 repository = "https://github.com/MacCracken/shabda"
 language = "cyrius"
-cyrius = "6.6.20"
+cyrius = "6.7.9"
 
 [build]
 entry = "src/main.cyr"
@@ -45,7 +45,7 @@ stdlib = ["syscalls", "string", "alloc", "str", "fmt", "vec", "io", "args", "ass
 # inert. `optional` is a toolchain workaround — see ADR-0001.
 [deps.shabdakosh]
 git = "https://github.com/MacCracken/shabdakosh.git"
-tag = "3.0.8"
+tag = "3.1.0"
 modules = ["dist/shabdakosh.cyr"]
 optional = true
 
@@ -54,7 +54,7 @@ optional = true
 # surface for speak(). Its dist bundle needs the hashmap + bayan folds (svara.deps).
 [deps.svara]
 git = "https://github.com/MacCracken/svara.git"
-tag = "3.5.6"
+tag = "3.6.0"
 modules = ["dist/svara.cyr"]
 
 # varna — phoneme inventories (phoneme_english/spanish/german/hindi/
@@ -64,5 +64,5 @@ modules = ["dist/svara.cyr"]
 # sidecar — self-contained on alloc/string/vec (already declared).
 [deps.varna]
 git = "https://github.com/MacCracken/varna.git"
-tag = "2.4.3"
+tag = "2.5.0"
 modules = ["dist/varna.cyr"]
