@@ -1,5 +1,94 @@
 # Changelog
 
+## [3.2.0] — 2026-11-17
+
+**Dictionary stress.** shabdakosh 3.2.0 keeps CMUdict's stress digits, and a dictionary word now
+takes them. Through 3.1.3 the engine predicted every word's stress by rule, dictionary words
+included, because the dictionary had none to give.
+
+- Requires **shabdakosh 3.2.0**.
+- One function is added, `shabda_assign_stress_dictionary`. None is removed, and no signature
+  changes.
+- **1,404 assertions / 11 suites** (1,342 in 3.1.3). `cyrius fuzz`, `--poison` and `--bounds` pass.
+
+### How it was measured
+
+Every word of shabdakosh's `data/cmudict-5k.txt` (10,617) was converted alone through the engine,
+under 3.1.3 and under 3.2.0, and scored against CMUdict's digits for the variant whose phonemes the
+engine gave. Function words are left out (see below).
+
+| Content words | 3.1.3 | 3.2.0 |
+|---|---:|---:|
+| Polysyllables (8,702), primary stress on the right syllable | 87.8% | 100% |
+| Polysyllables, whole pattern (primary, secondary, unstressed) | 62.9% | 100% |
+| All content words (10,582), whole pattern | 69.5% | 100% |
+
+- **The primary moves in 1,058 words**: for example *absolutely*, *accuracy*, *agriculture*,
+  *already*, *apparatus*, *around*, *automobile* and *brochure*.
+- **2,636 words gain a secondary stress**, which the rules never gave: *photograph*
+  F OW1 T AH0 G R AE2 F, *abbreviation*.
+- **Only stress changes.** Over the 10,855-input conversion differential, 3,237 English lines
+  change, and every one of the 4,472 changed events differs in stress alone.
+  - No phoneme or duration changes.
+  - No Spanish, German, Hindi, Arabic or Sanskrit output changes.
+
+### Changed (output differs from 3.1.3)
+
+- **A dictionary word's stress is the dictionary's.** CMUdict's 1 is Primary and 2 is Secondary;
+  0, and a consonant, are Unstressed. This covers every path to the dictionary:
+  - the direct lookup;
+  - a heteronym's selected variant: *the record* is REcord (R EH1 K ER0 D), *to record* reCORD
+    (R IH0 K AO1 R D);
+  - the foreign-word path, which strips the accents and looks again: *fiancé* reads fiance's
+    F IY0 AA0 N S EY1, and *protégé* protege's P R OW1 T AH0 ZH EY2;
+  - `shabda_convert_streaming`.
+- **Function words stay unstressed, as on every other path.** CMUdict gives a word's citation form
+  (*of* AH1 V, *to* T UW1), but English function words are weak in running speech.
+- **Words without dictionary stress keep the 3.1.3 stress rules.** These are the words the rules
+  convert, and entries a caller adds without stress (`shbdk_dict_insert`).
+
+### Added
+
+- **`shabda_assign_stress_dictionary(phonemes, stress, is_content_word)`**, and its `_a` form. It
+  builds the events of a dictionary pronunciation from its phonemes and its stress vec
+  (`shbdk_pronunciation_stress`), and gives a function word no stress.
+
+### Dependencies
+
+- **shabdakosh 3.1.4 → 3.2.0**: the release that adds lexical stress. A pronunciation keeps
+  CMUdict's digit for each vowel, and all 10,617 built-in words have it.
+  - `lib/shabdakosh.cyr` is that release's `dist/shabdakosh.cyr`.
+  - `cyrius.lock` changes only that file's hash.
+  - `dist/shabda.cyr` now calls `shbdk_pronunciation_stress` and `shbdk_dict_entry_primary`, so a
+    consumer must supply shabdakosh 3.2.0 or later. It no longer calls `shbdk_dict_lookup`.
+
+### Allocator
+
+A conversion still allocates only through its Allocator.
+
+- The stress is read from shabdakosh's own vec and never copied.
+- The one new allocation, the slot a lookup writes the stress to, comes from `a`.
+- The 10,808-input differential is clean: the same events, 0 bytes on the default heap, and arena
+  bytes equal to what the default form keeps.
+- The static walk of the convert path still finds only the known `shbdk_dict_lookup_entry`
+  delegation, for a word that is not lowercase.
+
+### Performance
+
+Medians of 12 alternated runs of 3.1.3 and 3.2.0, in one session:
+
+| Benchmark | 3.1.3 | 3.2.0 | |
+|---|---:|---:|---:|
+| g2p_hello_world | 16.95 µs | 15.15 µs | -10.6% |
+| g2p_sentence | 70.72 µs | 66.70 µs | -5.7% |
+| g2p_sentence_arena | 67.42 µs | 64.51 µs | -4.3% |
+| dict_english_construction | 7.88 ms | 9.86 ms | +25.2% |
+
+- Conversions are faster: a dictionary word skips syllabification and the stress rules.
+- `shabda_g2p_new` pays about 2 ms more, once per engine, because shabdakosh decodes the stress of
+  10,640 pronunciations as it builds its English map.
+- `speak_*` and the lookups are within noise.
+
 ## [3.1.3] — 2026-11-17
 
 Accuracy release: the sweep [ADR-0002](docs/adr/0002-accuracy-over-rust-parity.md) calls for, over every

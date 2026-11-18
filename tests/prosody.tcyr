@@ -9,6 +9,8 @@ include "lib/hisab.cyr"
 include "lib/goonj.cyr"
 include "lib/naad.cyr"
 include "lib/svara.cyr"
+include "lib/varna.cyr"
+include "lib/shabdakosh.cyr"   # SHBDK_STRESS_* (assign_stress_dictionary)
 include "src/error.cyr"
 include "src/syllable.cyr"
 include "src/prosody.cyr"
@@ -300,6 +302,57 @@ var abo_sy = shabda_assign_stress_syllabic(shabda_syllabify(_ph(7, 21, P_IY, X_,
 assert_eq(vec_len(abo_ev), vec_len(abo_sy), "one event per phoneme");
 assert_eq(SvPhonemeEvent_duration(vec_get(abo_ev, 1)), SvPhonemeEvent_duration(vec_get(abo_sy, 1)),
   "svara's durations");
+
+# ================================================================
+# 3.2.0: stress from the dictionary (shabdakosh 3.2.0 keeps CMUdict's digits)
+test_group("3.2.0: assign_stress_dictionary maps CMUdict's digits");
+assert_eq(SHABDA_DICT_STRESS_PRIMARY, SHBDK_STRESS_PRIMARY, "shabda's primary digit is shabdakosh's");
+assert_eq(SHABDA_DICT_STRESS_SECONDARY, SHBDK_STRESS_SECONDARY, "shabda's secondary digit is shabdakosh's");
+# photograph  F OW1 T AH0 G R AE2 F
+var dpg = _ph(SVARA_PH_FRIC_F, SVARA_PH_DIPH_OU, SVARA_PH_PLOSIVE_T, SVARA_PH_VOWEL_SCHWA, SVARA_PH_PLOSIVE_G,
+  SVARA_PH_APPROX_R, SVARA_PH_VOWEL_ASH, SVARA_PH_FRIC_F, 0 - 1, 0 - 1);
+var dps = vec_new();
+vec_push(dps, SHBDK_STRESS_NONE); vec_push(dps, SHBDK_STRESS_PRIMARY); vec_push(dps, SHBDK_STRESS_NONE);
+vec_push(dps, SHBDK_STRESS_UNSTRESSED); vec_push(dps, SHBDK_STRESS_NONE); vec_push(dps, SHBDK_STRESS_NONE);
+vec_push(dps, SHBDK_STRESS_SECONDARY); vec_push(dps, SHBDK_STRESS_NONE);
+var dpe = shabda_assign_stress_dictionary(dpg, dps, 1);
+assert_eq(vec_len(dpe), 8, "one event per phoneme");
+assert_eq(SvPhonemeEvent_stress(vec_get(dpe, 1)), SVARA_STRESS_PRIMARY, "OW1 -> Primary");
+assert_eq(SvPhonemeEvent_stress(vec_get(dpe, 3)), SVARA_STRESS_UNSTRESSED, "AH0 -> Unstressed");
+assert_eq(SvPhonemeEvent_stress(vec_get(dpe, 6)), SVARA_STRESS_SECONDARY, "AE2 -> Secondary");
+assert_eq(SvPhonemeEvent_stress(vec_get(dpe, 0)), SVARA_STRESS_UNSTRESSED, "a consonant -> Unstressed");
+var dk = 0;
+var dsame = 1;
+while (dk < 8) {
+    var dev = vec_get(dpe, dk);
+    if (SvPhonemeEvent_phoneme(dev) != vec_get(dpg, dk)) { dsame = 0; }
+    if (SvPhonemeEvent_duration(dev) != svara_phoneme_duration(vec_get(dpg, dk))) { dsame = 0; }
+    dk = dk + 1;
+}
+assert_eq(dsame, 1, "the phonemes in order, with svara's durations");
+var dfw = shabda_assign_stress_dictionary(dpg, dps, 0);
+assert_eq(_primary_vowel(dfw), 0 - 1, "a function word: no Primary");
+assert_eq(SvPhonemeEvent_stress(vec_get(dfw, 6)), SVARA_STRESS_UNSTRESSED, "a function word: no Secondary");
+assert_eq(_primary_vowel(shabda_assign_stress_dictionary(dpg, 0, 1)), 0 - 1, "no stress vec: none");
+var dshort = vec_new();
+vec_push(dshort, SHBDK_STRESS_NONE); vec_push(dshort, SHBDK_STRESS_PRIMARY);
+var dse = shabda_assign_stress_dictionary(dpg, dshort, 1);
+assert_eq(vec_len(dse), 8, "a short stress vec: every phoneme still has an event");
+assert_eq(SvPhonemeEvent_stress(vec_get(dse, 1)), SVARA_STRESS_PRIMARY, "a short stress vec: read where it reaches");
+assert_eq(SvPhonemeEvent_stress(vec_get(dse, 6)), SVARA_STRESS_UNSTRESSED, "and Unstressed past its end");
+var dar = arena_allocator(65536);
+var dae = _shabda_assign_stress_dictionary_a(dar, dpg, dps, 1);
+var dsame2 = 1;
+dk = 0;
+while (dk < 8) {
+    var da = vec_get(dae, dk);
+    var db = vec_get(dpe, dk);
+    if (SvPhonemeEvent_phoneme(da) != SvPhonemeEvent_phoneme(db)) { dsame2 = 0; }
+    if (SvPhonemeEvent_duration(da) != SvPhonemeEvent_duration(db)) { dsame2 = 0; }
+    if (SvPhonemeEvent_stress(da) != SvPhonemeEvent_stress(db)) { dsame2 = 0; }
+    dk = dk + 1;
+}
+assert_eq(dsame2, 1, "the _a form builds the same events");
 
 var rc = assert_summary();
 syscall(SYS_EXIT, rc);

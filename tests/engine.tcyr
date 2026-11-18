@@ -846,5 +846,53 @@ assert_eq(dh_same, 1, "धर्मः: the rules' phonemes (normalize no longer
 var bd_ev = _phones(_conv(g_hi, "बड़ा"));
 assert_eq(vec_len(bd_ev), vec_len(shabda_hindi_rules("बड़ा")), "बड़ा: the rules' reading, nukta included");
 
+# ================================================================
+# 3.2.0: dictionary words take the dictionary's stress (shabdakosh 3.2.0)
+# ================================================================
+test_group("3.2.0: a dictionary word takes CMUdict's stress");
+var dpg_ev = _conv(g_en, "photograph");
+assert_eq(_vowel_stress(dpg_ev, 0), SVARA_STRESS_PRIMARY, "photograph: OW1");
+assert_eq(_vowel_stress(dpg_ev, 1), SVARA_STRESS_UNSTRESSED, "photograph: AH0");
+assert_eq(_vowel_stress(dpg_ev, 2), SVARA_STRESS_SECONDARY, "photograph: AE2 (3.1.3: Unstressed)");
+# a heteronym takes the stress of the variant it selects; "the" and "to" stay weak
+var drn = _conv(g_en, "the record");
+assert_eq(_vowel_stress(drn, 0), SVARA_STRESS_UNSTRESSED, "the: a function word");
+assert_eq(_vowel_stress(drn, 1), SVARA_STRESS_PRIMARY, "the REcord: EH1");
+assert_eq(_vowel_stress(drn, 2), SVARA_STRESS_UNSTRESSED, "the REcord: ER0");
+var drv = _conv(g_en, "to record");
+assert_eq(_vowel_stress(drv, 1), SVARA_STRESS_UNSTRESSED, "to reCORD: IH0");
+assert_eq(_vowel_stress(drv, 2), SVARA_STRESS_PRIMARY, "to reCORD: AO1");
+# CMUdict gives "of" as AH1 V, its citation form; a function word stays weak
+assert_eq(_count_stress(_conv(g_en, "of"), SVARA_STRESS_PRIMARY), 0, "of: no Primary");
+# an entry the caller adds without stress takes the stress rules, as before
+var dun = shabda_g2p_new(SHABDA_LANG_ENGLISH);
+var dun_ph = vec_new();
+vec_push(dun_ph, SVARA_PH_PLOSIVE_B); vec_push(dun_ph, SVARA_PH_VOWEL_ASH); vec_push(dun_ph, SVARA_PH_NASAL_N);
+vec_push(dun_ph, SVARA_PH_VOWEL_SCHWA); vec_push(dun_ph, SVARA_PH_NASAL_N); vec_push(dun_ph, SVARA_PH_VOWEL_SCHWA);
+shbdk_dict_insert(shabda_g2p_dictionary_mut(dun), "bananaq", dun_ph);
+var dun_ev = _conv(dun, "bananaq");
+assert_eq(_count_stress(dun_ev, SVARA_STRESS_PRIMARY), 1, "no dictionary stress: the rules give one Primary");
+assert_eq(_vowel_stress(dun_ev, 0), SVARA_STRESS_PRIMARY, "on the full vowel (a schwa is never stressed)");
+# the foreign-word path reads the stress of the word it finds without the accents
+var dfi = _conv(g_en, "fiancé");
+assert_eq(_vowel_stress(dfi, 0), SVARA_STRESS_UNSTRESSED, "fiancé -> fiance: IY0");
+assert_eq(_vowel_stress(dfi, 2), SVARA_STRESS_PRIMARY, "fiancé -> fiance: EY1, stress on the last syllable");
+var dpr = _conv(g_en, "protégé");
+assert_eq(_vowel_stress(dpr, 0), SVARA_STRESS_PRIMARY, "protégé -> protege: OW1");
+assert_eq(_vowel_stress(dpr, 2), SVARA_STRESS_SECONDARY, "protégé -> protege: EY2");
+
+test_group("3.2.0: streaming takes the dictionary's stress too");
+var DSTREAM = 0;
+fn _stream_keep(word, events): i64 {
+    DSTREAM = events;
+    return 0;
+}
+assert_eq(shabda_is_err(shabda_convert_streaming(g_en, "photograph", &_stream_keep)), 0, "streams");
+assert_eq(_vowel_stress(DSTREAM, 2), SVARA_STRESS_SECONDARY, "photograph: AE2");
+assert_eq(_ev_hash(DSTREAM), _ev_hash(_conv(g_en, "photograph")), "the same events as convert");
+
+test_group("3.2.0: the dictionary's stress through convert_with_a");
+_check_a(ar, en_a, "Please record the photograph of a record.", o_def, "dictionary stress and a heteronym's variant");
+
 var rc = assert_summary();
 syscall(SYS_EXIT, rc);

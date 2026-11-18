@@ -178,5 +178,21 @@ assert_streq(_het_pick(hd, "bass", _words2("the", "electric")), "beɪs", "bass: 
 assert_streq(_het_pick(hd, "bass", _words2("caught", "a")), "bæs", "bass: caught -> fish");
 assert_streq(_het_pick(hd, "dove", _words1("she")), "doʊv", "dove: she -> past of dive");
 
+# ================================================================
+test_group("3.2.0: select_pronunciation gives the variant select_phonemes reads");
+var sp_rule = shabda_heteronym_lookup("record");
+var sp_d = shbdk_dict_english();
+var sp_all = shbdk_dict_lookup_all(sp_d, "record");
+var sp_none = vec_new();
+var sp_to = vec_new();
+vec_push(sp_to, "to");
+var sp_n = _shabda_select_pronunciation_a(default_alloc(), sp_rule, sp_none, sp_all);
+var sp_v = _shabda_select_pronunciation_a(default_alloc(), sp_rule, sp_to, sp_all);
+assert_eq(shbdk_pronunciation_phonemes(sp_n), shabda_select_phonemes(sp_rule, sp_none, sp_all), "the default variant");
+assert_eq(shbdk_pronunciation_phonemes(sp_v), shabda_select_phonemes(sp_rule, sp_to, sp_all), "the context variant");
+assert_eq(shbdk_pronunciation_stress_at(sp_n, 1), SHBDK_STRESS_PRIMARY, "the noun: REcord");
+assert_eq(shbdk_pronunciation_stress_at(sp_v, 3), SHBDK_STRESS_PRIMARY, "the verb: reCORD");
+assert_eq(_shabda_select_pronunciation_a(default_alloc(), sp_rule, sp_none, vec_new()), 0, "no pronunciation: 0");
+
 var rc = assert_summary();
 syscall(SYS_EXIT, rc);

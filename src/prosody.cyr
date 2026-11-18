@@ -188,6 +188,10 @@ fn _shabda_assign_stress_syllabic_a(a, syllables, is_content_word): i64 {
 }
 
 # ---- assign_stress_english ---------------------------------------------------
+# Since 3.2.0 a dictionary word takes the dictionary's stress (assign_stress_dictionary
+# below), so these rules serve the words the letter-to-sound rules convert, and
+# dictionary entries without stress.
+#
 # English lexical stress from the word's spelling and its syllables. The syllabic
 # rule above is Latin's (heavy penult, else antepenult); English differs in four
 # ways that the phonology literature states and the dictionary shows:
@@ -523,6 +527,50 @@ fn _shabda_assign_stress_english_a(a, word, syllables, is_content_word): i64 {
         i = i + 1;
     }
     return _shabda_stress_events_a(a, syllables, _shabda_prosody_en_primary_idx(word, ph, syllables));
+}
+
+# ---- assign_stress_dictionary ------------------------------------------------
+# CMUdict's primary and secondary stress digits, the values shabdakosh stores as
+# SHBDK_STRESS_PRIMARY / SHBDK_STRESS_SECONDARY (tests/prosody.tcyr checks that they
+# agree). shabda names them itself because `cyrius distlib` compile-checks the bundle
+# without shabdakosh, which the consumer supplies, and that check passes an undefined
+# function but refuses an undefined variable.
+var SHABDA_DICT_STRESS_PRIMARY = 1;
+var SHABDA_DICT_STRESS_SECONDARY = 2;
+
+# PhonemeEvents for a dictionary word's `phonemes` with the dictionary's stress:
+# `stress` holds one value per phoneme, CMUdict's digit as shabdakosh keeps it
+# (shbdk_pronunciation_stress, 3.2.0). SHBDK_STRESS_PRIMARY (1) is Primary,
+# SHBDK_STRESS_SECONDARY (2) Secondary, and an unstressed vowel (0) or a consonant
+# (SHBDK_STRESS_NONE) Unstressed. A function word gets no stress, as on the
+# heuristic paths: CMUdict gives a word's citation form ("of" AH1 V, "to" T UW1),
+# and English function words are weak in running speech. A missing `stress` (0),
+# or a phoneme past its end, is Unstressed.
+#must_use
+fn shabda_assign_stress_dictionary(phonemes, stress, is_content_word): i64 {
+    return _shabda_assign_stress_dictionary_a(default_alloc(), phonemes, stress, is_content_word);
+}
+
+# shabda_assign_stress_dictionary, with every allocation drawn from Allocator `a`.
+#must_use
+fn _shabda_assign_stress_dictionary_a(a, phonemes, stress, is_content_word): i64 {
+    var events = vec_new_a(a);
+    var n = vec_len(phonemes);
+    var sn = 0;
+    if (stress != 0 && is_content_word != 0) { sn = vec_len(stress); }
+    var i = 0;
+    while (i < n) {
+        var ph = vec_get(phonemes, i);
+        var st = SVARA_STRESS_UNSTRESSED;
+        if (i < sn) {
+            var d = vec_get(stress, i);
+            if (d == SHABDA_DICT_STRESS_PRIMARY) { st = SVARA_STRESS_PRIMARY; }
+            if (d == SHABDA_DICT_STRESS_SECONDARY) { st = SVARA_STRESS_SECONDARY; }
+        }
+        _shabda_vec_push_a(a, events, _shabda_event_new_a(a, ph, svara_phoneme_duration(ph), st));
+        i = i + 1;
+    }
+    return events;
 }
 
 # ---- is_content_word ---------------------------------------------------------

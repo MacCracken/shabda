@@ -591,31 +591,39 @@ fn _shabda_engine_spelled_a(a, dict, word): i64 {
     return events;
 }
 
+# The phonemes (a copy from `a`) of dictionary pronunciation `pron`, with its stress
+# (shabdakosh's own vec, read only, or 0 when the dictionary has none) written to
+# *out_stress. An empty pronunciation list (pron 0) gives no phonemes.
+fn _shabda_engine_from_pron_a(a, pron, out_stress): i64 {
+    if (pron == 0) { return vec_new_a(a); }
+    store64(out_stress, shbdk_pronunciation_stress(pron));
+    return _shabda_engine_copy_vec_a(a, shbdk_pronunciation_phonemes(pron));
+}
+
 # ================================================================
 # LOOKUP (the exact fallback order from engine.rs convert_with).
-# Returns a phonemes vec (owned).
+# Returns a phonemes vec (owned), and writes to *out_stress the dictionary's stress
+# for them (shabdakosh 3.2.0: one SHBDK_STRESS_* per phoneme), or 0 when they come
+# from the rules or the dictionary has no stress for the word.
 # ================================================================
 #must_use
-fn _shabda_engine_lookup_a(a, e, word, preceding): i64 {
+fn _shabda_engine_lookup_a(a, e, word, preceding, out_stress): i64 {
     var language = load64(e + SHABDA_ENGINE_LANG);
     var dict = load64(e + SHABDA_ENGINE_DICT);
+    store64(out_stress, 0);
 
     var rule = shabda_heteronym_lookup(word);
     if (rule != 0) {
         var prons = _shabda_dict_lookup_all_a(a, dict, word);
         if (prons != 0) {
-            return _shabda_engine_copy_vec_a(a, _shabda_select_phonemes_a(a, rule, preceding, prons));
-        }
-        var entry = _shabda_dict_lookup_a(a, dict, word);
-        if (entry != 0) {
-            return _shabda_engine_copy_vec_a(a, entry);
+            return _shabda_engine_from_pron_a(a, _shabda_select_pronunciation_a(a, rule, preceding, prons), out_stress);
         }
         return _shabda_engine_rules_a(a, language, word);
     }
 
-    var dhit = _shabda_dict_lookup_a(a, dict, word);
-    if (dhit != 0) {
-        return _shabda_engine_copy_vec_a(a, dhit);
+    var dent = _shabda_dict_entry_a(a, dict, word);
+    if (dent != 0) {
+        return _shabda_engine_from_pron_a(a, shbdk_dict_entry_primary(dent), out_stress);
     }
 
     # A word with accented Latin letters is a loan word only in English, whose
@@ -624,9 +632,9 @@ fn _shabda_engine_lookup_a(a, e, word, preceding): i64 {
     # them made "niño" "nino" and "über" "uber".
     if (language == SHABDA_LANG_ENGLISH && _shabda_is_foreign_word_a(a, word) == 1) {
         var stripped = _shabda_strip_diacritics_a(a, word);
-        var shit = _shabda_dict_lookup_a(a, dict, stripped);
-        if (shit != 0) {
-            return _shabda_engine_copy_vec_a(a, shit);
+        var sent = _shabda_dict_entry_a(a, dict, stripped);
+        if (sent != 0) {
+            return _shabda_engine_from_pron_a(a, shbdk_dict_entry_primary(sent), out_stress);
         }
         return _shabda_engine_rules_a(a, language, stripped);
     }
@@ -696,9 +704,11 @@ fn shabda_convert_with_a(a, e, text, options, out_events): i64 {
     var words = _shabda_engine_split_ws_a(a, normalized);
     var nwords = vec_len(words);
 
-    # 6. events + emphasis state.
+    # 6. events + emphasis state; the slot a lookup writes the dictionary's stress to.
     var events = vec_new_a(a);
     var emphasis_active = 0;
+    var stress_slot = alloc_via(a, 8);
+    if (stress_slot == 0) { return shabda_err_invalid_input(); }
 
     # 7. per-word loop.
     var i = 0;
@@ -739,7 +749,8 @@ fn shabda_convert_with_a(a, e, text, options, out_events): i64 {
             var preceding = _shabda_engine_preceding_a(a, words, i);
 
             # f. LOOKUP (dict-first, rule fallback).
-            var phonemes = _shabda_engine_lookup_a(a, e, word, preceding);
+            var phonemes = _shabda_engine_lookup_a(a, e, word, preceding, stress_slot);
+            var dict_stress = load64(stress_slot);
 
             # g. debug validation — always compiled, results DISCARDED, never abort.
             var _invalid = _shabda_validate_phonemes_for_a(a, phonemes, inv, language);
@@ -751,17 +762,22 @@ fn shabda_convert_with_a(a, e, text, options, out_events): i64 {
                 continue;
             }
 
-            # i/j/k. syllabify + assign stress: the language's onsets, and for English
-            # its own stress rules (the syllabic rule is Latin's; see
+            # i/j/k. stress: the dictionary's where it has it (shabdakosh 3.2.0);
+            # otherwise syllabify and assign it by rule: the language's onsets, and for
+            # English its own stress rules (the syllabic rule is Latin's; see
             # shabda_assign_stress_english).
             var is_content = _shabda_is_content_word_a(a, word);
-            var syllables = _shabda_syllabify_for_a(a, phonemes, language);
-            if (vec_len(syllables) == 0) {
-                word_events = _shabda_assign_stress_a(a, phonemes, is_content);
-            } elif (language == SHABDA_LANG_ENGLISH) {
-                word_events = _shabda_assign_stress_english_a(a, word, syllables, is_content);
+            if (dict_stress != 0) {
+                word_events = _shabda_assign_stress_dictionary_a(a, phonemes, dict_stress, is_content);
             } else {
-                word_events = _shabda_assign_stress_syllabic_a(a, syllables, is_content);
+                var syllables = _shabda_syllabify_for_a(a, phonemes, language);
+                if (vec_len(syllables) == 0) {
+                    word_events = _shabda_assign_stress_a(a, phonemes, is_content);
+                } elif (language == SHABDA_LANG_ENGLISH) {
+                    word_events = _shabda_assign_stress_english_a(a, word, syllables, is_content);
+                } else {
+                    word_events = _shabda_assign_stress_syllabic_a(a, syllables, is_content);
+                }
             }
         }
 
@@ -1057,9 +1073,13 @@ fn shabda_convert_streaming(e, text, callback_fp): i64 {
         }
 
         # dict.lookup | <lang>_rules (no heteronym/foreign/emphasis).
-        var phonemes = shbdk_dict_lookup(dict, word);
-        if (phonemes != 0) {
-            phonemes = _shabda_engine_copy_vec(phonemes);
+        var phonemes = 0;
+        var dict_stress = 0;
+        var sentry = shbdk_dict_lookup_entry(dict, word);
+        if (sentry != 0) {
+            var spron = shbdk_dict_entry_primary(sentry);
+            phonemes = _shabda_engine_copy_vec(shbdk_pronunciation_phonemes(spron));
+            dict_stress = shbdk_pronunciation_stress(spron);
         } else {
             phonemes = _shabda_engine_rules(language, word);
         }
@@ -1070,14 +1090,18 @@ fn shabda_convert_streaming(e, text, callback_fp): i64 {
         }
 
         var is_content = shabda_is_content_word(word);
-        var syllables = shabda_syllabify_for(phonemes, language);
         var word_events = 0;
-        if (vec_len(syllables) == 0) {
-            word_events = shabda_assign_stress(phonemes, is_content);
-        } elif (language == SHABDA_LANG_ENGLISH) {
-            word_events = shabda_assign_stress_english(word, syllables, is_content);
+        if (dict_stress != 0) {
+            word_events = shabda_assign_stress_dictionary(phonemes, dict_stress, is_content);
         } else {
-            word_events = shabda_assign_stress_syllabic(syllables, is_content);
+            var syllables = shabda_syllabify_for(phonemes, language);
+            if (vec_len(syllables) == 0) {
+                word_events = shabda_assign_stress(phonemes, is_content);
+            } elif (language == SHABDA_LANG_ENGLISH) {
+                word_events = shabda_assign_stress_english(word, syllables, is_content);
+            } else {
+                word_events = shabda_assign_stress_syllabic(syllables, is_content);
+            }
         }
 
         var wr = callptr(callback_fp, word, word_events);

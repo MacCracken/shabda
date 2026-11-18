@@ -49,10 +49,10 @@ bundle built + consumer-verified. See [`state.md`](state.md) for the per-module 
 - **Accuracy sweep** — done in 3.1.3 over all 9 modules, with `rust-old/` as the list of capabilities
   and accuracy as the oracle ([ADR-0002](../adr/0002-accuracy-over-rust-parity.md)); the 3.1.3
   CHANGELOG entry gives each change and its measurement. Left open, each checked on the 3.1.3 tree:
-  - **Dictionary stress** (upstream, shabdakosh): its packed data keeps no stress digits, so English
-    stress is predicted even for dictionary words (87.9% of polysyllables right). It needs a
-    per-pronunciation stress vector from CMUdict's 0 / 1 / 2 and IPA ˈ ˌ, and an accessor such as
-    `shbdk_pronunciation_stress(p)`.
+  - ~~**Dictionary stress**~~ — done in 3.2.0: shabdakosh 3.2.0 keeps CMUdict's digits
+    (`shbdk_pronunciation_stress`), and a dictionary word takes them (87.8% → 100% of polysyllables
+    with the right primary). Still open upstream: shabdakosh reads no stress from IPA (ˈ ˌ), so a
+    dictionary loaded from IPA, PLS or a varna lexicon has none and its words take the stress rules.
   - **varna's inventory gaps** (upstream, varna), which validation reports: English /ɜ aɪ aʊ ɔɪ/,
     Hindi /aː ɽ z q x ɣ/, Sanskrit h.
   - **An allocator-taking constructor in svara and lookup in shabdakosh**, so shabda can drop its

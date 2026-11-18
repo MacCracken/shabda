@@ -5,6 +5,13 @@
 
 ## Version
 
+**3.2.0** (2026-11-17): dictionary stress. shabdakosh 3.2.0 keeps CMUdict's stress digits, and a
+dictionary word takes them (1 Primary, 2 Secondary, 0 Unstressed; function words stay unstressed).
+Polysyllabic content words with the right primary stress go from 87.8% to 100%, and with the whole
+pattern from 62.9% to 100%. Only stress changes, and only in English. One function added
+(`shabda_assign_stress_dictionary`). Conversions are 4–11% faster, and `shabda_g2p_new` about 2 ms
+slower (shabdakosh's map build).
+
 **3.1.3** (2026-11-17): the accuracy sweep, over every module, with accuracy as the oracle
 ([ADR-0002](../adr/0002-accuracy-over-rust-parity.md)). No dependency change. A new English
 letter-to-sound engine (NRL rules, tuned on CMUdict: 13.7% → 46.4% of held-out words exact), English
@@ -65,8 +72,8 @@ reference and accuracy is the oracle ([ADR-0002](../adr/0002-accuracy-over-rust-
   commit rows beside the old ones instead of replacing them.
 - **6.7.18 pin set** (3.1.2): svara 3.14.0, varna 2.6.0, hisab 3.5.0, naad 2.3.5 and goonj 2.3.2
   are each dep's newest tag, and all pin exactly 6.7.18. svara's manifest supplies the hisab, naad and
-  goonj versions. shabdakosh 3.1.4 is built on this same set, and its lock has the same five commit
-  pins. sakshi has no commit pin since svara 3.6.4 dropped its package: it is the stdlib leaf.
+  goonj versions. shabdakosh 3.1.4 and 3.2.0 are built on this same set, and their locks have the
+  same five commit pins. sakshi has no commit pin since svara 3.6.4 dropped its package: it is the stdlib leaf.
 - **`cyrius tests` is gone** (removed in 6.7.12). Run every suite with `cyrius test tests`, or
   with the bare `cyrius test`, which CI runs.
 - **6.7.x meaning changes**: `src/`, `tests/` and `fuzz/` hold none of the constructs whose meaning
@@ -137,9 +144,10 @@ reference and accuracy is the oracle ([ADR-0002](../adr/0002-accuracy-over-rust-
     English stress follows English's rules; every language's rules use the phonemes its phonology has;
     the text, heteronym and SSML fixes. The 3.1.3 CHANGELOG entry lists every output change and how it
     was measured.
-- **Still inaccurate** (the roadmap's *Accuracy sweep* item, which 3.1.3 left open): dictionary stress
-  (shabdakosh keeps none), varna's inventory gaps, Spanish and German stress, non-English number
-  reading, unvocalized Arabic, German lexical exceptions, and the rest listed there.
+  - 3.2.0, dictionary stress: a dictionary word's stress is CMUdict's (shabdakosh 3.2.0).
+- **Still inaccurate** (the roadmap's *Accuracy sweep* item, which 3.1.3 left open): varna's
+  inventory gaps, Spanish and German stress, non-English number reading, unvocalized Arabic, German
+  lexical exceptions, and the rest listed there.
 - **Feature flags COLLAPSE**: CYRIUS has no feature flags, so the Rust `std` / `varna` / `json` /
   `logging` / `full` gates are gone — varna phoneme-inventory validation, language detection, and
   every other capability are always compiled into the one bundle.
@@ -174,19 +182,19 @@ Leaf-first order (`src/main.cyr` / `[lib].modules`):
 
 ## Tests
 
-**1,342 assertions** across 11 `.tcyr` suites + the fuzz harness — all green:
+**1,404 assertions** across 11 `.tcyr` suites + the fuzz harness — all green:
 
 | Suite | Assertions |
 |-------|-----------|
 | error | 25 |
 | normalize | 120 |
 | syllable | 96 |
-| heteronym | 48 |
+| heteronym | 53 |
 | ssml | 97 |
 | rules | 294 |
-| prosody | 72 |
+| prosody | 87 |
 | validate | 235 |
-| engine | 309 |
+| engine | 340 |
 | shabda (crate-level) | 37 |
 | allocator | 9 |
 | fuzz (`shabda.fcyr`) | corpus + 800 generated cases, through all six engines |
@@ -198,7 +206,7 @@ conversion. It converts from four threads at once, and `thread` is declared in
 on the default heap; since 3.1.3 it does so on all six engines and feeds the raw bytes to all six rule
 sets. `cyrius fuzz`, `--poison` and `--bounds` all pass.
 
-**Accuracy measurement** (3.1.3) is not in the suites: the gold sets are the 10,617 CMUdict words of
+**Accuracy measurement** (3.1.3, and 3.2.0's stress) is not in the suites: the gold sets are the 10,617 CMUdict words of
 shabdakosh's `data/cmudict-5k.txt` (English rules and stress, tuned on the even half and measured on the
 odd one) and varna's Swadesh lists (25 words per language, the independent check elsewhere). The 3.1.3
 CHANGELOG entry gives the method and the figures; rerun them before claiming an accuracy change.
@@ -212,6 +220,12 @@ read as green.
 ## Benchmarks
 
 `tests/shabda.bcyr` (x86_64), run with `cyrius bench tests/shabda.bcyr`.
+
+**3.2.0**, medians of 12 alternated runs of 3.1.3 and 3.2.0 in one session: g2p_hello_world 16.95 →
+15.15 µs (-10.6%), g2p_sentence 70.72 → 66.70 µs (-5.7%), g2p_sentence_arena 67.42 → 64.51 µs
+(-4.3%): a dictionary word skips syllabification and the stress rules. dict_english_construction
+7.88 → 9.86 ms (+25.2%), shabdakosh decoding the stress of 10,640 pronunciations; `shabda_g2p_new`
+pays it once. speak_* and lookups within noise.
 
 **3.1.3**, medians of 8 alternated runs of 3.1.2 and 3.1.3 in one session: g2p_hello_world 15.75 →
 17.05 µs (+8.3%), g2p_sentence 62.88 → 71.50 µs (+13.7%), g2p_sentence_arena 59.56 → 67.90 µs (+14.0%),
@@ -245,7 +259,7 @@ default-heap form.
 
 ## Distlib bundle
 
-`cyrius distlib` → `dist/shabda.cyr` (v3.1.3). There is no `dist/shabda.deps` sidecar since
+`cyrius distlib` → `dist/shabda.cyr` (v3.2.0). There is no `dist/shabda.deps` sidecar since
 3.1.1. Module order is the `[lib].modules` list in `cyrius.cyml`. Consumers pull the bundle
 rather than rebuilding from `src/`.
 
@@ -255,18 +269,27 @@ On 6.7.18 it is none, so distlib removes the file. The `unicode` tables now arri
 which svara's sidecar requires and which includes `lib/unicode/` at 6.7.18. hisab, goonj and naad
 are not listed, so ADR-0001's resolver failure does not hit consumers of shabda.
 
-`cyrius distlib` lists 10 `shbdk_*` names for the consumer to supply: `shbdk_dict_new`,
-`shbdk_dict_english`, `shbdk_dict_lookup`, `shbdk_pronunciation_phonemes`, and, since 3.1.2's `_a`
-lookup, `shbdk_is_lower_cstr`, `shbdk_dict_lookup_entry`, `shbdk_dict_entries`,
-`shbdk_dict_user_entries`, `shbdk_dict_entry_primary_phonemes` and `shbdk_dict_entry_all`. They are
-shabdakosh's dictionary surface, called from `engine.cyr` and `heteronym.cyr`, and the consumer's
-chain provides them (`… → varna → shabdakosh → shabda`, as dhvani declares it). This is expected.
+`cyrius distlib` lists 11 `shbdk_*` names for the consumer to supply:
+- `shbdk_dict_new`, `shbdk_dict_english` and `shbdk_pronunciation_phonemes`;
+- since 3.1.2's `_a` lookup, `shbdk_is_lower_cstr`, `shbdk_dict_lookup_entry`,
+  `shbdk_dict_entries`, `shbdk_dict_user_entries`, `shbdk_dict_entry_primary_phonemes` and
+  `shbdk_dict_entry_all`;
+- since 3.2.0's dictionary stress, `shbdk_pronunciation_stress` and `shbdk_dict_entry_primary`.
+  `shbdk_dict_lookup` left the list, because streaming now looks up the entry.
+
+They are shabdakosh's dictionary surface, called from `engine.cyr` and `heteronym.cyr`, and the
+consumer's chain provides them (`… → varna → shabdakosh → shabda`, as dhvani declares it). This is
+expected.
+
+The check refuses an undefined *variable*, though it passes an undefined function. That is why
+shabda names CMUdict's stress digits itself (`SHABDA_DICT_STRESS_PRIMARY` / `_SECONDARY`, checked
+against shabdakosh's in `tests/prosody.tcyr`) instead of reading `SHBDK_STRESS_*`.
 
 ## Dependencies
 
 Direct, declared git+tag only in `cyrius.cyml` (no `path`; see Toolchain):
 
-- **shabdakosh** 3.1.4 (`dist/shabdakosh.cyr`) — pronunciation dictionary (`shbdk_*`). Its bundle needs svara and varna in scope; its sidecar lists only `mmap`. Declared `optional` (see [ADR-0001](../adr/0001-shabdakosh-declared-optional.md)), so `lib/shabdakosh.cyr` is refreshed by hand **from the tag**: `git -C ../shabdakosh show <tag>:dist/shabdakosh.cyr > lib/shabdakosh.cyr`, then `cyrius deps && cyrius deps --verify`. Check the tag against GitHub first (`git ls-remote`). Copy from the tag, not with ADR-0001's `cp ../shabdakosh/dist/...`, because the sibling checkout tracks `main`. On every resolve, 6.7.18 notes that the file is "outside the declared footprint". It keeps the file and its lock line, so the note is expected.
+- **shabdakosh** 3.2.0 (`dist/shabdakosh.cyr`) — pronunciation dictionary (`shbdk_*`). Its bundle needs svara and varna in scope; its sidecar lists only `mmap`. Declared `optional` (see [ADR-0001](../adr/0001-shabdakosh-declared-optional.md)), so `lib/shabdakosh.cyr` is refreshed by hand **from the tag**: `git -C ../shabdakosh show <tag>:dist/shabdakosh.cyr > lib/shabdakosh.cyr`, then `cyrius deps && cyrius deps --verify`. Check the tag against GitHub first (`git ls-remote`). Copy from the tag, not with ADR-0001's `cp ../shabdakosh/dist/...`, because the sibling checkout tracks `main`. On every resolve, 6.7.18 notes that the file is "outside the declared footprint". It keeps the file and its lock line, so the note is expected.
 - **svara** 3.14.0 (`dist/svara.cyr`) — `SVARA_PH_*` phonemes, `PhonemeEvent`, sequence/voice/render for `speak()`. Its sidecar lists `bayan`. Its manifest carries the hisab 3.5.0 / naad 2.3.5 / goonj 2.3.2 git pins the whole chain folds. It sets the consumer floor at cyrius 6.7.2. shabda builds `SvPhonemeEvent` records itself on the `_a` path, through svara's public struct and setters (`_shabda_event_new_a`, compared byte for byte in `tests/prosody.tcyr`).
 - **varna** 2.6.0 (`dist/varna.cyr`) — phoneme inventories, phonotactics, script detection. Self-contained on the stdlib folds. shabda calls 12 of its functions, all with their 2.5.2 signatures. 2.6.0 spells the Spanish tap `ɾ` and trill `r`, where shabda's Spanish IPA table keeps the oracle's `r` / `rr`, so `shabda_validate_phonemes_for` flags every Spanish trill (see the 3.1.2 CHANGELOG entry).
 - **Lock**: 5 commit pins (svara, varna, hisab, naad, goonj) plus a `cyrius 6.7.18` toolchain row; 61 hashed files. shabdakosh has no commit pin because it is `optional`; the lock hashes `lib/shabdakosh.cyr` instead.

@@ -45,7 +45,7 @@ stdlib = ["syscalls", "string", "alloc", "str", "fmt", "vec", "io", "args", "ass
 # inert. `optional` is a toolchain workaround — see ADR-0001.
 [deps.shabdakosh]
 git = "https://github.com/MacCracken/shabdakosh.git"
-tag = "3.1.4"
+tag = "3.2.0"
 modules = ["dist/shabdakosh.cyr"]
 optional = true
 

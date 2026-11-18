@@ -387,9 +387,17 @@ fn _shabda_select_phonemes_a(a, rule, preceding_words, pronunciations): i64 {
     # the crate's zero-panic contract (CLAUDE.md) and leaves the caller with
     # "no phonemes", which its rules fallback already handles.
     if (n == 0) { return vec_new_a(a); }
+    return shbdk_pronunciation_phonemes(_shabda_select_pronunciation_a(a, rule, preceding_words, pronunciations));
+}
+
+# The Pronunciation* select_phonemes reads: the selected variant, or
+# pronunciations[0] when the index is out of range, or 0 when there is none. The
+# engine reads the dictionary's stress from it (shabdakosh 3.2.0).
+#must_use
+fn _shabda_select_pronunciation_a(a, rule, preceding_words, pronunciations): i64 {
+    var n = vec_len(pronunciations);
+    if (n == 0) { return 0; }
     var idx = _shabda_select_variant_a(a, rule, preceding_words);
-    if (idx < n) {
-        return shbdk_pronunciation_phonemes(vec_get(pronunciations, idx));
-    }
-    return shbdk_pronunciation_phonemes(vec_get(pronunciations, 0));
+    if (idx < n) { return vec_get(pronunciations, idx); }
+    return vec_get(pronunciations, 0);
 }
