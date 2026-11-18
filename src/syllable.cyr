@@ -99,33 +99,32 @@ fn _shabda_is_nucleus(ph): i64 {
     return 0;
 }
 
-# Sonority level of a phoneme (higher = more sonorous).
+# Sonority level of a phoneme (higher = more sonorous), on the usual scale
+# (Clements 1990; Parker 2002): obstruent stops / affricates < fricatives < nasals
+# < liquids < glides < vowels. Read off svara's class, so every phoneme svara has
+# gets a rank:
 #   Vowel/Diphthong = 6
-#   ApproximantR/W/J = 5
-#   LateralL = 4
-#   NasalM/N/Ng = 3
-#   FricativeF/V/S/Z/Sh/Zh/Th/Dh/H = 2
-#   else (plosives, affricates, glottal stop, tap, ...) = 1
+#   Approximant (ɹ w j ɻ) = 5
+#   Lateral (l ʎ ʟ), trill (r ʀ ʙ), tap / flap (ɾ ɽ ɺ), uvular ʁ = 4
+#   Nasal (m n ŋ ɳ ɲ ɴ) = 3
+#   Fricative = 2
+#   else (plosives, affricates, glottal stop, clicks, ejectives, implosives) = 1
+# The taps are liquids here although svara classes them with the plosives (a short
+# contact), and so is ʁ although it is a fricative: it is German's (and French's) r,
+# and patterns as a liquid in onsets (Wiese 1996, The Phonology of German, ch. 3):
+# Frau, Abreise a.bʁaɪ.zə. Through 3.1.2 the tap and every phoneme svara added after
+# 1.x ranked 1, so Spanish "otro" /otɾo/ split ot.ɾo, not o.tɾo.
 fn _shabda_sonority(ph): i64 {
     var c = svara_phoneme_class(ph);
     if (c == SVARA_CLASS_VOWEL) { return 6; }
     if (c == SVARA_CLASS_DIPHTHONG) { return 6; }
-    if (ph == SVARA_PH_APPROX_R) { return 5; }
-    if (ph == SVARA_PH_APPROX_W) { return 5; }
-    if (ph == SVARA_PH_APPROX_J) { return 5; }
-    if (ph == SVARA_PH_LATERAL_L) { return 4; }
-    if (ph == SVARA_PH_NASAL_M) { return 3; }
-    if (ph == SVARA_PH_NASAL_N) { return 3; }
-    if (ph == SVARA_PH_NASAL_NG) { return 3; }
-    if (ph == SVARA_PH_FRIC_F) { return 2; }
-    if (ph == SVARA_PH_FRIC_V) { return 2; }
-    if (ph == SVARA_PH_FRIC_S) { return 2; }
-    if (ph == SVARA_PH_FRIC_Z) { return 2; }
-    if (ph == SVARA_PH_FRIC_SH) { return 2; }
-    if (ph == SVARA_PH_FRIC_ZH) { return 2; }
-    if (ph == SVARA_PH_FRIC_TH) { return 2; }
-    if (ph == SVARA_PH_FRIC_DH) { return 2; }
-    if (ph == SVARA_PH_FRIC_H) { return 2; }
+    if (c == SVARA_CLASS_APPROXIMANT) { return 5; }
+    if (c == SVARA_CLASS_LATERAL) { return 4; }
+    if (c == SVARA_CLASS_TRILL) { return 4; }
+    if (ph == SVARA_PH_TAP_FLAP || ph == SVARA_PH_FLAP_RETRO || ph == SVARA_PH_FLAP_LATERAL) { return 4; }
+    if (ph == SVARA_PH_FRIC_UVULAR_R) { return 4; }
+    if (c == SVARA_CLASS_NASAL) { return 3; }
+    if (c == SVARA_CLASS_FRICATIVE) { return 2; }
     return 1;
 }
 
@@ -140,34 +139,141 @@ fn _shabda_slice_a(a, v, start, end): i64 {
     return out;
 }
 
-# Checks if v[start..end) is a legal English onset: sonority rises left-to-right.
-# Exception: /s/ + plosive clusters (sp, st, sk, spl, spr, str, skr) where the
-# first element is FricativeS and sonority(next) <= 2.
+# Which onsets a language allows. syllabify's own form has no language: it uses
+# English's table when every consonant is an English phoneme and the sonority rule
+# otherwise, as shabdakosh's shbdk_syllabify does.
+var SHABDA_ONSET_AUTO    = (0 - 1);
+var SHABDA_ONSET_ENGLISH = 0;
+var SHABDA_ONSET_SSP     = 1;
+var SHABDA_ONSET_SPANISH = 2;
+var SHABDA_ONSET_SINGLE  = 3;
+
+# The onset rule a SHABDA_LANG_* language uses.
+#   English: its onset table (_shabda_syllable_en_onset_range).
+#   Spanish: one consonant, or p b t d k g f + l / ɾ, but not tl / dl (RAE,
+#     Ortografía 2010: "at-las"). No s + consonant onset: "esto" is es.to.
+#   Arabic: one consonant; Arabic has no complex onsets (Watson 2002, Ch. 3).
+#   German, Hindi, Sanskrit and anything else: the sonority rule (_shabda_ssp_onset_range).
+fn _shabda_onset_mode(language): i64 {
+    if (language == SHABDA_LANG_ENGLISH) { return SHABDA_ONSET_ENGLISH; }
+    if (language == SHABDA_LANG_SPANISH) { return SHABDA_ONSET_SPANISH; }
+    if (language == SHABDA_LANG_ARABIC) { return SHABDA_ONSET_SINGLE; }
+    return SHABDA_ONSET_SSP;
+}
+
+# 1 if `p` is one of English's consonants (svara 20..45).
+fn _shabda_is_english_consonant(p): i64 {
+    if (p >= 20 && p <= 45) { return 1; }
+    return 0;
+}
+
+# 1 if (a, b) is a two-consonant English onset: play, bring, fly; try, dwell, tune;
+# clay, grow, quick, cute; three, thwart; shrimp; view, huge, music, new; and s + p t
+# k m n l w f j (spin, stay, sky, small, snow, slow, swim, sphere, suit). Not tl / dl
+# ("atlas" is at.las), not ŋ-initial, not vl / sr / zl.
+fn _shabda_syllable_en_onset2(c0, c1): i64 {
+    if (c0 == SVARA_PH_FRIC_S) {
+        if (c1 == SVARA_PH_PLOSIVE_P || c1 == SVARA_PH_PLOSIVE_T || c1 == SVARA_PH_PLOSIVE_K) { return 1; }
+        if (c1 == SVARA_PH_NASAL_M || c1 == SVARA_PH_NASAL_N || c1 == SVARA_PH_LATERAL_L) { return 1; }
+        if (c1 == SVARA_PH_APPROX_W || c1 == SVARA_PH_FRIC_F || c1 == SVARA_PH_APPROX_J) { return 1; }
+        return 0;
+    }
+    var l = (c1 == SVARA_PH_LATERAL_L);
+    var r = (c1 == SVARA_PH_APPROX_R);
+    var w = (c1 == SVARA_PH_APPROX_W);
+    var j = (c1 == SVARA_PH_APPROX_J);
+    if (c0 == SVARA_PH_PLOSIVE_P || c0 == SVARA_PH_PLOSIVE_B || c0 == SVARA_PH_FRIC_F) { return l | r | j; }
+    if (c0 == SVARA_PH_PLOSIVE_T || c0 == SVARA_PH_PLOSIVE_D) { return r | w | j; }
+    if (c0 == SVARA_PH_PLOSIVE_K || c0 == SVARA_PH_PLOSIVE_G) { return l | r | w | j; }
+    if (c0 == SVARA_PH_FRIC_TH) { return r | w; }
+    if (c0 == SVARA_PH_FRIC_SH) { return r; }
+    if (c0 == SVARA_PH_FRIC_V || c0 == SVARA_PH_FRIC_H) { return j; }
+    if (c0 == SVARA_PH_NASAL_M || c0 == SVARA_PH_NASAL_N) { return j; }
+    return 0;
+}
+
+# 1 if v[start..end) is c0 legal English onset: any one consonant but ŋ, c0 pair
+# _shabda_syllable_en_onset2 allows, or s + p / t / k + c0 glide or liquid (split, stray,
+# scream, squid, spew, stew, skew). English has no onset of four.
+fn _shabda_syllable_en_onset_range(v, start, end): i64 {
+    var n = end - start;
+    if (n <= 0) { return 1; }
+    var c0 = vec_get(v, start);
+    if (c0 == SVARA_PH_NASAL_NG) { return 0; }
+    if (n == 1) { return 1; }
+    var c1 = vec_get(v, start + 1);
+    if (n == 2) { return _shabda_syllable_en_onset2(c0, c1); }
+    if (n == 3) {
+        if (c0 != SVARA_PH_FRIC_S) { return 0; }
+        var c2 = vec_get(v, start + 2);
+        var cl = (c2 == SVARA_PH_LATERAL_L);
+        var cr = (c2 == SVARA_PH_APPROX_R);
+        var cw = (c2 == SVARA_PH_APPROX_W);
+        var cj = (c2 == SVARA_PH_APPROX_J);
+        if (c1 == SVARA_PH_PLOSIVE_P) { return cl | cr | cj; }
+        if (c1 == SVARA_PH_PLOSIVE_T) { return cr | cj; }
+        if (c1 == SVARA_PH_PLOSIVE_K) { return cl | cr | cw | cj; }
+        return 0;
+    }
+    return 0;
+}
+
+# 1 if v[start..end) is c0 legal onset by the Sonority Sequencing Principle: sonority
+# rises strictly toward the nucleus, except that c0 sibilant (s ʃ ʂ) may precede an
+# obstruent (German Stein /ʃt/, Sanskrit sthāna /st/, Hindi spaṣṭ /sp/).
+fn _shabda_ssp_onset_range(v, start, end): i64 {
+    if (end - start <= 1) { return 1; }
+    var k = start;
+    var first = vec_get(v, start);
+    var sib = (first == SVARA_PH_FRIC_S) | (first == SVARA_PH_FRIC_SH) | (first == SVARA_PH_FRIC_RETRO_S);
+    if (sib == 1 && _shabda_sonority(vec_get(v, start + 1)) <= 2) { k = start + 1; }
+    while (k + 1 < end) {
+        if (_shabda_sonority(vec_get(v, k)) >= _shabda_sonority(vec_get(v, k + 1))) { return 0; }
+        k = k + 1;
+    }
+    return 1;
+}
+
+# 1 if v[start..end) is c0 legal Spanish onset (see _shabda_onset_mode).
+fn _shabda_es_onset_range(v, start, end): i64 {
+    var n = end - start;
+    if (n <= 1) { return 1; }
+    if (n > 2) { return 0; }
+    var c0 = vec_get(v, start);
+    var c1 = vec_get(v, start + 1);
+    if (c1 != SVARA_PH_LATERAL_L && c1 != SVARA_PH_TAP_FLAP) { return 0; }
+    if (c0 == SVARA_PH_PLOSIVE_P || c0 == SVARA_PH_PLOSIVE_B || c0 == SVARA_PH_PLOSIVE_K) { return 1; }
+    if (c0 == SVARA_PH_PLOSIVE_G || c0 == SVARA_PH_FRIC_F) { return 1; }
+    if (c0 == SVARA_PH_PLOSIVE_T || c0 == SVARA_PH_PLOSIVE_D) { return c1 == SVARA_PH_TAP_FLAP; }
+    return 0;
+}
+
+# 1 if v[start..end) is a legal onset under onset rule `mode` (SHABDA_ONSET_*).
+fn _shabda_onset_ok_range(v, start, end, mode): i64 {
+    if (mode == SHABDA_ONSET_SPANISH) { return _shabda_es_onset_range(v, start, end); }
+    if (mode == SHABDA_ONSET_SINGLE) { return end - start <= 1; }
+    if (mode == SHABDA_ONSET_SSP) { return _shabda_ssp_onset_range(v, start, end); }
+    if (mode == SHABDA_ONSET_ENGLISH) { return _shabda_syllable_en_onset_range(v, start, end); }
+    # SHABDA_ONSET_AUTO (and any other value): English's table when every consonant is
+    # English's, the sonority rule otherwise.
+    var k = start;
+    while (k < end) {
+        if (_shabda_is_english_consonant(vec_get(v, k)) == 0) { return _shabda_ssp_onset_range(v, start, end); }
+        k = k + 1;
+    }
+    return _shabda_syllable_en_onset_range(v, start, end);
+}
+
+# Checks if v[start..end) is a legal onset (the language-free rule syllabify uses):
+# English's table when every consonant is English, the sonority rule otherwise.
+# Through 3.1.2 this was the sonority rule plus an s + obstruent exception for every
+# input, which took tl, dl, vl, ŋ- as English onsets ("atlas" a.tlas).
 #
 # Range-based on purpose. Rust's `is_legal_onset(&cluster[start..])` borrows a
 # sub-slice for free; materialising one here (the shape this replaced) made the
 # caller below quadratic in BOTH time and permanent bump-allocator bytes.
 fn _shabda_is_legal_onset_range(v, start, end): i64 {
-    if (end - start <= 1) { return 1; }          # empty or single: always legal
-
-    var first = vec_get(v, start);
-    var i = start + 1;
-    while (i < end) {
-        var son_cur = _shabda_sonority(vec_get(v, i));
-        var son_prev = _shabda_sonority(vec_get(v, i - 1));
-        if (son_cur <= son_prev) {
-            # Exception: /s/ + plosive clusters.
-            if (first == SVARA_PH_FRIC_S) {
-                if (son_cur <= 2) {
-                    i = i + 1;
-                    continue;
-                }
-            }
-            return 0;
-        }
-        i = i + 1;
-    }
-    return 1;
+    return _shabda_onset_ok_range(v, start, end, SHABDA_ONSET_AUTO);
 }
 
 # Whole-vec form (Rust `is_legal_onset(cluster)`).
@@ -176,22 +282,28 @@ fn _shabda_is_legal_onset(cluster): i64 {
 }
 
 # Maximum number of consonants from the END of v[start..end) that form a legal
-# English onset (rising sonority toward the nucleus). Returns a count.
-fn _shabda_max_legal_onset_range(v, start, end): i64 {
+# onset under rule `mode` (SHABDA_ONSET_*). Returns a count.
+fn _shabda_max_onset_mode_range(v, start, end, mode): i64 {
     if (end <= start) { return 0; }
 
     # Try from the full range down to 1 consonant. Rust borrows &cluster[i..]
     # here; we pass the bounds instead of copying.
     var i = start;
     while (i < end) {
-        if (_shabda_is_legal_onset_range(v, i, end) == 1) {
+        if (_shabda_onset_ok_range(v, i, end, mode) == 1) {
             return end - i;
         }
         i = i + 1;
     }
 
-    # Single consonant is always a legal onset.
-    return 1;
+    # No legal onset at all (only a lone ŋ): the consonants all close the syllable.
+    return 0;
+}
+
+# Maximum number of consonants from the END of v[start..end) that form a legal
+# onset (the language-free rule). Returns a count.
+fn _shabda_max_legal_onset_range(v, start, end): i64 {
+    return _shabda_max_onset_mode_range(v, start, end, SHABDA_ONSET_AUTO);
 }
 
 # Whole-vec form (Rust `max_legal_onset(cluster)`).
@@ -203,14 +315,37 @@ fn _shabda_max_legal_onset(cluster): i64 {
 # Syllabify a phoneme sequence (vec of ordinals) using the Maximal Onset
 # Principle. Returns a vec of Syllable*. Empty input -> empty vec; no vowels ->
 # empty vec; else one syllable per nucleus.
+#
+# The onsets are English's when every consonant is an English phoneme and the
+# sonority rule's otherwise; shabda_syllabify_for takes the language.
 #must_use
 fn shabda_syllabify(phonemes): i64 {
-    return _shabda_syllabify_a(default_alloc(), phonemes);
+    return _shabda_syllabify_mode_a(default_alloc(), phonemes, SHABDA_ONSET_AUTO);
 }
 
 # shabda_syllabify, with every allocation drawn from Allocator `a`.
 #must_use
 fn _shabda_syllabify_a(a, phonemes): i64 {
+    return _shabda_syllabify_mode_a(a, phonemes, SHABDA_ONSET_AUTO);
+}
+
+# shabda_syllabify with the onsets SHABDA_LANG_* `language` allows: English's
+# table, Spanish's obstruent + liquid, Arabic's single consonant, the sonority rule
+# for German, Hindi and Sanskrit (see _shabda_onset_mode).
+#must_use
+fn shabda_syllabify_for(phonemes, language): i64 {
+    return _shabda_syllabify_for_a(default_alloc(), phonemes, language);
+}
+
+# shabda_syllabify_for, with every allocation drawn from Allocator `a`.
+#must_use
+fn _shabda_syllabify_for_a(a, phonemes, language): i64 {
+    return _shabda_syllabify_mode_a(a, phonemes, _shabda_onset_mode(language));
+}
+
+# The syllabifier, under onset rule `mode` (SHABDA_ONSET_*).
+#must_use
+fn _shabda_syllabify_mode_a(a, phonemes, mode): i64 {
     var out = vec_new_a(a);
     var n = vec_len(phonemes);
     if (n == 0) { return out; }
@@ -239,7 +374,7 @@ fn _shabda_syllabify_a(a, phonemes): i64 {
             var prev_nucleus = vec_get(nuclei, syl_idx - 1);
             var cluster_start = prev_nucleus + 1;
             # Rust borrows &phonemes[cluster_start..nucleus_idx]; pass the bounds.
-            var onset_len = _shabda_max_legal_onset_range(phonemes, cluster_start, nucleus_idx);
+            var onset_len = _shabda_max_onset_mode_range(phonemes, cluster_start, nucleus_idx, mode);
             # PORT-RISK: nucleus_idx - onset_len must not go negative. The cluster
             # spans [cluster_start, nucleus_idx), so onset_len <= that span length,
             # which is <= nucleus_idx; guard anyway.
@@ -258,7 +393,7 @@ fn _shabda_syllabify_a(a, phonemes): i64 {
         if (syl_idx < nn - 1) {
             var next_nucleus = vec_get(nuclei, syl_idx + 1);
             # Rust borrows &phonemes[nucleus_idx+1..next_nucleus]; pass the bounds.
-            var next_onset_len = _shabda_max_legal_onset_range(phonemes, nucleus_idx + 1, next_nucleus);
+            var next_onset_len = _shabda_max_onset_mode_range(phonemes, nucleus_idx + 1, next_nucleus, mode);
             # PORT-RISK: next_nucleus - next_onset_len must not go negative. The
             # gap spans [nucleus_idx+1, next_nucleus); next_onset_len <= gap len,
             # so next_nucleus - next_onset_len >= nucleus_idx+1; guard anyway.

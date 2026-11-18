@@ -22,3 +22,4 @@ Decisions about shabda — what we chose, the context, and the consequences we a
 | ADR | Title | Status |
 |---|---|---|
 | [0001](0001-shabdakosh-declared-optional.md) | shabdakosh is declared `optional` to work around the dep-sidecar resolver | Accepted |
+| [0002](0002-accuracy-over-rust-parity.md) | Accuracy over Rust parity: `rust-old/` is the capability list, not the oracle | Accepted |

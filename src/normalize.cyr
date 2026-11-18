@@ -243,6 +243,20 @@ fn _shabda_is_alpha(cp): i64 {
     return 0;
 }
 
+# 1 if `cp` is a combining mark (General Category Mn, Mc or Me). normalize keeps a mark
+# that follows a letter in the word: the Devanagari virama U+094D and nukta U+093C,
+# the Vedic accents, Arabic sukun U+0652, maddah / hamza U+0653..U+0655 and
+# superscript alef U+0670 are not Alphabetic, so through 3.1.2 normalize deleted
+# them. The rules read them: without the virama Sanskrit धर्मः became धरमः (every
+# conjunct gained a vowel), and a nukta letter lost its nukta (NFC keeps ड़ as ड +
+# U+093C, U+0958..U+095F being composition exclusions).
+fn _shabda_is_mark(cp): i64 {
+    if (cp < 0x0300) { return 0; }
+    var gc = unicode_category(cp);
+    if (gc == GC_MN || gc == GC_MC || gc == GC_ME) { return 1; }
+    return 0;
+}
+
 fn _shabda_is_ascii_alpha(cp): i64 {
     if (cp >= 65 && cp <= 90) { return 1; }
     if (cp >= 97 && cp <= 122) { return 1; }
@@ -609,6 +623,250 @@ fn _shabda_decode_cps_a(a, text): i64 {
 }
 
 # ================================================================
+# Number readings beyond the cardinal: ordinals, currency, percentages, clock
+# times, years, digit strings. Each is how an English reader says the token
+# (Chicago Manual of Style 17th ed., ch. 9, for the conventions); through 3.1.2 each
+# was read as a plain cardinal with its suffix or sign glued on or dropped: "1st"
+# said "onest", "$3.50" "three point five zero", "50%" "fifty", "3:05" "three five",
+# "1999" "one thousand nine hundred ninety nine", "10-20" "ten negative twenty".
+# ================================================================
+
+# 1 if cps[i] is an ASCII digit (0 past the end).
+fn _shabda_cp_digit_at(cps, i): i64 {
+    if (i < 0 || i >= vec_len(cps)) { return 0; }
+    return _shabda_is_ascii_digit(vec_get(cps, i));
+}
+
+# ASCII-lowercase of cps[i], or 0 past the end.
+fn _shabda_cp_lower_at(cps, i): i64 {
+    if (i < 0 || i >= vec_len(cps)) { return 0; }
+    var c = vec_get(cps, i);
+    if (c >= 65 && c <= 90) { return c + 32; }
+    return c;
+}
+
+# The ordinal of a cardinal's last word: one -> first, twenty -> twentieth, six -> sixth.
+fn _shabda_ordinal_word(w): cstring {
+    if (streq(w, "one") == 1) { return "first"; }
+    if (streq(w, "two") == 1) { return "second"; }
+    if (streq(w, "three") == 1) { return "third"; }
+    if (streq(w, "five") == 1) { return "fifth"; }
+    if (streq(w, "eight") == 1) { return "eighth"; }
+    if (streq(w, "nine") == 1) { return "ninth"; }
+    if (streq(w, "twelve") == 1) { return "twelfth"; }
+    return 0;
+}
+
+# Append the ordinal of `v` ("twenty first", "one hundredth") to sb.
+fn _shabda_ordinal_to_words_a(a, sb, v): i64 {
+    var tmp = _shabda_sb_new_a(a);
+    _shabda_number_to_words_a(a, tmp, v);
+    var words = _shabda_sb_cstr(tmp);
+    var n = _shabda_sb_len(tmp);
+    var ls = n;
+    while (ls > 0 && load8(words + ls - 1) != 32) { ls = ls - 1; }
+    _shabda_sb_push_bytes_a(a, sb, words, ls);
+    var last = words + ls;
+    var irregular = _shabda_ordinal_word(last);
+    if (irregular != 0) {
+        _shabda_sb_push_cstr_a(a, sb, irregular);
+        return 0;
+    }
+    var ln = n - ls;
+    if (ln > 0 && load8(last + ln - 1) == 121) {          # -y -> -ieth
+        _shabda_sb_push_bytes_a(a, sb, last, ln - 1);
+        _shabda_sb_push_cstr_a(a, sb, "ieth");
+        return 0;
+    }
+    _shabda_sb_push_cstr_a(a, sb, last);
+    _shabda_sb_push_cstr_a(a, sb, "th");
+    return 0;
+}
+
+# Append a year 1001..1999 the way it is said: 1999 -> "nineteen ninety nine",
+# 1905 -> "nineteen oh five", 1900 -> "nineteen hundred", 1066 -> "ten sixty six".
+fn _shabda_year_to_words_a(a, sb, v): i64 {
+    _shabda_tens_to_words_a(a, sb, v / 100);
+    var lo = v % 100;
+    if (lo == 0) {
+        _shabda_sb_push_cstr_a(a, sb, " hundred");
+    } elif (lo < 10) {
+        _shabda_sb_push_cstr_a(a, sb, " oh ");
+        _shabda_sb_push_cstr_a(a, sb, _shabda_ones(lo));
+    } else {
+        _shabda_sb_push_byte_a(a, sb, 32);
+        _shabda_tens_to_words_a(a, sb, lo);
+    }
+    return 0;
+}
+
+# 1 if the four-digit number at cps[start..j) is a year by its context: a decade
+# plural follows ("1990s"), or BC / AD / BCE / CE, or the word before it is a month
+# or one that introduces a date (in, since, from, until, till, by, of, circa, during,
+# before, after, around, year). Elsewhere it is a quantity ("1234" "one thousand two
+# hundred thirty four").
+fn _shabda_year_context_a(a, cps, start, j): i64 {
+    var n = vec_len(cps);
+    if (_shabda_cp_lower_at(cps, j) == 115 && _shabda_is_alpha(_shabda_cp_lower_at(cps, j + 1)) == 0) { return 1; }
+    var k = j;
+    while (k < n && _shabda_is_ws(vec_get(cps, k)) == 1) { k = k + 1; }
+    if (k > j && k + 1 < n) {
+        var e0 = _shabda_cp_lower_at(cps, k);
+        var e1 = _shabda_cp_lower_at(cps, k + 1);
+        var era = ((e0 == 98) & (e1 == 99)) | ((e0 == 97) & (e1 == 100)) | ((e0 == 99) & (e1 == 101));   # bc ad ce
+        if (era == 1 && _shabda_is_alpha(_shabda_cp_lower_at(cps, k + 2)) == 0) { return 1; }
+        if (e0 == 98 && e1 == 99 && _shabda_cp_lower_at(cps, k + 2) == 101) { return 1; }                 # bce
+    }
+    # the word before
+    var e = start;
+    while (e > 0 && _shabda_is_ws(vec_get(cps, e - 1)) == 1) { e = e - 1; }
+    var b = e;
+    while (b > 0 && _shabda_is_ascii_alpha(vec_get(cps, b - 1)) == 1) { b = b - 1; }
+    var len = e - b;
+    if (len == 0 || len > 9 || e == start) { return 0; }
+    var w = alloc_via(a, len + 1);
+    if (w == 0) { return 0; }
+    var q = 0;
+    while (q < len) { store8(w + q, _shabda_cp_lower_at(cps, b + q)); q = q + 1; }
+    store8(w + len, 0);
+    var intro = "in since from until till by of circa during before after around year";
+    var months = "january february march april may june july august september october november december";
+    if (_shabda_word_in_list(w, intro) == 1) { return 1; }
+    return _shabda_word_in_list(w, months);
+}
+
+# 1 if cstr `w` is one of the space-separated words of cstr `list`.
+fn _shabda_word_in_list(w, list): i64 {
+    var n = strlen(w);
+    var i = 0;
+    while (load8(list + i) != 0) {
+        var e = i;
+        while (load8(list + e) != 0 && load8(list + e) != 32) { e = e + 1; }
+        if (e - i == n) {
+            var k = 0;
+            while (k < n && load8(list + i + k) == load8(w + k)) { k = k + 1; }
+            if (k == n) { return 1; }
+        }
+        i = e;
+        if (load8(list + i) == 32) { i = i + 1; }
+    }
+    return 0;
+}
+
+# Currency units: kind 1 = $, 2 = £, 3 = €. `which` 0 = the main unit, 1 = the
+# hundredth; `plural` 1 for anything but exactly one.
+fn _shabda_currency_unit(kind, which, plural): cstring {
+    if (kind == 2) {
+        if (which == 0) { if (plural == 1) { return "pounds"; } return "pound"; }
+        if (plural == 1) { return "pence"; }
+        return "penny";
+    }
+    if (which == 1) { if (plural == 1) { return "cents"; } return "cent"; }
+    if (kind == 3) { if (plural == 1) { return "euros"; } return "euro"; }
+    if (plural == 1) { return "dollars"; }
+    return "dollar";
+}
+
+# The currency kind of code point `c` ($ £ €), or 0.
+fn _shabda_currency_kind(c): i64 {
+    if (c == 36) { return 1; }        # $
+    if (c == 0xA3) { return 2; }      # £
+    if (c == 0x20AC) { return 3; }    # €
+    return 0;
+}
+
+# If cps[j..] is white space then "thousand" / "million" / "billion" / "trillion"
+# and a non-letter, the index after that word; else -1. ("$5 million" is five
+# million dollars.)
+fn _shabda_magnitude_after_a(a, cps, j): i64 {
+    var n = vec_len(cps);
+    var k = j;
+    while (k < n && _shabda_is_ws(vec_get(cps, k)) == 1) { k = k + 1; }
+    if (k == j || k >= n) { return 0 - 1; }
+    var e = k;
+    while (e < n && _shabda_is_ascii_alpha(vec_get(cps, e)) == 1) { e = e + 1; }
+    var len = e - k;
+    if (len < 7 || len > 8) { return 0 - 1; }
+    var buf = alloc_via(a, 9);
+    if (buf == 0) { return 0 - 1; }
+    var q = 0;
+    while (q < len) { store8(buf + q, _shabda_cp_lower_at(cps, k + q)); q = q + 1; }
+    store8(buf + len, 0);
+    if (streq(buf, "thousand") == 1 || streq(buf, "million") == 1) { return e; }
+    if (streq(buf, "billion") == 1 || streq(buf, "trillion") == 1) { return e; }
+    return 0 - 1;
+}
+
+# Append the currency reading of number token `tok` (digits, at most one '.') in
+# currency `kind`: "$3.50" -> "three dollars and fifty cents", "$1" -> "one dollar",
+# "$0.99" -> "ninety nine cents". A fraction of more than two digits is read as a
+# decimal, then the unit.
+fn _shabda_currency_to_words_a(a, sb, tok, kind): i64 {
+    var dot = strchr(tok, 46);
+    var tlen = strlen(tok);
+    var ok = alloc_via(a, 8);
+    if (ok == 0) { return 0; }
+    if (dot < 0 || tlen - dot - 1 > 2) {
+        var whole = 0;
+        if (dot < 0) { whole = _shabda_parse_u64(tok, ok); }
+        _shabda_expand_number_token_a(a, sb, tok);
+        _shabda_sb_push_byte_a(a, sb, 32);
+        var one = (dot < 0) & (load64(ok) == 1) & (whole == 1);
+        _shabda_sb_push_cstr_a(a, sb, _shabda_currency_unit(kind, 0, 1 - one));
+        return 0;
+    }
+    var ibuf = alloc_via(a, dot + 1);
+    if (ibuf == 0) { return 0; }
+    memcpy(ibuf, tok, dot);
+    store8(ibuf + dot, 0);
+    var units = 0;
+    if (dot > 0) { units = _shabda_parse_u64(ibuf, ok); }
+    if (dot > 0 && load64(ok) == 0) { _shabda_expand_number_token_a(a, sb, tok); return 0; }
+    var cents = load8(tok + dot + 1) - 48;
+    if (tlen - dot - 1 == 2) { cents = cents * 10 + (load8(tok + dot + 2) - 48); } else { cents = cents * 10; }
+    if (units > 0 || cents == 0) {
+        _shabda_number_to_words_a(a, sb, units);
+        _shabda_sb_push_byte_a(a, sb, 32);
+        _shabda_sb_push_cstr_a(a, sb, _shabda_currency_unit(kind, 0, units != 1));
+    }
+    if (cents > 0) {
+        if (units > 0) { _shabda_sb_push_cstr_a(a, sb, " and "); }
+        _shabda_tens_to_words_a(a, sb, cents);
+        _shabda_sb_push_byte_a(a, sb, 32);
+        _shabda_sb_push_cstr_a(a, sb, _shabda_currency_unit(kind, 1, cents != 1));
+    }
+    return 0;
+}
+
+# "1990s", "80s": an 's' straight after the number (then no letter) makes its last
+# word plural, -y -> -ies ("nineteen nineties", "eighties"). Returns the index after
+# the 's', or `j` unchanged.
+fn _shabda_decade_plural_a(a, sb, cps, j): i64 {
+    if (_shabda_cp_lower_at(cps, j) != 115) { return j; }
+    if (_shabda_is_alpha(_shabda_cp_lower_at(cps, j + 1)) == 1) { return j; }
+    var len = load64(sb + SHABDA_SB_LEN);
+    if (len > 0 && _shabda_sb_last(sb) == 121) {
+        store64(sb + SHABDA_SB_LEN, len - 1);
+        store8(load64(sb + SHABDA_SB_DATA) + len - 1, 0);
+        _shabda_sb_push_cstr_a(a, sb, "ies");
+    } else {
+        _shabda_sb_push_byte_a(a, sb, 115);
+    }
+    return j + 1;
+}
+
+# Append raw bytes p[0..n) to sb.
+fn _shabda_sb_push_bytes_a(a, sb, p, n): i64 {
+    if (_shabda_sb_reserve_a(a, sb, n) < 0) { return 0; }
+    var data = load64(sb + SHABDA_SB_DATA);
+    var len = load64(sb + SHABDA_SB_LEN);
+    memcpy(data + len, p, n);
+    store8(data + len + n, 0);
+    store64(sb + SHABDA_SB_LEN, len + n);
+    return 0;
+}
+
+# ================================================================
 # expand_numbers — public. (Rust expand_numbers)
 # ================================================================
 #must_use
@@ -617,6 +875,14 @@ fn shabda_expand_numbers(text): cstring {
 }
 
 # shabda_expand_numbers, with every allocation drawn from Allocator `a`.
+#
+# At each number: a minus sign is a '-' before a digit that does not follow a letter
+# or digit ("-5", not "10-20" or "COVID-19"); a currency sign before it gives the
+# currency reading; then, in this order, a '%' after it, an ordinal suffix st / nd /
+# rd / th, a clock time H:MM, a year 1001..1999 in a date's context, a digit string with a
+# leading zero (read digit by digit: "007" "zero zero seven"), else the cardinal or
+# decimal reading. A '-' or '–' between two numbers is "to" (a range, CMOS 6.78). A
+# letter straight after a number is a separate word ("5km" "five km").
 #must_use
 fn _shabda_expand_numbers_a(a, text): cstring {
     var cps = _shabda_decode_cps_a(a, text);
@@ -624,40 +890,113 @@ fn _shabda_expand_numbers_a(a, text): cstring {
     var sb = _shabda_sb_new_a(a);
     var i = 0;
     var c = 0;
-    var nx = 0;
     var tokslot = alloc_via(a, 8);
+    var ok = alloc_via(a, 8);
     var consumed = 0;
     var last = 0;
     while (i < n) {
         c = vec_get(cps, i);
-        # Negative number: '-' followed by a digit.
-        if (c == 45 && i + 1 < n) {
-            nx = vec_get(cps, i + 1);
-            if (nx >= 48 && nx <= 57) {
-                i = i + 1;
-                consumed = _shabda_collect_number_a(a, cps, i, tokslot);
-                last = _shabda_sb_last(sb);
-                if (_shabda_sb_len(sb) != 0 && last != 32) {
-                    _shabda_sb_push_byte_a(a, sb, 32);
-                }
-                _shabda_sb_push_cstr_a(a, sb, "negative ");
-                _shabda_expand_number_token_a(a, sb, load64(tokslot));
-                i = i + consumed;
-                continue;
+        var start = 0 - 1;
+        var neg = 0;
+        var cur = 0;
+        if (_shabda_is_ascii_digit(c) == 1) {
+            start = i;
+        } elif (c == 45 && _shabda_cp_digit_at(cps, i + 1) == 1) {
+            if (i == 0 || _shabda_is_alnum(vec_get(cps, i - 1)) == 0) {
+                neg = 1;
+                start = i + 1;
             }
+        } elif (_shabda_currency_kind(c) != 0 && _shabda_cp_digit_at(cps, i + 1) == 1) {
+            cur = _shabda_currency_kind(c);
+            start = i + 1;
         }
-        if (c >= 48 && c <= 57) {
-            consumed = _shabda_collect_number_a(a, cps, i, tokslot);
-            last = _shabda_sb_last(sb);
-            if (_shabda_sb_len(sb) != 0 && last != 32) {
-                _shabda_sb_push_byte_a(a, sb, 32);
-            }
-            _shabda_expand_number_token_a(a, sb, load64(tokslot));
-            i = i + consumed;
-        } else {
+        if (start < 0) {
+            # A hyphen joining a word to a number ("COVID-19", "F-16") separates them.
+            if (c == 45 && _shabda_cp_digit_at(cps, i + 1) == 1) { c = 32; }
             _shabda_sb_push_cp_a(a, sb, c);
             i = i + 1;
+            continue;
         }
+        consumed = _shabda_collect_number_a(a, cps, start, tokslot);
+        var tok = load64(tokslot);
+        var j = start + consumed;
+        last = _shabda_sb_last(sb);
+        if (_shabda_sb_len(sb) != 0 && last != 32) {
+            _shabda_sb_push_byte_a(a, sb, 32);
+        }
+        if (neg == 1) { _shabda_sb_push_cstr_a(a, sb, "negative "); }
+        var tlen = strlen(tok);
+        var integer = (strchr(tok, 46) < 0);
+        var plain = integer & (tlen == consumed);   # no '.', no grouping comma
+        var v = 0;
+        store64(ok, 0);
+        if (integer == 1) { v = _shabda_parse_u64(tok, ok); }
+        var whole = integer & (load64(ok) == 1);    # an integer that fits, grouped or not
+        var parsed = plain & whole;
+        var s0 = _shabda_cp_lower_at(cps, j);
+        var s1 = _shabda_cp_lower_at(cps, j + 1);
+        var ord = 0;
+        if (whole == 1 && _shabda_is_alpha(_shabda_cp_lower_at(cps, j + 2)) == 0) {
+            if ((s0 == 115 && s1 == 116) || (s0 == 110 && s1 == 100)) { ord = 1; }   # st nd
+            if ((s0 == 114 && s1 == 100) || (s0 == 116 && s1 == 104)) { ord = 1; }   # rd th
+        }
+        var clock = 0;
+        if (parsed == 1 && consumed <= 2 && v <= 23 && s0 == 58) {                   # ':'
+            if (_shabda_cp_digit_at(cps, j + 1) == 1 && _shabda_cp_digit_at(cps, j + 2) == 1) {
+                if (_shabda_cp_digit_at(cps, j + 3) == 0 && (s1 - 48) <= 5) { clock = 1; }
+            }
+        }
+        if (cur != 0) {
+            var mag = _shabda_magnitude_after_a(a, cps, j);
+            if (mag > 0) {
+                # "$5 million" -> "five million dollars"
+                _shabda_expand_number_token_a(a, sb, tok);
+                _shabda_sb_push_byte_a(a, sb, 32);
+                var mk = j;
+                while (_shabda_is_ws(vec_get(cps, mk)) == 1) { mk = mk + 1; }
+                while (mk < mag) { _shabda_sb_push_byte_a(a, sb, _shabda_cp_lower_at(cps, mk)); mk = mk + 1; }
+                _shabda_sb_push_byte_a(a, sb, 32);
+                _shabda_sb_push_cstr_a(a, sb, _shabda_currency_unit(cur, 0, 1));
+                j = mag;
+            } else {
+                _shabda_currency_to_words_a(a, sb, tok, cur);
+            }
+        } elif (s0 == 37) {                                                          # '%'
+            _shabda_expand_number_token_a(a, sb, tok);
+            _shabda_sb_push_cstr_a(a, sb, " percent");
+            j = j + 1;
+        } elif (ord == 1) {
+            _shabda_ordinal_to_words_a(a, sb, v);
+            j = j + 2;
+        } elif (clock == 1) {
+            var mm = (s1 - 48) * 10 + (vec_get(cps, j + 2) - 48);
+            _shabda_number_to_words_a(a, sb, v);
+            if (mm > 0 && mm < 10) {
+                _shabda_sb_push_cstr_a(a, sb, " oh ");
+                _shabda_sb_push_cstr_a(a, sb, _shabda_ones(mm));
+            } elif (mm >= 10) {
+                _shabda_sb_push_byte_a(a, sb, 32);
+                _shabda_tens_to_words_a(a, sb, mm);
+            }
+            j = j + 3;
+        } elif (parsed == 1 && neg == 0 && consumed == 4 && v >= 1001 && v <= 1999
+            && _shabda_year_context_a(a, cps, start, j) == 1) {
+            _shabda_year_to_words_a(a, sb, v);
+            j = _shabda_decade_plural_a(a, sb, cps, j);
+        } elif (plain == 1 && consumed >= 2 && load8(tok) == 48) {
+            _shabda_digits_to_words_a(a, sb, tok);
+        } else {
+            _shabda_expand_number_token_a(a, sb, tok);
+            if (whole == 1) { j = _shabda_decade_plural_a(a, sb, cps, j); }
+        }
+        # A range: "10-20", "1990–1995".
+        if (j < n && (vec_get(cps, j) == 45 || vec_get(cps, j) == 0x2013) && _shabda_cp_digit_at(cps, j + 1) == 1) {
+            _shabda_sb_push_cstr_a(a, sb, " to");
+            j = j + 1;
+        } elif (j < n && _shabda_is_alpha(vec_get(cps, j)) == 1) {
+            _shabda_sb_push_byte_a(a, sb, 32);
+        }
+        i = j;
     }
     return _shabda_sb_cstr(sb);
 }
@@ -693,6 +1032,8 @@ fn _shabda_abbr_at(idx, out_expansion): cstring {
     if (idx == 22) { store64(out_expansion, "point");         return "pt."; }
     if (idx == 23) { store64(out_expansion, "feet");          return "ft."; }
     if (idx == 24) { store64(out_expansion, "mount");         return "mt."; }
+    if (idx == 25) { store64(out_expansion, "for example");   return "e.g."; }
+    if (idx == 26) { store64(out_expansion, "that is");       return "i.e."; }
     store64(out_expansion, 0);
     return 0;
 }
@@ -775,6 +1116,15 @@ fn shabda_expand_abbreviations(text): cstring {
 }
 
 # shabda_expand_abbreviations, with every allocation drawn from Allocator `a`.
+#
+# Two readings depend on the neighbours. "St." and "Dr." after a capitalized word and
+# before a lowercase one (or the end) are "street" / "drive" ("Main St. near"), else
+# "saint" / "doctor" ("St. Paul", "Dr. Smith"). And an abbreviation's period also
+# ends the sentence when the next word is capitalized or there is none ("pears,
+# etc. Then"), so a period is kept after the expansion there for the sentence pause;
+# a title (Mr. Mrs. Dr. Prof. Capt. Col. Gen. Sgt. Lt. St. Mt.) is followed by a name,
+# so its period never ends one. A dotted initialism ("U.S.", "a.m.") is spelled out as
+# shabda_expand_acronyms spells a word ("u-s").
 #must_use
 fn _shabda_expand_abbreviations_a(a, text): cstring {
     var words = _shabda_split_ws_a(a, text);
@@ -787,17 +1137,73 @@ fn _shabda_expand_abbreviations_a(a, text): cstring {
     while (i < n) {
         if (i > 0) { _shabda_sb_push_byte_a(a, sb, 32); }
         word = vec_get(words, i);
+        var prev_cap = 0;
+        if (i > 0) { prev_cap = _shabda_is_ascii_upper(load8(vec_get(words, i - 1))); }
+        var next_cap = 1;                                  # the end of the text counts
+        if (i + 1 < n) { next_cap = _shabda_word_starts_upper(vec_get(words, i + 1)); }
         consumed = _shabda_match_abbreviation_a(a, word, expslot);
+        var dotted = 0;
+        if (consumed == 0) { dotted = _shabda_dotted_initialism_len(word); }
         if (consumed > 0) {
-            _shabda_sb_push_cstr_a(a, sb, load64(expslot));
+            var exp = load64(expslot);
+            var title = _shabda_abbr_is_title(exp);
+            # e.g. and i.e. introduce what follows, so their period ends no sentence,
+            # even before a capital ("rock, e.g. Elvis"); "etc. Then" can.
+            if (streq(exp, "for example") == 1 || streq(exp, "that is") == 1) { title = 1; }
+            var place = prev_cap & ((next_cap == 0) | (i + 1 >= n));
+            if (place == 1 && streq(exp, "saint") == 1) { exp = "street"; title = 0; }
+            if (place == 1 && streq(exp, "doctor") == 1) { exp = "drive"; title = 0; }
+            if (i + 1 >= n && title == 1) { title = 0; }
+            _shabda_sb_push_cstr_a(a, sb, exp);
             # Append remaining bytes after the abbreviation: word[consumed..].
-            _shabda_sb_push_cstr_a(a, sb, word + consumed);
+            var rest = word + consumed;
+            if (title == 0 && next_cap == 1 && load8(rest) == 0) { _shabda_sb_push_byte_a(a, sb, 46); }
+            _shabda_sb_push_cstr_a(a, sb, rest);
+        } elif (dotted > 0) {
+            var k = 0;
+            while (k < dotted) {
+                if (k > 0) { _shabda_sb_push_byte_a(a, sb, 45); }
+                _shabda_sb_push_byte_a(a, sb, _shabda_to_lower_cp(load8(word + k)));
+                k = k + 2;
+            }
+            var drest = word + dotted;
+            if (next_cap == 1 && load8(drest) == 0) { _shabda_sb_push_byte_a(a, sb, 46); }
+            _shabda_sb_push_cstr_a(a, sb, drest);
         } else {
             _shabda_sb_push_cstr_a(a, sb, word);
         }
         i = i + 1;
     }
     return _shabda_sb_cstr(sb);
+}
+
+# 1 if `word` begins (after any opening quote or bracket) with an uppercase letter.
+fn _shabda_word_starts_upper(word): i64 {
+    var k = 0;
+    var c = load8(word);
+    while (c == 34 || c == 39 || c == 40 || c == 91) { k = k + 1; c = load8(word + k); }
+    if (c == 0xE2) { return 0; }
+    return _shabda_is_ascii_upper(c);
+}
+
+# 1 if an abbreviation's expansion is a title, which a name follows.
+fn _shabda_abbr_is_title(exp): i64 {
+    if (streq(exp, "mister") == 1 || streq(exp, "missus") == 1 || streq(exp, "doctor") == 1) { return 1; }
+    if (streq(exp, "professor") == 1 || streq(exp, "captain") == 1 || streq(exp, "colonel") == 1) { return 1; }
+    if (streq(exp, "general") == 1 || streq(exp, "sergeant") == 1 || streq(exp, "lieutenant") == 1) { return 1; }
+    if (streq(exp, "saint") == 1 || streq(exp, "mount") == 1) { return 1; }
+    return 0;
+}
+
+# Byte length of a dotted initialism at the start of `word` — two or more letters,
+# each followed by '.' ("U.S.", "a.m.", "U.S.A.") — when what follows is not a
+# letter, else 0.
+fn _shabda_dotted_initialism_len(word): i64 {
+    var k = 0;
+    while (_shabda_is_ascii_alpha(load8(word + k)) == 1 && load8(word + k + 1) == 46) { k = k + 2; }
+    if (k < 4) { return 0; }
+    if (_shabda_is_ascii_alpha(load8(word + k)) == 1) { return 0; }
+    return k;
 }
 
 # ================================================================
@@ -897,39 +1303,114 @@ fn _shabda_valid_onset(a, b): i64 {
     return 0;
 }
 
-# Returns 1 if an acronym (cstr, ASCII upper) is pronounceable as a word.
-# (Rust is_pronounceable_acronym) — operates on the lowercased chars.
+# 1 if byte `c` is one of the bytes of cstr `set`.
+fn _shabda_byte_in(c, set): i64 {
+    var k = 0;
+    while (load8(set + k) != 0) {
+        if (load8(set + k) == c) { return 1; }
+        k = k + 1;
+    }
+    return 0;
+}
+
+# 1 if the two vowel letters (b0, b1) are an English vowel digraph (rain, cause, day,
+# sea, see, vein, feud, they, pie, boat, toe, coin, moon, out, boy, cue, suit).
+fn _shabda_vowel_digraph(b0, b1): i64 {
+    if (b0 == 97) { return _shabda_byte_in(b1, "iuy"); }
+    if (b0 == 101) { return _shabda_byte_in(b1, "aeiuy"); }
+    if (b0 == 105) { return b1 == 101; }
+    if (b0 == 111) { return _shabda_byte_in(b1, "aeiouy"); }
+    if (b0 == 117) { return _shabda_byte_in(b1, "ei"); }
+    return 0;
+}
+
+# 1 if the consonant letters word[s..e) can end an English word: one letter but h j
+# q v, or a common two-letter coda (act, gift, cold, golf, milk, film, help, salt,
+# lamp, hand, pink, tent, apt, ... , cats, dogs, fish, rich, path, sing).
+fn _shabda_letter_coda(word, s, e): i64 {
+    var n = e - s;
+    if (n == 0) { return 1; }
+    var c0 = load8(word + s);
+    if (n == 1) { return 1 - _shabda_byte_in(c0, "hjqv"); }
+    if (n > 2) { return 0; }
+    var c1 = load8(word + s + 1);
+    if (c1 == 115) { return _shabda_byte_in(c0, "ptdmnlk"); }      # ps ts ds ms ns ls ks
+    if (c1 == 104) { return _shabda_byte_in(c0, "sct"); }          # sh ch th
+    if (c1 == 116) { return _shabda_byte_in(c0, "cflnprs"); }      # ct ft lt nt pt rt st
+    if (c1 == 100) { return _shabda_byte_in(c0, "lnr"); }          # ld nd rd
+    if (c1 == 107) { return _shabda_byte_in(c0, "lnrs"); }         # lk nk rk sk
+    if (c1 == 112) { return _shabda_byte_in(c0, "lmrs"); }         # lp mp rp sp
+    if (c1 == 109) { return _shabda_byte_in(c0, "lr"); }           # lm rm
+    if (c1 == 102) { return _shabda_byte_in(c0, "lr"); }           # lf rf
+    if (c1 == 110) { return c0 == 114; }                           # rn
+    if (c1 == 103) { return c0 == 110; }                           # ng
+    return 0;
+}
+
+# 1 if the consonant letters word[s..e) can begin an English word: one letter, a pair
+# in the onset table, or s + p / t / c + l / r (split, street, scream).
+fn _shabda_letter_onset(word, s, e): i64 {
+    var n = e - s;
+    if (n <= 1) { return 1; }
+    var c0 = load8(word + s);
+    var c1 = load8(word + s + 1);
+    if (n == 2) { return _shabda_valid_onset(c0, c1); }
+    if (n > 3 || c0 != 115) { return 0; }
+    var c2 = load8(word + s + 2);
+    if (c1 == 112 || c1 == 99) { return (c2 == 108) | (c2 == 114); }
+    if (c1 == 116) { return c2 == 114; }
+    return 0;
+}
+
+# Returns 1 if an acronym (cstr, ASCII upper) is read as a word, 0 if it is spelled.
+# (Rust is_pronounceable_acronym.) It is a word when its letters spell a possible
+# English word: every vowel run one vowel or a digraph, the consonants before the
+# first vowel an onset, those after the last a coda, and each run between two vowels
+# a coda + onset. NASA, NATO, SCUBA, LASER, AIDS, OPEC, IKEA, NAFTA are words; IBM
+# (bm), ATM (tm), ESPN (spn), FAQ (q), CIA (ia), CEO (eo), NAACP (aa) are spelled.
+# A three-letter acronym that starts with a lone vowel is spelled as well (USA, UFO,
+# ICU, EPA, IRS, ATV): English reads nearly all of them letter by letter. Through
+# 3.1.2 an acronym was a word whenever it started with a vowel or a consonant + vowel,
+# so IBM, ATM, ESPN, USA and CIA were read as words.
 fn _shabda_is_pronounceable_acronym_a(a, word): i64 {
     var lower = _shabda_lower_cstr_a(a, word);
     var n = strlen(lower);
-    # Must have at least one vowel.
+    if (n == 0) { return 0; }
+    var c0 = load8(lower);
+    if (n == 3 && _shabda_is_vowel(c0) == 1) {
+        if (_shabda_is_vowel(load8(lower + 1)) == 0) { return 0; }
+        if (_shabda_vowel_digraph(c0, load8(lower + 1)) == 0) { return 0; }
+    }
     var i = 0;
-    var hasv = 0;
+    var runs = 0;          # vowel runs seen
+    var cstart = 0;        # start of the current consonant run
     while (i < n) {
-        if (_shabda_is_vowel(load8(lower + i)) == 1) { hasv = 1; }
-        i = i + 1;
-    }
-    if (hasv == 0) { return 0; }
-    var c0 = 0;
-    var c1 = 0;
-    var c2 = 0;
-    if (n >= 1) { c0 = load8(lower); }
-    # Starts with vowel -> pronounceable.
-    if (_shabda_is_vowel(c0) == 1) { return 1; }
-    # single consonant + vowel.
-    if (n >= 2) {
-        c1 = load8(lower + 1);
-        if (_shabda_is_vowel(c0) == 0 && _shabda_is_vowel(c1) == 1) { return 1; }
-    }
-    # valid onset cluster + vowel.
-    if (n >= 3) {
-        c1 = load8(lower + 1);
-        c2 = load8(lower + 2);
-        if (_shabda_is_vowel(c0) == 0 && _shabda_is_vowel(c1) == 0 && _shabda_is_vowel(c2) == 1) {
-            if (_shabda_valid_onset(c0, c1) == 1) { return 1; }
+        if (_shabda_is_vowel(load8(lower + i)) == 1) {
+            var vs = i;
+            while (i < n && _shabda_is_vowel(load8(lower + i)) == 1) { i = i + 1; }
+            var vlen = i - vs;
+            if (vlen > 2) { return 0; }
+            if (vlen == 2 && _shabda_vowel_digraph(load8(lower + vs), load8(lower + vs + 1)) == 0) { return 0; }
+            if (runs == 0) {
+                if (_shabda_letter_onset(lower, cstart, vs) == 0) { return 0; }
+            } else {
+                # a medial run: some split into coda + onset
+                var ok = 0;
+                var k = cstart;
+                while (k <= vs && ok == 0) {
+                    if (_shabda_letter_coda(lower, cstart, k) == 1) { ok = _shabda_letter_onset(lower, k, vs); }
+                    k = k + 1;
+                }
+                if (ok == 0) { return 0; }
+            }
+            runs = runs + 1;
+            cstart = i;
+        } else {
+            i = i + 1;
         }
     }
-    return 0;
+    if (runs == 0) { return 0; }
+    return _shabda_letter_coda(lower, cstart, n);
 }
 
 # ================================================================
@@ -973,12 +1454,14 @@ fn _shabda_expand_acronyms_a(a, text): cstring {
                     k = k + 1;
                 }
             } else {
-                # spell out: "FBI" -> "f b i".
+                # spell out: "FBI" -> "f-b-i", one token, which the English engine says
+                # letter by letter by the letters' names. Through 3.1.2 it was
+                # "f b i", three words the rules said as the bare sounds /f b aɪ/.
                 var k2 = 0;
                 var clen2 = strlen(core);
                 var cc2 = 0;
                 while (k2 < clen2) {
-                    if (k2 > 0) { _shabda_sb_push_byte_a(a, sb, 32); }
+                    if (k2 > 0) { _shabda_sb_push_byte_a(a, sb, 45); }
                     cc2 = load8(core + k2);
                     _shabda_sb_push_byte_a(a, sb, _shabda_to_lower_cp(cc2));
                     k2 = k2 + 1;
@@ -1074,6 +1557,22 @@ fn _shabda_strip_diacritics_a(a, word): cstring {
 # normalize / normalize_token_into / normalize_with_emphasis.
 # ================================================================
 
+# Append a phrase-boundary marker (SHABDA_COMMA_PAUSE or SHABDA_PERIOD_PAUSE) after
+# a space. Consecutive boundaries are one pause: an ellipsis "..." or "?!" makes one
+# sentence pause, not three, and a sentence boundary after a comma replaces it.
+fn _shabda_push_pause_a(a, sb, marker): i64 {
+    var len = _shabda_sb_len(sb);
+    var data = _shabda_sb_cstr(sb);
+    if (len >= 6 && streq(data + len - 6, SHABDA_PERIOD_PAUSE) == 1) { return 0; }
+    if (len >= 6 && streq(data + len - 6, SHABDA_COMMA_PAUSE) == 1) {
+        if (streq(marker, SHABDA_PERIOD_PAUSE) == 1) { store8(data + len - 6, 46); }
+        return 0;
+    }
+    _shabda_sb_push_byte_a(a, sb, 32);
+    _shabda_sb_push_cstr_a(a, sb, marker);
+    return 0;
+}
+
 # Process a single token's code points into sb (Rust normalize_token_into).
 fn _shabda_normalize_token_into_a(a, token, sb): i64 {
     var cps = _shabda_decode_cps_a(a, token);
@@ -1082,23 +1581,37 @@ fn _shabda_normalize_token_into_a(a, token, sb): i64 {
     var ch = 0;
     var prev_space = 0;
     var last = 0;
+    var inword = 0;
     while (i < n) {
         ch = vec_get(cps, i);
-        if (_shabda_is_alpha(ch) == 1 || ch == 39 || ch == 45) {
+        var mark = inword & _shabda_is_mark(ch);
+        if (_shabda_is_alpha(ch) == 1 || ch == 39 || ch == 45 || mark == 1) {
             last = _shabda_sb_last(sb);
             if (prev_space == 1 && _shabda_sb_len(sb) != 0 && last != 32) {
                 _shabda_sb_push_byte_a(a, sb, 32);
             }
             _shabda_sb_push_cp_a(a, sb, _shabda_to_lower_cp(ch));
             prev_space = 0;
+            inword = (ch != 39) & (ch != 45);
         } elif (ch == 44) {
-            _shabda_sb_push_cstr_a(a, sb, " ,pause");
+            _shabda_push_pause_a(a, sb, SHABDA_COMMA_PAUSE);
             prev_space = 1;
-        } elif (ch == 46 || ch == 59) {
-            _shabda_sb_push_cstr_a(a, sb, " .pause");
+            inword = 0;
+        } elif (ch == 46 || ch == 59 || ch == 33 || ch == 63) {
+            # '!' and '?' end a sentence as '.' does; through 3.1.2 they made no pause,
+            # so "Really? Yes." ran the two sentences together.
+            _shabda_push_pause_a(a, sb, SHABDA_PERIOD_PAUSE);
             prev_space = 1;
-        } elif (_shabda_is_ws(ch) == 1 || ch == 33 || ch == 63) {
+            inword = 0;
+        } elif (ch == 38) {
+            # '&' is the word "and".
+            if (_shabda_sb_len(sb) != 0 && _shabda_sb_last(sb) != 32) { _shabda_sb_push_byte_a(a, sb, 32); }
+            _shabda_sb_push_cstr_a(a, sb, "and");
             prev_space = 1;
+            inword = 0;
+        } elif (_shabda_is_ws(ch) == 1) {
+            prev_space = 1;
+            inword = 0;
         }
         i = i + 1;
     }
@@ -1106,8 +1619,9 @@ fn _shabda_normalize_token_into_a(a, token, sb): i64 {
 }
 
 # Normalizes text for G2P: expands abbreviations, acronyms and numbers, lowercases, keeps the
-# comma / period pause markers, strips non-alphabetic characters (keeping spaces, apostrophes and
-# hyphens) and collapses runs of spaces. (Rust normalize)
+# comma / period pause markers (',' is a comma pause; '.', ';', '!' and '?' a period pause,
+# one per run of them), reads '&' as "and", strips the other non-alphabetic characters (keeping
+# spaces, apostrophes and hyphens) and collapses runs of spaces. (Rust normalize)
 #must_use
 fn shabda_normalize(text): cstring {
     return _shabda_normalize_a(default_alloc(), text);
@@ -1126,22 +1640,36 @@ fn _shabda_normalize_a(a, text): cstring {
     var i = 0;
     var ch = 0;
     var prev_space = 0;
+    var inword = 0;          # the last code point kept was a letter or a mark
     while (i < n) {
         ch = vec_get(cps, i);
-        if (_shabda_is_alpha(ch) == 1 || ch == 39 || ch == 45) {
+        var mark = inword & _shabda_is_mark(ch);
+        if (_shabda_is_alpha(ch) == 1 || ch == 39 || ch == 45 || mark == 1) {
             if (prev_space == 1 && _shabda_sb_len(sb) != 0) {
                 _shabda_sb_push_byte_a(a, sb, 32);
             }
             _shabda_sb_push_cp_a(a, sb, _shabda_to_lower_cp(ch));
             prev_space = 0;
+            inword = (ch != 39) & (ch != 45);
         } elif (ch == 44) {
-            _shabda_sb_push_cstr_a(a, sb, " ,pause");
+            _shabda_push_pause_a(a, sb, SHABDA_COMMA_PAUSE);
             prev_space = 1;
-        } elif (ch == 46 || ch == 59) {
-            _shabda_sb_push_cstr_a(a, sb, " .pause");
+            inword = 0;
+        } elif (ch == 46 || ch == 59 || ch == 33 || ch == 63) {
+            # '!' and '?' end a sentence as '.' does; through 3.1.2 they made no pause,
+            # so "Really? Yes." ran the two sentences together.
+            _shabda_push_pause_a(a, sb, SHABDA_PERIOD_PAUSE);
             prev_space = 1;
-        } elif (_shabda_is_ws(ch) == 1 || ch == 33 || ch == 63) {
+            inword = 0;
+        } elif (ch == 38) {
+            # '&' is the word "and".
+            if (_shabda_sb_len(sb) != 0 && _shabda_sb_last(sb) != 32) { _shabda_sb_push_byte_a(a, sb, 32); }
+            _shabda_sb_push_cstr_a(a, sb, "and");
             prev_space = 1;
+            inword = 0;
+        } elif (_shabda_is_ws(ch) == 1) {
+            prev_space = 1;
+            inword = 0;
         }
         i = i + 1;
     }
@@ -1189,7 +1717,8 @@ fn _shabda_normalize_with_emphasis_a(a, text): cstring {
             var allalpha = 1;
             var k = 0;
             while (k < im) {
-                if (_shabda_is_alpha(vec_get(icps, k)) == 0) { allalpha = 0; }
+                var ic = vec_get(icps, k);
+                if (_shabda_is_alpha(ic) == 0 && (k == 0 || _shabda_is_mark(ic) == 0)) { allalpha = 0; }
                 k = k + 1;
             }
             if (im > 0 && allalpha == 1) {

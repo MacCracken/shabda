@@ -12,7 +12,7 @@ cyrius test                              # run tests/*.tcyr
 
 - `src/main.cyr` — entry point. Top-level `var r = main(); syscall(SYS_EXIT, r);`.
 - `tests/` — test suite (`.tcyr` files, auto-discovered by `cyrius test`).
-- `rust-old/` — original Rust source preserved for parity checks. Do not modify; it's the reference oracle.
+- `rust-old/` — original Rust source, the list of capabilities the port must have. Do not modify it. It is not the oracle: accuracy decides whether a result is right ([ADR-0002](../adr/0002-accuracy-over-rust-parity.md)).
 
 ## Adding a feature
 

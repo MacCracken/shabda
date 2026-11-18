@@ -131,8 +131,10 @@ test_group("unclosed tag is parse error");
 assert_eq(shabda_ssml_parse("hello <break "), 0, "unclosed -> 0");
 
 test_group("break default duration");
+# SSML 1.1 §3.2.3: strength "medium" is the default value. Through 3.1.2 this pinned
+# 300 ms while strength="medium" gave 400.
 var nd = shabda_ssml_parse("<break/>");
-assert_eq(shabda_ssml_node_duration(vec_get(nd, 0)), 300, "default 300ms");
+assert_eq(shabda_ssml_node_duration(vec_get(nd, 0)), 400, "default = medium = 400ms");
 
 test_group("single-quoted attr");
 var nq = shabda_ssml_parse("<break time='250ms'/>");
@@ -206,6 +208,75 @@ var na = shabda_ssml_parse("<break\xC2\xA0time=\"100ms\"/>");
 assert_eq(vec_len(na), 1, "NBSP-separated attrs still parse as one node");
 assert_eq(shabda_ssml_node_tag(vec_get(na, 0)), SHABDA_SSML_BREAK, "tag name is 'break', not 'break\u00A0time=...'");
 assert_eq(shabda_ssml_node_duration(vec_get(na, 0)), 100, "its time attr was read");
+
+# ================================================================
+# accuracy: SSML 1.1 and XML 1.0
+# ================================================================
+# Node count, and node i's text (1 if it is a Text node reading `lit`).
+fn _n(nodes): i64 { if (nodes == 0) { return 0 - 1; } return vec_len(nodes); }
+test_group("accuracy: the XML declaration, comments, CDATA and DOCTYPE are not elements");
+# Through 3.1.2 each opened an "unknown element" that ran to the end of the input, of
+# which only the first node was kept.
+var x1 = shabda_ssml_parse("<?xml version=\"1.0\"?><speak>Hello <break/> world.</speak>");
+assert_eq(_n(x1), 3, "declaration skipped: hello, break, world");
+assert_eq(_text_is(vec_get(x1, 2), "world."), 1, "the text after the break survives");
+var x2 = shabda_ssml_parse("<speak>a <!-- note <b> --> b <break/> c</speak>");
+assert_eq(_n(x2), 4, "comment skipped, markup inside it ignored");
+var x3 = shabda_ssml_parse("<speak><![CDATA[x < y]]> z</speak>");
+assert_eq(_text_is(vec_get(x3, 0), "x < y"), 1, "CDATA is text, as written");
+var x4 = shabda_ssml_parse("<!DOCTYPE speak [ <!ENTITY e \"v\"> ]><speak>q</speak>");
+assert_eq(_n(x4), 1, "DOCTYPE with an internal subset skipped");
+assert_eq(shabda_ssml_parse("a <!-- never closed"), 0, "an unclosed comment is a parse error");
+
+test_group("accuracy: an unknown element keeps all of its content");
+var u1 = shabda_ssml_parse("<speak><p><s>One.</s><s>Two.</s></p> after</speak>");
+assert_eq(_n(u1), 3, "p / s: three text runs (was one)");
+assert_eq(_text_is(vec_get(u1, 1), "Two."), 1, "the second sentence survives");
+var u2 = shabda_ssml_parse("<say-as interpret-as=\"date\">a <break time=\"1s\"/> b</say-as>");
+assert_eq(_n(u2), 3, "say-as content: text, break, text");
+
+test_group("accuracy: character and entity references");
+var r1 = shabda_ssml_parse("AT&amp;T &lt;3&gt; &quot;q&quot; &apos;s caf&#233; &#x259;");
+assert_eq(_text_is(vec_get(r1, 0), "AT&T <3> \"q\" 's café ə"), 1, "the five entities and numeric refs");
+var r2 = shabda_ssml_parse("a &bogus; &#xZZ; &#0; & b");
+assert_eq(_text_is(vec_get(r2, 0), "a &bogus; &#xZZ; &#0; & b"), 1, "malformed refs are kept as written");
+var r3 = shabda_ssml_parse("<phoneme ph=\"t&#x259;\"/>");
+assert_eq(_text_is(vec_get(r3, 0), "tə"), 1, "references in attribute values");
+
+test_group("accuracy: attribute syntax");
+assert_eq(_brk("<break time = \"200ms\"/>"), 200, "white space around '=' (XML 1.0 Eq)");
+assert_eq(_brk("<break xtime=\"9s\" time=\"20ms\"/>"), 20, "xtime is not time");
+
+test_group("accuracy: break time designations (SSML 1.1 §3.3.1.1)");
+assert_eq(_brk("<break time=\".5s\"/>"), 500, ".5s");
+assert_eq(_brk("<break time=\"+1.5s\"/>"), 1500, "+1.5s");
+assert_eq(_brk("<break time=\"1.5ms\"/>"), 1, "1.5ms is a real number (was a parse error)");
+assert_eq(_brk("<break time=\"+250ms\"/>"), 250, "+250ms");
+assert_eq(_brk("<break strength=\"medium\"/>"), 400, "medium");
+assert_eq(_brk("<break strength=\"bogus\"/>"), 400, "an unknown strength is the default, medium");
+assert_eq(_brk("<break strength=\"none\"/>"), 0, "none: no break");
+
+test_group("accuracy: emphasis level none");
+var em = shabda_ssml_parse("<emphasis level=\"none\">x</emphasis>");
+assert_eq(shabda_ssml_node_level(vec_get(em, 0)), SHABDA_EMPH_NONE, "none (was moderate)");
+assert_eq(shabda_emphasis_level_decode(shabda_emphasis_level_encode(SHABDA_EMPH_NONE)), SHABDA_EMPH_NONE,
+  "none round-trips");
+
+test_group("accuracy: prosody rate percentages (SSML 1.1 §3.2.4)");
+var pp = shabda_ssml_parse("<prosody rate=\"150%\">fast</prosody>");
+assert_eq(shabda_ssml_node_rate(vec_get(pp, 0)), SHABDA_RATE_PERCENT, "150% -> a percentage");
+assert_eq(shabda_ssml_node_rate_percent(vec_get(pp, 0)), f64_from(150), "150");
+var pp2 = shabda_ssml_parse("<prosody rate=\"62.5%\">x</prosody>");
+assert_eq(shabda_ssml_node_rate_percent(vec_get(pp2, 0)), f64_div(f64_from(125), f64_from(2)), "62.5");
+var pp3 = shabda_ssml_parse("<prosody rate=\"+10%\">x</prosody>");
+assert_eq(shabda_ssml_node_rate(vec_get(pp3, 0)), SHABDA_RATE_NONE, "signed (SSML 1.0 relative) is not a multiplier");
+assert_eq(shabda_ssml_node_rate_percent(vec_get(shabda_ssml_parse("<prosody>x</prosody>"), 0)), f64_from(100),
+  "no rate: 100%");
+var ppc = shabda_ssml_node_clone(vec_get(pp, 0));
+assert_eq(shabda_ssml_node_eq(ppc, vec_get(pp, 0)), 1, "clone keeps the percentage");
+assert_eq(shabda_ssml_node_eq(vec_get(pp2, 0), vec_get(pp, 0)), 0, "62.5% != 150%");
+assert_eq(shabda_speaking_rate_decode(shabda_speaking_rate_encode(SHABDA_RATE_PERCENT)), SHABDA_RATE_PERCENT,
+  "percent round-trips");
 
 var rc = assert_summary();
 syscall(SYS_EXIT, rc);

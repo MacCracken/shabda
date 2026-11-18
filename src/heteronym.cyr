@@ -121,7 +121,8 @@ fn shabda_heteronym_rule_eq(a, b): i64 {
 # ================================================================
 # Heteronym table — Rust's `static HETERONYMS`. Built once, cached.
 #
-# Convention: variant 0 = default/most-common; variant 1 = context-triggered.
+# Each rule names its default and its context variant by their index in the
+# word's dictionary entry (see the note at the top of _shabda_het_build).
 # ================================================================
 var _SHABDA_HET_TABLE = 0;
 
@@ -131,21 +132,31 @@ var _SHABDA_HET_TABLE = 0;
 fn _shabda_het_build(): i64 {
     var rules = vec_new();
 
+    # Variant indices are positions in the dictionary entry, in shabdakosh's order
+    # (CMUdict's): read = [/riːd/, /rɛd/], lead = [/liːd/, /lɛd/], tear = [/tɛr/,
+    # /tɪr/], bow = [/baʊ/, /boʊ/], record / refuse / produce = [verb, noun]. Through
+    # 3.1.2 these seven rules assumed default-first and picked the other sense in
+    # every context ("I will read" said /rɛd/). tests/heteronym.tcyr checks each
+    # rule's two picks against the real dictionary.
+    #
     # read: default = past /rɛd/, triggers = present /riːd/
     var t_read = vec_new();
     vec_push(t_read, "to");     vec_push(t_read, "will");   vec_push(t_read, "can");
     vec_push(t_read, "could");  vec_push(t_read, "should"); vec_push(t_read, "would");
     vec_push(t_read, "may");    vec_push(t_read, "might");  vec_push(t_read, "must");
     vec_push(t_read, "please"); vec_push(t_read, "let's");  vec_push(t_read, "shall");
-    vec_push(rules, shabda_heteronym_rule_new("read", 0, 1, t_read));
+    vec_push(rules, shabda_heteronym_rule_new("read", 1, 0, t_read));
 
-    # lead: default = metal /lɛd/, triggers = verb /liːd/
+    # lead: /liːd/ by default as well as after the verb triggers. The verb and the
+    # nouns for a position and a leash are all /liːd/, and far commoner in running
+    # text than the metal /lɛd/, which only a following word tells apart ("made of
+    # lead", "lead pipe") and the preceding-word window cannot see (3.1.3).
     var t_lead = vec_new();
     vec_push(t_lead, "to");     vec_push(t_lead, "will");   vec_push(t_lead, "can");
     vec_push(t_lead, "could");  vec_push(t_lead, "should"); vec_push(t_lead, "would");
     vec_push(t_lead, "may");    vec_push(t_lead, "might");  vec_push(t_lead, "must");
     vec_push(t_lead, "shall");
-    vec_push(rules, shabda_heteronym_rule_new("lead", 0, 1, t_lead));
+    vec_push(rules, shabda_heteronym_rule_new("lead", 0, 0, t_lead));
 
     # live: default = verb /lɪv/, triggers = adjective /laɪv/
     var t_live = vec_new();
@@ -165,13 +176,15 @@ fn _shabda_het_build(): i64 {
     var t_tear = vec_new();
     vec_push(t_tear, "to");    vec_push(t_tear, "will");  vec_push(t_tear, "can");
     vec_push(t_tear, "could"); vec_push(t_tear, "don't"); vec_push(t_tear, "didn't");
-    vec_push(rules, shabda_heteronym_rule_new("tear", 0, 1, t_tear));
+    vec_push(rules, shabda_heteronym_rule_new("tear", 1, 0, t_tear));
 
     # bow: default = weapon /boʊ/, triggers = bend /baʊ/
     var t_bow = vec_new();
+    # Not "a": it precedes the noun in both senses ("a bow and arrow"); "take a bow"
+    # is caught by "take" within the window.
     vec_push(t_bow, "to");   vec_push(t_bow, "will"); vec_push(t_bow, "take");
-    vec_push(t_bow, "took"); vec_push(t_bow, "a");
-    vec_push(rules, shabda_heteronym_rule_new("bow", 0, 1, t_bow));
+    vec_push(t_bow, "took");
+    vec_push(rules, shabda_heteronym_rule_new("bow", 1, 0, t_bow));
 
     # close: default = verb /kloʊz/, triggers = adjective /kloʊs/
     var t_close = vec_new();
@@ -185,7 +198,7 @@ fn _shabda_het_build(): i64 {
     vec_push(t_record, "to");     vec_push(t_record, "will");   vec_push(t_record, "can");
     vec_push(t_record, "could");  vec_push(t_record, "should"); vec_push(t_record, "would");
     vec_push(t_record, "must");   vec_push(t_record, "please");
-    vec_push(rules, shabda_heteronym_rule_new("record", 0, 1, t_record));
+    vec_push(rules, shabda_heteronym_rule_new("record", 1, 0, t_record));
 
     # present: default = noun /prɛzənt/, triggers = verb /prɪzɛnt/
     var t_present = vec_new();
@@ -199,14 +212,14 @@ fn _shabda_het_build(): i64 {
     vec_push(t_refuse, "to");     vec_push(t_refuse, "will");   vec_push(t_refuse, "can");
     vec_push(t_refuse, "could");  vec_push(t_refuse, "should"); vec_push(t_refuse, "would");
     vec_push(t_refuse, "must");   vec_push(t_refuse, "i");
-    vec_push(rules, shabda_heteronym_rule_new("refuse", 0, 1, t_refuse));
+    vec_push(rules, shabda_heteronym_rule_new("refuse", 1, 0, t_refuse));
 
     # produce: default = noun /proʊduːs/, triggers = verb /prədjuːs/
     var t_produce = vec_new();
     vec_push(t_produce, "to");     vec_push(t_produce, "will");   vec_push(t_produce, "can");
     vec_push(t_produce, "could");  vec_push(t_produce, "should"); vec_push(t_produce, "would");
     vec_push(t_produce, "must");
-    vec_push(rules, shabda_heteronym_rule_new("produce", 0, 1, t_produce));
+    vec_push(rules, shabda_heteronym_rule_new("produce", 1, 0, t_produce));
 
     # object: default = noun /ɒbdʒɛkt/, triggers = verb /əbdʒɛkt/
     var t_object = vec_new();
@@ -239,14 +252,17 @@ fn _shabda_het_build(): i64 {
 
     # minute: default = time /mɪnɪt/, triggers = adjective /maɪnjuːt/
     var t_minute = vec_new();
-    vec_push(t_minute, "a");   vec_push(t_minute, "the");  vec_push(t_minute, "very");
+    # Degree words only. "a" and "the" precede the noun far more often than the
+    # adjective, so "wait a minute" said /maɪˈnjuːt/.
+    vec_push(t_minute, "very");
     vec_push(t_minute, "most"); vec_push(t_minute, "so");  vec_push(t_minute, "how");
     vec_push(t_minute, "extremely");
     vec_push(rules, shabda_heteronym_rule_new("minute", 0, 1, t_minute));
 
     # bass: default = music /beɪs/, triggers = fish /bæs/
     var t_bass = vec_new();
-    vec_push(t_bass, "a");     vec_push(t_bass, "the");    vec_push(t_bass, "caught");
+    # Not "a" / "the": both senses take them ("the bass guitar" said the fish).
+    vec_push(t_bass, "caught");
     vec_push(t_bass, "fishing"); vec_push(t_bass, "lake"); vec_push(t_bass, "sea");
     vec_push(t_bass, "striped"); vec_push(t_bass, "largemouth");
     vec_push(rules, shabda_heteronym_rule_new("bass", 0, 1, t_bass));

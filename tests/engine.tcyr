@@ -660,6 +660,8 @@ _check_a(ar, en_a, "I read the book yesterday, and they will lead the way.", o_d
 _check_a(ar, en_a, "The café served a jalapeño to the naïve critic.", o_def,
   "foreign words through strip_diacritics");
 _check_a(ar, en_a, "zxqv blorptastic unfrobbing", o_def, "unknown words through the letter-to-sound rules");
+_check_a(ar, en_a, "Since 1999, at 3:05, 50% of the 1990s FBI staff paid $5 million, e.g. U.S. plan b, 1st & 21st?!",
+  o_def, "ordinals, currency, times, years, letter names, pauses");
 # Each of these breaks an English phonotactic limit, so validation builds its
 # message; through str_cstr that message was copied onto the default heap.
 _check_a(ar, en_a, "The abstract was explained proudly.", o_def, "phonotactic violations");
@@ -714,6 +716,135 @@ assert_eq(_shabda_dict_lookup_all_a(ar, dl_dict, "cow"), 0, "lookup_all of a mis
 var dl_u = alloc_used();
 var dl_hit = _shabda_dict_lookup_a(ar, dl_dict, "cat");
 assert_eq(alloc_used() - dl_u, 0, "a lowercase lookup keeps nothing on the default heap");
+
+test_group("3.1.3: the English rules map ARPABET as shabdakosh does");
+# The rule table writes its outputs in ARPABET; each symbol must name the phoneme
+# shabdakosh gives the same symbol in a CMUdict entry, or the rules and the dictionary
+# would disagree on one sound.
+var ARP_COUNT = 0;
+# Symbols in the space-separated `syms` whose rules phoneme differs from shabdakosh's.
+fn _arp_mismatches(syms): i64 {
+    var n = strlen(syms);
+    var buf = alloc(8);
+    var bad = 0;
+    var i = 0;
+    while (i < n) {
+        var j = i;
+        while (j < n && load8(syms + j) != 32) { j = j + 1; }
+        memcpy(buf, syms + i, j - i);
+        store8(buf + j - i, 0);
+        if (_shabda_en_arpabet(buf, j - i) != shbdk_arpabet_to_phoneme_with_stress(buf)) { bad = bad + 1; }
+        ARP_COUNT = ARP_COUNT + 1;
+        i = j + 1;
+    }
+    return bad;
+}
+var arp_bad = _arp_mismatches("AA1 AE1 AH0 AH1 AH2 AO1 AW1 AY1 EH1 ER0 ER1 EY1 IH0 IH1 IY0 IY1 OW1 OY1 UH1 UW1");
+arp_bad = arp_bad + _arp_mismatches("B CH D DH F G HH JH K L M N NG P R S SH T TH V W Y Z ZH");
+assert_eq(ARP_COUNT, 44, "44 ARPABET symbols checked");
+assert_eq(arp_bad, 0, "every one maps to shabdakosh's phoneme");
+
+# ================================================================
+# accuracy: the conversion says what the text says
+# ================================================================
+# The non-silence phonemes of an event vec.
+fn _phones(events): i64 {
+    var out = vec_new();
+    var i = 0;
+    while (i < vec_len(events)) {
+        var p = SvPhonemeEvent_phoneme(vec_get(events, i));
+        if (p != SVARA_PH_SILENCE) { vec_push(out, p); }
+        i = i + 1;
+    }
+    return out;
+}
+fn _ipa_of(g, text): cstring { return shbdk_phonemes_to_ipa(_phones(_conv(g, text))); }
+# The stress of the n-th vowel event (0-based), or -1.
+fn _vowel_stress(events, n): i64 {
+    var vi = 0;
+    var i = 0;
+    while (i < vec_len(events)) {
+        var e = vec_get(events, i);
+        var c = svara_phoneme_class(SvPhonemeEvent_phoneme(e));
+        if (c == SVARA_CLASS_VOWEL || c == SVARA_CLASS_DIPHTHONG) {
+            if (vi == n) { return SvPhonemeEvent_stress(e); }
+            vi = vi + 1;
+        }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+test_group("accuracy: accented letters reach the Spanish and German rules");
+# Through 3.1.2 every language stripped them as an English loan word's: "über" was
+# "uber", "niño" "nino".
+var ub = _phones(_conv(g_de, "über"));
+assert_eq(vec_get(ub, 0), SVARA_PH_VOWEL_Y, "über: /y/");
+var nino = _phones(_conv(g_sp, "niño"));
+assert_eq(vec_len(nino), vec_len(shabda_spanish_rules("niño")), "niño: the Spanish rules' own reading");
+assert_eq(vec_get(nino, 2), vec_get(shabda_spanish_rules("niño"), 2), "ñ is not n");
+assert_eq(vec_get(_phones(_conv(g_en, "café")), 0), SVARA_PH_PLOSIVE_K, "English still reads café as a loan");
+
+test_group("accuracy: heteronyms through the engine");
+assert_streq(_ipa_of(g_en, "I will read it"), "aɪwɪlɹiːdɪt", "will read: /riːd/ (was /rɛd/)");
+assert_streq(_ipa_of(g_en, "to lead"), "tuliːd", "to lead: /liːd/ (was /lɛd/)");
+assert_streq(_ipa_of(g_en, "a tear"), "ətɪɹ", "a tear: /tɪr/ (was /tɛr/)");
+assert_streq(_ipa_of(g_en, "wait a minute"), "weɪtəmɪnət", "a minute: /ˈmɪnɪt/ (was /maɪˈnjuːt/)");
+
+test_group("accuracy: English stress through the engine");
+var about = _conv(g_en, "about");
+assert_eq(_vowel_stress(about, 0), SVARA_STRESS_UNSTRESSED, "about: /ə/ unstressed");
+assert_eq(_vowel_stress(about, 1), SVARA_STRESS_PRIMARY, "about: /aʊ/ primary (was /ə/)");
+var begin = _conv(g_en, "begin");
+assert_eq(_vowel_stress(begin, 1), SVARA_STRESS_PRIMARY, "begin: be-GIN");
+var nation = _conv(g_en, "imagination");
+assert_eq(_vowel_stress(nation, 3), SVARA_STRESS_PRIMARY, "imagination: before -tion");
+
+test_group("accuracy: spelled acronyms and lone letters say the letters' names");
+var fbi = _conv(g_en, "FBI");
+assert_streq(shbdk_phonemes_to_ipa(_phones(fbi)), "ɛfbiːaɪ", "FBI: /ɛf biː aɪ/ (was /f b aɪ/)");
+assert_eq(_vowel_stress(fbi, 0), SVARA_STRESS_SECONDARY, "F: secondary");
+assert_eq(_vowel_stress(fbi, 2), SVARA_STRESS_PRIMARY, "I: primary, the last letter");
+assert_streq(_ipa_of(g_en, "the USA"), "ðəjuɛseɪ", "USA: /juː ɛs eɪ/, A is the letter, not the article");
+assert_streq(_ipa_of(g_en, "plan b"), "plænbiː", "a lone letter");
+assert_streq(_ipa_of(g_en, "a cat"), "əkæt", "the article a is still the word");
+
+test_group("accuracy: '?' and '!' end a sentence");
+assert_gt(_count_pauses_over(_conv(g_en, "Really? Yes"), 0.2), 0, "a sentence pause after '?'");
+assert_eq(_count_pauses_over(_conv(g_en, "Wait... ok"), 0.2), 1, "an ellipsis is one pause");
+
+test_group("accuracy: SSML through the engine");
+var x_ev = _ssml(g_en, "<?xml version=\"1.0\"?><speak>one <break/> two three</speak>");
+assert_streq(shbdk_phonemes_to_ipa(_phones(x_ev)), "wʌntuθɹiː", "the XML declaration hides nothing");
+var md = _ssml(g_en, "<emphasis>about</emphasis>");
+assert_eq(_vowel_stress(md, 0), SVARA_STRESS_PRIMARY, "moderate (the default) emphasizes (was nothing)");
+var md_plain = _conv(g_en, "about");
+assert_eq(SvPhonemeEvent_duration(vec_get(md, 1)), SvPhonemeEvent_duration(vec_get(md_plain, 1)),
+  "moderate does not lengthen: that is strong's");
+var nn = _ssml(g_en, "<emphasis level=\"none\">ABOUT</emphasis>");
+assert_eq(_vowel_stress(nn, 0), SVARA_STRESS_UNSTRESSED, "none: no ALL-CAPS emphasis either");
+var r100 = _sum_dur(_ssml(g_en, "<prosody rate=\"100%\">hello world</prosody>"));
+var r200 = _sum_dur(_ssml(g_en, "<prosody rate=\"200%\">hello world</prosody>"));
+var rdef = _sum_dur(_ssml(g_en, "hello world"));
+assert_eq(f64_lt(r200, r100), 1, "200% is faster than 100%");
+assert_eq(f64_lt(f64_sub(r100, rdef), 0.001) & f64_lt(f64_sub(rdef, r100), 0.001), 1, "100% is the default rate");
+assert_streq(shbdk_phonemes_to_ipa(_phones(_ssml(g_en, "<p><s>one</s><s>two</s></p>"))), "wʌntu",
+  "an unknown element keeps all its children");
+
+test_group("accuracy: the Sanskrit and Hindi engines keep the virama and nukta");
+var g_sa2 = shabda_g2p_new(SHABDA_LANG_SANSKRIT);
+var dh_ev = _phones(_conv(g_sa2, "धर्मः"));
+var dh_rules = shabda_sanskrit_rules("धर्मः");
+assert_eq(vec_len(dh_ev), vec_len(dh_rules), "धर्मः: as many phonemes as the rules give");
+var dh_same = 1;
+var dhi = 0;
+while (dhi < vec_len(dh_rules)) {
+    if (vec_get(dh_ev, dhi) != vec_get(dh_rules, dhi)) { dh_same = 0; }
+    dhi = dhi + 1;
+}
+assert_eq(dh_same, 1, "धर्मः: the rules' phonemes (normalize no longer deletes the virama)");
+var bd_ev = _phones(_conv(g_hi, "बड़ा"));
+assert_eq(vec_len(bd_ev), vec_len(shabda_hindi_rules("बड़ा")), "बड़ा: the rules' reading, nukta included");
 
 var rc = assert_summary();
 syscall(SYS_EXIT, rc);

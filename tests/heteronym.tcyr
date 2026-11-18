@@ -37,42 +37,44 @@ assert_eq(shabda_heteronym_lookup("hello"), 0, "hello is unknown");
 assert_eq(shabda_heteronym_lookup("world"), 0, "world is unknown");
 
 # ================================================================
-# test_select_variant_default — no trigger words → default variant (0)
+# test_select_variant_default — no trigger words → default variant (0). "wind" is
+# a default-first rule ([/wɪnd/, /waɪnd/]); "read" is not, see the dictionary group.
 test_group("select variant default");
 var r_read = shabda_heteronym_lookup("read");
-assert_eq(shabda_select_variant(r_read, _words2("the", "book")), 0, "default variant");
+var r_wind = shabda_heteronym_lookup("wind");
+assert_eq(shabda_select_variant(r_wind, _words2("the", "book")), 0, "default variant");
 
 # ================================================================
 # test_select_variant_triggered — "to" triggers non-default variant (1)
 test_group("select variant triggered");
-assert_eq(shabda_select_variant(r_read, _words2("want", "to")), 1, "triggered variant");
+assert_eq(shabda_select_variant(r_wind, _words2("want", "to")), 1, "triggered variant");
 
 # ================================================================
 # test_select_variant_trigger_in_window — "will" within the 3-word lookback
 test_group("select variant trigger in window");
-assert_eq(shabda_select_variant(r_read, _words2("i", "will")), 1, "will triggers");
+assert_eq(shabda_select_variant(r_wind, _words2("i", "will")), 1, "will triggers");
 
 # ================================================================
 # case-insensitive triggering — Rust lowercases each preceding word
 # (prev.to_lowercase()) before matching the (lowercase) trigger table.
 test_group("select variant case insensitive");
-assert_eq(shabda_select_variant(r_read, _words2("want", "TO")), 1, "uppercase TO triggers");
-assert_eq(shabda_select_variant(r_read, _words2("I", "Will")), 1, "mixed-case Will triggers");
+assert_eq(shabda_select_variant(r_wind, _words2("want", "TO")), 1, "uppercase TO triggers");
+assert_eq(shabda_select_variant(r_wind, _words2("I", "Will")), 1, "mixed-case Will triggers");
 
 # ================================================================
 # 3-word lookback window boundary — a trigger farther back than the last
 # 3 preceding words must NOT trigger (Rust .rev().take(3)). Here "to" is the
 # 4th-from-end word, so only ["b","c","d"] are examined → default (0).
 test_group("select variant window boundary");
-assert_eq(shabda_select_variant(r_read, _words4("to", "b", "c", "d")), 0, "trigger outside 3-window is default");
+assert_eq(shabda_select_variant(r_wind, _words4("to", "b", "c", "d")), 0, "trigger outside 3-window is default");
 # trigger exactly at the 3rd-from-end position IS examined → context (1).
-assert_eq(shabda_select_variant(r_read, _words4("x", "to", "c", "d")), 1, "trigger at edge of 3-window triggers");
+assert_eq(shabda_select_variant(r_wind, _words4("x", "to", "c", "d")), 1, "trigger at edge of 3-window triggers");
 
 # ================================================================
 # single preceding word that is a trigger → context variant.
 test_group("select variant single word");
-assert_eq(shabda_select_variant(r_read, _words1("to")), 1, "single trigger word");
-assert_eq(shabda_select_variant(r_read, _words1("book")), 0, "single non-trigger word");
+assert_eq(shabda_select_variant(r_wind, _words1("to")), 1, "single trigger word");
+assert_eq(shabda_select_variant(r_wind, _words1("book")), 0, "single non-trigger word");
 
 # ================================================================
 # serde roundtrip — HeteronymRuleOwned clone + PartialEq (field equality).
@@ -108,17 +110,17 @@ vec_push(prons, shbdk_pronunciation_new(pv0));
 vec_push(prons, shbdk_pronunciation_new(pv1));
 
 # default context ("the","book") → variant 0 → pv0
-var def_ph = shabda_select_phonemes(r_read, _words2("the", "book"), prons);
+var def_ph = shabda_select_phonemes(r_wind, _words2("the", "book"), prons);
 assert_eq(vec_get(def_ph, 0), 10, "default phonemes[0]");
 
 # triggered context ("want","to") → variant 1 → pv1
-var trig_ph = shabda_select_phonemes(r_read, _words2("want", "to"), prons);
+var trig_ph = shabda_select_phonemes(r_wind, _words2("want", "to"), prons);
 assert_eq(vec_get(trig_ph, 0), 20, "triggered phonemes[0]");
 
 # out-of-range fallback: single-pronunciation dict, triggered → falls back to prons[0]
 var prons1 = vec_new();
 vec_push(prons1, shbdk_pronunciation_new(pv0));
-var fb_ph = shabda_select_phonemes(r_read, _words2("want", "to"), prons1);
+var fb_ph = shabda_select_phonemes(r_wind, _words2("want", "to"), prons1);
 assert_eq(vec_get(fb_ph, 0), 10, "fallback to prons[0]");
 
 # ================================================================
@@ -136,6 +138,45 @@ var r_read2 = shabda_heteronym_lookup("read");
 assert_eq(r_read2 != 0, 1, "'read' is a heteronym");
 var ep = shabda_select_phonemes(r_read2, _words2("the", "book"), empty_prons);
 assert_eq(vec_len(ep), 0, "empty pronunciations -> empty phonemes, not a process exit");
+
+# ================================================================
+# accuracy: each rule picks the sense its name says, from the real dictionary
+# ================================================================
+test_group("accuracy: every rule's default and context picks, against shabdakosh's entries");
+# Through 3.1.2 seven rules assumed the default pronunciation is listed first; the
+# dictionary lists read / lead / tear / bow / record / refuse / produce the other way
+# round, so each picked the other sense in every context ("I will read" -> /rɛd/).
+var hd = shbdk_dict_english();
+fn _het_pick(d, word, ctx): cstring {
+    var r = shabda_heteronym_lookup(word);
+    return shbdk_phonemes_to_ipa(shabda_select_phonemes(r, ctx, shbdk_dict_lookup_all(d, word)));
+}
+var no_ctx = _words1("xyzzy");
+assert_streq(_het_pick(hd, "read", no_ctx), "ɹɛd", "read: default past");
+assert_streq(_het_pick(hd, "read", _words2("i", "will")), "ɹiːd", "read: will -> present");
+assert_streq(_het_pick(hd, "lead", no_ctx), "liːd", "lead: default /liːd/, the commoner reading");
+assert_streq(_het_pick(hd, "lead", _words1("to")), "liːd", "lead: to -> verb");
+assert_streq(_het_pick(hd, "tear", _words1("a")), "tɪɹ", "tear: default the eye's");
+assert_streq(_het_pick(hd, "tear", _words1("to")), "tɛɹ", "tear: to -> rip");
+assert_streq(_het_pick(hd, "bow", _words2("a", "long")), "boʊ", "bow: default the weapon, 'a' is no trigger");
+assert_streq(_het_pick(hd, "bow", _words2("take", "a")), "baʊ", "bow: take a -> bend");
+assert_streq(_het_pick(hd, "record", _words1("a")), "ɹɛkɜd", "record: default noun");
+assert_streq(_het_pick(hd, "record", _words1("to")), "ɹɪkɔɹd", "record: to -> verb");
+assert_streq(_het_pick(hd, "refuse", _words1("to")), "ɹɪfjuz", "refuse: to -> verb");
+assert_streq(_het_pick(hd, "produce", no_ctx), "pɹɑdus", "produce: default noun");
+assert_streq(_het_pick(hd, "produce", _words1("to")), "pɹədus", "produce: to -> verb");
+assert_streq(_het_pick(hd, "live", _words1("they")), "lɪv", "live: default verb");
+assert_streq(_het_pick(hd, "live", _words1("go")), "laɪv", "live: go -> adjective");
+assert_streq(_het_pick(hd, "wind", no_ctx), "wɪnd", "wind: default air");
+assert_streq(_het_pick(hd, "close", _words1("too")), "kloʊs", "close: too -> adjective");
+assert_streq(_het_pick(hd, "present", _words1("to")), "pɹɪzɛnt", "present: to -> verb");
+assert_streq(_het_pick(hd, "object", _words1("i")), "əbd͡ʒɛkt", "object: i -> verb");
+assert_streq(_het_pick(hd, "desert", _words1("the")), "dɛzɜt", "desert: default noun");
+assert_streq(_het_pick(hd, "minute", _words2("wait", "a")), "mɪnət", "minute: 'a' is no trigger");
+assert_streq(_het_pick(hd, "minute", _words1("very")), "maɪnut", "minute: very -> adjective");
+assert_streq(_het_pick(hd, "bass", _words2("the", "electric")), "beɪs", "bass: 'the' is no trigger");
+assert_streq(_het_pick(hd, "bass", _words2("caught", "a")), "bæs", "bass: caught -> fish");
+assert_streq(_het_pick(hd, "dove", _words1("she")), "doʊv", "dove: she -> past of dive");
 
 var rc = assert_summary();
 syscall(SYS_EXIT, rc);

@@ -3,7 +3,8 @@
 # The Rust module is #[cfg(feature="varna")]; here it is unconditional. Ports the
 # 5 Rust #[test]s (adapted where the Cyrius test entry can't pull in rules.cyr)
 # plus the inventory has-checks + IPA round-trips called out in the port spec.
-# Every IPA string is asserted byte-for-byte against the Rust oracle.
+# Every IPA string is asserted byte for byte: the symbol varna's inventory uses for the
+# sound, which since 3.1.2 is not always the Rust's (ADR-0002).
 
 include "lib/hisab.cyr"
 include "lib/goonj.cyr"
@@ -36,7 +37,7 @@ _check_in(eng, SVARA_PH_VOWEL_NEAR_I, "ɪ in inv");
 _check_in(eng, SVARA_PH_VOWEL_O, "oʊ in inv");
 _check_in(eng, SVARA_PH_VOWEL_CUP_V, "ʌ in inv");
 _check_in(eng, SVARA_PH_VOWEL_SCHWA, "ə in inv");
-_check_in(eng, SVARA_PH_VOWEL_E, "iː in inv");
+_check_in(eng, SVARA_PH_VOWEL_LONG_I, "iː in inv");
 _check_in(eng, SVARA_PH_VOWEL_U, "uː in inv");
 _check_in(eng, SVARA_PH_VOWEL_OPEN_A, "ɑː in inv");
 _check_in(eng, SVARA_PH_VOWEL_OPEN_O, "ɔː in inv");
@@ -75,7 +76,7 @@ assert_eq(phoneme_has(eng, "ʃ"), 1, "inv has ʃ");
 assert_eq(phoneme_has(eng, "ə"), 1, "inv has ə");
 
 # ================================================================
-# IPA table round-trips a few known phonemes (exact strings vs the Rust oracle).
+# IPA table round-trips a few known phonemes (exact strings).
 test_group("English IPA table exact strings");
 assert_streq(shabda_phoneme_to_ipa(SVARA_PH_VOWEL_A), "ɑː", "VowelA -> ɑː");
 assert_streq(shabda_phoneme_to_ipa(SVARA_PH_VOWEL_SCHWA), "ə", "Schwa -> ə");
@@ -130,7 +131,7 @@ fn _vk3(a, b, c): i64 {
 var cat = _vk3(SVARA_PH_PLOSIVE_K, SVARA_PH_VOWEL_ASH, SVARA_PH_PLOSIVE_T);
 assert_eq(vec_len(shabda_validate_phonemes(cat, eng)), 0, "cat -> all valid");
 var she = vec_new();
-vec_push(she, SVARA_PH_FRIC_SH); vec_push(she, SVARA_PH_VOWEL_E);
+vec_push(she, SVARA_PH_FRIC_SH); vec_push(she, SVARA_PH_VOWEL_LONG_I);
 assert_eq(vec_len(shabda_validate_phonemes(she, eng)), 0, "she -> all valid");
 
 # A phoneme NOT in the English inventory is reported: TapFlap -> ɾ is a valid
@@ -151,30 +152,137 @@ var spo = _vk1(SVARA_PH_VOWEL_O);
 assert_eq(vec_len(shabda_validate_phonemes_for(spo, spa, SHABDA_LANG_SPANISH)), 0, "Spanish o valid in Spanish inv");
 
 # ================================================================
+# The accuracy sweep: Spanish and German rules spell svara's phonemes for the language's
+# own sounds, and each table maps them to varna's symbol (ADR-0002). The Rust's stand-ins
+# now map to their own IPA, so validation reports one that reaches it.
+test_group("accuracy: the Spanish and German stand-ins are retired");
+fn _esde_valid(lang, ph): i64 {
+    return vec_len(shabda_validate_phonemes_for(_vk1(ph), shabda_inventory_for(lang), lang)) == 0;
+}
+assert_streq(shabda_spanish_phoneme_to_ipa(SVARA_PH_VOWEL_A), "a", "Spanish A -> a");
+assert_streq(shabda_spanish_phoneme_to_ipa(SVARA_PH_VOWEL_E), "e", "Spanish E -> e");
+assert_streq(shabda_spanish_phoneme_to_ipa(SVARA_PH_VOWEL_I), "i", "Spanish I -> i");
+assert_streq(shabda_spanish_phoneme_to_ipa(SVARA_PH_VOWEL_U), "u", "Spanish U -> u");
+assert_streq(shabda_spanish_phoneme_to_ipa(SVARA_PH_NASAL_PALATAL), "ɲ", "Spanish ñ -> ɲ");
+assert_streq(shabda_spanish_phoneme_to_ipa(SVARA_PH_FRIC_PALATAL_J), "ɟ͡ʝ", "Spanish ll / y -> varna's ɟ͡ʝ");
+assert_streq(shabda_spanish_phoneme_to_ipa(SVARA_PH_VOWEL_OPEN_A), "ɑ", "OpenA is ɑ (was a)");
+assert_streq(shabda_spanish_phoneme_to_ipa(SVARA_PH_VOWEL_OPEN_E), "ɛ", "OpenE is ɛ (was e)");
+assert_streq(shabda_spanish_phoneme_to_ipa(SVARA_PH_VOWEL_NEAR_I), "ɪ", "NearI is ɪ (was i)");
+assert_streq(shabda_spanish_phoneme_to_ipa(SVARA_PH_VOWEL_CUP_V), "ʌ", "CupV is ʌ (was u)");
+assert_streq(shabda_spanish_phoneme_to_ipa(SVARA_PH_NASAL_NG), "ŋ", "NG is ŋ (was ɲ)");
+assert_streq(shabda_spanish_phoneme_to_ipa(SVARA_PH_FRIC_H), "h", "FricH is h (was x)");
+assert_eq(_esde_valid(SHABDA_LANG_SPANISH, SVARA_PH_VOWEL_A), 1, "Spanish /a/ is in varna's Spanish");
+assert_eq(_esde_valid(SHABDA_LANG_SPANISH, SVARA_PH_VOWEL_E), 1, "Spanish /e/ is in varna's Spanish");
+assert_eq(_esde_valid(SHABDA_LANG_SPANISH, SVARA_PH_VOWEL_I), 1, "Spanish /i/ is in varna's Spanish");
+assert_eq(_esde_valid(SHABDA_LANG_SPANISH, SVARA_PH_VOWEL_U), 1, "Spanish /u/ is in varna's Spanish");
+assert_eq(_esde_valid(SHABDA_LANG_SPANISH, SVARA_PH_NASAL_PALATAL), 1, "Spanish /ɲ/ is in varna's Spanish");
+assert_eq(_esde_valid(SHABDA_LANG_SPANISH, SVARA_PH_FRIC_PALATAL_J), 1, "Spanish /ʝ/ is in varna's Spanish");
+assert_eq(_esde_valid(SHABDA_LANG_SPANISH, SVARA_PH_FRIC_UVULAR_CH), 1, "the jota is in varna's Spanish");
+assert_eq(_esde_valid(SHABDA_LANG_SPANISH, SVARA_PH_VOWEL_CUP_V), 0, "English ʌ is not Spanish");
+assert_eq(_esde_valid(SHABDA_LANG_SPANISH, SVARA_PH_VOWEL_OPEN_E), 0, "English ɛ is not Spanish");
+assert_streq(shabda_german_phoneme_to_ipa(SVARA_PH_APPROX_R), "ɹ", "German APPROX_R is English ɹ (was ʁ)");
+assert_streq(shabda_german_phoneme_to_ipa(SVARA_PH_FRIC_PALATAL_C), "ç", "German ich-Laut -> ç");
+assert_streq(shabda_german_phoneme_to_ipa(SVARA_PH_FRIC_UVULAR_CH), "x", "German ach-Laut (uvular χ) -> x");
+assert_streq(shabda_german_phoneme_to_ipa(SVARA_PH_AFFR_TS), "t͡s", "German z -> t͡s");
+assert_streq(shabda_german_phoneme_to_ipa(SVARA_PH_AFFR_PF), "p͡f", "German pf -> p͡f");
+assert_streq(shabda_german_phoneme_to_ipa(SVARA_PH_VOWEL_FRONT_ROUND_O), "øː", "German long ö -> øː");
+assert_streq(shabda_german_phoneme_to_ipa(SVARA_PH_VOWEL_OPEN_FRONT_ROUND_O), "œ", "German short ö -> œ");
+assert_streq(shabda_german_phoneme_to_ipa(SVARA_PH_VOWEL_OPEN_O), "ɔ", "German short o -> ɔ");
+assert_streq(shabda_german_phoneme_to_ipa(SVARA_PH_VOWEL_NEAR_U), "ʊ", "German short u -> ʊ");
+assert_streq(shabda_german_phoneme_to_ipa(SVARA_PH_VOWEL_A), "a", "German A -> a");
+assert_streq(shabda_german_phoneme_to_ipa(SVARA_PH_VOWEL_OPEN_A), "ɑ", "German OpenA is ɑ (was a)");
+assert_streq(shabda_german_phoneme_to_ipa(SVARA_PH_VOWEL_ASH), "æ", "German Ash is æ (was aː)");
+assert_eq(shabda_german_phoneme_to_ipa(SVARA_PH_DIPH_AU), 0, "German au: not in varna's German, skipped");
+assert_eq(_esde_valid(SHABDA_LANG_GERMAN, SVARA_PH_FRIC_UVULAR_R), 1, "German /ʁ/ is in varna's German");
+assert_eq(_esde_valid(SHABDA_LANG_GERMAN, SVARA_PH_FRIC_PALATAL_C), 1, "German /ç/ is in varna's German");
+assert_eq(_esde_valid(SHABDA_LANG_GERMAN, SVARA_PH_FRIC_UVULAR_CH), 1, "German /x/ is in varna's German");
+assert_eq(_esde_valid(SHABDA_LANG_GERMAN, SVARA_PH_AFFR_TS), 1, "German /t͡s/ is in varna's German");
+assert_eq(_esde_valid(SHABDA_LANG_GERMAN, SVARA_PH_AFFR_PF), 1, "German /p͡f/ is in varna's German");
+assert_eq(_esde_valid(SHABDA_LANG_GERMAN, SVARA_PH_VOWEL_E), 1, "German /eː/ is in varna's German");
+assert_eq(_esde_valid(SHABDA_LANG_GERMAN, SVARA_PH_VOWEL_FRONT_ROUND_O), 1, "German /øː/ is in varna's German");
+assert_eq(_esde_valid(SHABDA_LANG_GERMAN, SVARA_PH_VOWEL_OPEN_FRONT_ROUND_O), 1, "German /œ/ is in varna's German");
+assert_eq(_esde_valid(SHABDA_LANG_GERMAN, SVARA_PH_VOWEL_OPEN_O), 1, "German /ɔ/ is in varna's German");
+assert_eq(_esde_valid(SHABDA_LANG_GERMAN, SVARA_PH_VOWEL_NEAR_U), 1, "German /ʊ/ is in varna's German");
+assert_eq(_esde_valid(SHABDA_LANG_GERMAN, SVARA_PH_APPROX_R), 0, "English ɹ is not German");
+
+# ================================================================
 # Sanskrit delegates consonants to Hindi; overrides schwa + long vowels.
 test_group("Sanskrit delegates to Hindi");
 # Overridden vowels differ from Hindi.
 assert_streq(shabda_sanskrit_phoneme_to_ipa(SVARA_PH_VOWEL_SCHWA), "ɐ", "Skt schwa -> ɐ");
 assert_streq(shabda_hindi_phoneme_to_ipa(SVARA_PH_VOWEL_SCHWA), "ə", "Hindi schwa -> ə");
 assert_streq(shabda_sanskrit_phoneme_to_ipa(SVARA_PH_VOWEL_OPEN_A), "ɐː", "Skt OpenA -> ɐː");
-assert_streq(shabda_sanskrit_phoneme_to_ipa(SVARA_PH_VOWEL_OPEN_E), "eː", "Skt OpenE -> eː");
+assert_streq(shabda_sanskrit_phoneme_to_ipa(SVARA_PH_VOWEL_E), "eː", "Skt E -> eː (the Rust used OpenE)");
 # Shared consonants: identical to Hindi.
 assert_streq(shabda_sanskrit_phoneme_to_ipa(SVARA_PH_PLOSIVE_T), "t̪", "Skt T == Hindi t̪");
 assert_streq(shabda_sanskrit_phoneme_to_ipa(SVARA_PH_AFFR_CH), "t͡ɕ", "Skt Ch == Hindi t͡ɕ");
-assert_streq(shabda_sanskrit_phoneme_to_ipa(SVARA_PH_FRIC_H), "ɦ", "Skt H == Hindi ɦ");
+assert_streq(shabda_sanskrit_phoneme_to_ipa(SVARA_PH_FRIC_GLOTTAL_H), "ɦ", "Skt ɦ == Hindi ɦ");
 assert_streq(shabda_sanskrit_phoneme_to_ipa(SVARA_PH_NASAL_M), "m", "Skt M == Hindi m");
+
+# ================================================================
+# Hindi, Sanskrit and Arabic: each phoneme the rules give is spelled as it sounds,
+# in varna's symbols, so varna's inventory finds it (ADR-0002). Where varna lacks
+# the sound, validation says so rather than the table hiding it.
+test_group("Hindi / Sanskrit / Arabic tables spell the sound");
+fn _hsa_in(lang, ph): i64 {
+    return vec_len(shabda_validate_phonemes_for(_vk1(ph), shabda_inventory_for(lang), lang)) == 0;
+}
+assert_streq(shabda_hindi_phoneme_to_ipa(SVARA_PH_FRIC_GLOTTAL_H), "ɦ", "Hindi ɦ");
+assert_streq(shabda_hindi_phoneme_to_ipa(SVARA_PH_FRIC_H), "h", "Hindi h is h (was the ɦ stand-in)");
+assert_streq(shabda_hindi_phoneme_to_ipa(SVARA_PH_VOWEL_OPEN_E), "ɛː", "Hindi ऐ ɛː (OpenE was e)");
+assert_streq(shabda_hindi_phoneme_to_ipa(SVARA_PH_VOWEL_CUP_V), "ʌ", "Hindi CupV is ʌ (was u)");
+assert_streq(shabda_hindi_phoneme_to_ipa(SVARA_PH_FLAP_RETRO), "ɽ", "Hindi ड़ ɽ");
+var hsa_hi_ok = vec_new();
+vec_push(hsa_hi_ok, SVARA_PH_PLOSIVE_RETRO_T); vec_push(hsa_hi_ok, SVARA_PH_PLOSIVE_RETRO_D);
+vec_push(hsa_hi_ok, SVARA_PH_NASAL_RETRO); vec_push(hsa_hi_ok, SVARA_PH_NASAL_PALATAL);
+vec_push(hsa_hi_ok, SVARA_PH_FRIC_RETRO_S); vec_push(hsa_hi_ok, SVARA_PH_FRIC_GLOTTAL_H);
+vec_push(hsa_hi_ok, SVARA_PH_VOWEL_NEAR_U); vec_push(hsa_hi_ok, SVARA_PH_VOWEL_E);
+var hsa_i = 0;
+while (hsa_i < vec_len(hsa_hi_ok)) {
+    assert_eq(_hsa_in(SHABDA_LANG_HINDI, vec_get(hsa_hi_ok, hsa_i)), 1, "a Hindi rule phoneme is in varna's Hindi");
+    assert_eq(_hsa_in(SHABDA_LANG_SANSKRIT, vec_get(hsa_hi_ok, hsa_i)), 1, "and in varna's Sanskrit");
+    hsa_i = hsa_i + 1;
+}
+assert_eq(_hsa_in(SHABDA_LANG_HINDI, SVARA_PH_VOWEL_OPEN_E), 1, "Hindi ऐ ɛː");
+assert_eq(_hsa_in(SHABDA_LANG_HINDI, SVARA_PH_VOWEL_OPEN_O), 1, "Hindi औ ɔː");
+# varna 2.6.0's Hindi has no /aː/ and no /ɽ/, and its Sanskrit no /h/ (the visarga).
+assert_eq(_hsa_in(SHABDA_LANG_HINDI, SVARA_PH_VOWEL_OPEN_A), 0, "varna's Hindi lacks aː (reported)");
+assert_eq(_hsa_in(SHABDA_LANG_HINDI, SVARA_PH_FLAP_RETRO), 0, "varna's Hindi lacks ɽ (reported)");
+assert_eq(_hsa_in(SHABDA_LANG_SANSKRIT, SVARA_PH_FRIC_H), 0, "varna's Sanskrit lacks h (reported)");
+assert_streq(shabda_sanskrit_phoneme_to_ipa(SVARA_PH_NASAL_N), "n̪", "Sanskrit न is dental n̪");
+assert_eq(_hsa_in(SHABDA_LANG_SANSKRIT, SVARA_PH_NASAL_N), 1, "so varna's Sanskrit finds it (n was flagged)");
+assert_eq(_hsa_in(SHABDA_LANG_SANSKRIT, SVARA_PH_DIPH_AI), 1, "Sanskrit ai ɐi");
+assert_eq(_hsa_in(SHABDA_LANG_SANSKRIT, SVARA_PH_DIPH_AU), 1, "Sanskrit au ɐu");
+assert_eq(_hsa_in(SHABDA_LANG_SANSKRIT, SVARA_PH_VOWEL_OPEN_E), 0, "Sanskrit has no ɛː");
+var hsa_ar_ok = vec_new();
+vec_push(hsa_ar_ok, SVARA_PH_VOWEL_A); vec_push(hsa_ar_ok, SVARA_PH_VOWEL_OPEN_A);
+vec_push(hsa_ar_ok, SVARA_PH_VOWEL_NEAR_I); vec_push(hsa_ar_ok, SVARA_PH_VOWEL_LONG_I);
+vec_push(hsa_ar_ok, SVARA_PH_VOWEL_NEAR_U); vec_push(hsa_ar_ok, SVARA_PH_VOWEL_U);
+vec_push(hsa_ar_ok, SVARA_PH_FRIC_PHARYNGEAL_H); vec_push(hsa_ar_ok, SVARA_PH_FRIC_PHARYNGEAL_A);
+vec_push(hsa_ar_ok, SVARA_PH_PLOSIVE_UVULAR_Q); vec_push(hsa_ar_ok, SVARA_PH_FRIC_UVULAR_CH);
+vec_push(hsa_ar_ok, SVARA_PH_FRIC_UVULAR_R); vec_push(hsa_ar_ok, SVARA_PH_TRILL_ALVEOLAR);
+hsa_i = 0;
+while (hsa_i < vec_len(hsa_ar_ok)) {
+    assert_eq(_hsa_in(SHABDA_LANG_ARABIC, vec_get(hsa_ar_ok, hsa_i)), 1, "an Arabic rule phoneme is in varna's Arabic");
+    hsa_i = hsa_i + 1;
+}
+assert_streq(shabda_arabic_phoneme_to_ipa(SVARA_PH_FRIC_PHARYNGEAL_H), "ħ", "Arabic ħ");
+assert_streq(shabda_arabic_phoneme_to_ipa(SVARA_PH_FRIC_PHARYNGEAL_A), "ʕ", "Arabic ʕ");
+assert_streq(shabda_arabic_phoneme_to_ipa(SVARA_PH_VOWEL_U), "uː", "Arabic U is uː");
+assert_eq(_hsa_in(SHABDA_LANG_ARABIC, SVARA_PH_PLOSIVE_G), 0, "MSA has no /ɡ/ (G was the ɣ stand-in)");
 
 # ================================================================
 # German / Hindi / Arabic exact-string spot checks (parity-critical).
 test_group("other-language IPA spot checks");
-assert_streq(shabda_german_phoneme_to_ipa(SVARA_PH_APPROX_R), "ʁ", "German R -> ʁ");
+assert_streq(shabda_german_phoneme_to_ipa(SVARA_PH_FRIC_UVULAR_R), "ʁ", "German uvular R -> ʁ");
 assert_streq(shabda_german_phoneme_to_ipa(SVARA_PH_VOWEL_O), "oː", "German O -> oː");
-assert_streq(shabda_hindi_phoneme_to_ipa(SVARA_PH_VOWEL_OPEN_A), "ɛː", "Hindi OpenA -> ɛː");
+assert_streq(shabda_hindi_phoneme_to_ipa(SVARA_PH_VOWEL_OPEN_A), "ɑː", "Hindi OpenA -> ɑː (was ɛː)");
 assert_streq(shabda_hindi_phoneme_to_ipa(SVARA_PH_FRIC_V), "ʋ", "Hindi V -> ʋ");
-assert_streq(shabda_arabic_phoneme_to_ipa(SVARA_PH_PLOSIVE_G), "ɣ", "Arabic G -> ɣ");
+assert_streq(shabda_arabic_phoneme_to_ipa(SVARA_PH_FRIC_UVULAR_R), "ɣ", "Arabic ʁ -> ɣ (G was ɣ)");
 assert_streq(shabda_arabic_phoneme_to_ipa(SVARA_PH_GLOTTAL_STOP), "ʔ", "Arabic glottal -> ʔ");
-assert_streq(shabda_spanish_phoneme_to_ipa(SVARA_PH_APPROX_R), "rr", "Spanish R -> rr");
-assert_streq(shabda_spanish_phoneme_to_ipa(SVARA_PH_FRIC_H), "x", "Spanish H -> x");
+assert_streq(shabda_spanish_phoneme_to_ipa(SVARA_PH_TRILL_ALVEOLAR), "r", "Spanish trill -> r");
+assert_streq(shabda_spanish_phoneme_to_ipa(SVARA_PH_TAP_FLAP), "ɾ", "Spanish tap -> ɾ");
+assert_streq(shabda_spanish_phoneme_to_ipa(SVARA_PH_FRIC_UVULAR_CH), "x", "Spanish jota (uvular χ) -> x");
 
 # ================================================================
 # phonotactics_for: English -> a handle; other langs -> 0 (None).
@@ -232,6 +340,29 @@ var coda_of = _vk7(
 var co = shabda_validate_phonotactics(coda_of, SHABDA_LANG_ENGLISH);
 assert_eq(vec_len(co), 1, "coda overflow -> 1 violation");
 assert_streq(vec_get(co, 0), "consonant cluster too long for coda: tttttt", "coda overflow message");
+
+# ================================================================
+# 3.1.2: VOWEL_E is /e/ in every table, /iː/ is VOWEL_LONG_I, and the Spanish rhotics
+# are IPA's, so each accurate phoneme is found in varna's inventory.
+test_group("3.1.2: the stand-ins are retired");
+assert_streq(shabda_phoneme_to_ipa(SVARA_PH_VOWEL_E), "e", "English E -> e (was iː)");
+assert_streq(shabda_german_phoneme_to_ipa(SVARA_PH_VOWEL_LONG_I), "iː", "German LONG_I -> iː");
+assert_streq(shabda_german_phoneme_to_ipa(SVARA_PH_VOWEL_Y), "yː", "German Y -> yː");
+assert_streq(shabda_german_phoneme_to_ipa(SVARA_PH_VOWEL_E), "eː", "German E -> eː, the tense e (was iː, then e)");
+assert_streq(shabda_hindi_phoneme_to_ipa(SVARA_PH_VOWEL_LONG_I), "iː", "Hindi LONG_I -> iː");
+assert_streq(shabda_hindi_phoneme_to_ipa(SVARA_PH_VOWEL_E), "e", "Hindi E -> e (was iː)");
+assert_streq(shabda_sanskrit_phoneme_to_ipa(SVARA_PH_VOWEL_LONG_I), "iː", "Sanskrit LONG_I -> iː");
+assert_streq(shabda_spanish_phoneme_to_ipa(SVARA_PH_APPROX_R), "ɹ", "Spanish APPROX_R is English ɹ (was rr)");
+fn _valid_in(lang, ph): i64 {
+    return vec_len(shabda_validate_phonemes_for(_vk1(ph), shabda_inventory_for(lang), lang)) == 0;
+}
+assert_eq(_valid_in(SHABDA_LANG_SPANISH, SVARA_PH_TRILL_ALVEOLAR), 1, "the Spanish trill is in varna's Spanish");
+assert_eq(_valid_in(SHABDA_LANG_SPANISH, SVARA_PH_TAP_FLAP), 1, "the Spanish tap is in varna's Spanish");
+assert_eq(_valid_in(SHABDA_LANG_GERMAN, SVARA_PH_VOWEL_LONG_I), 1, "German /iː/ is in varna's German");
+assert_eq(_valid_in(SHABDA_LANG_GERMAN, SVARA_PH_VOWEL_Y), 1, "German /yː/ is in varna's German");
+assert_eq(_valid_in(SHABDA_LANG_HINDI, SVARA_PH_VOWEL_LONG_I), 1, "Hindi /iː/ is in varna's Hindi");
+assert_eq(_valid_in(SHABDA_LANG_SANSKRIT, SVARA_PH_VOWEL_LONG_I), 1, "Sanskrit /iː/ is in varna's Sanskrit");
+assert_eq(_valid_in(SHABDA_LANG_ENGLISH, SVARA_PH_VOWEL_E), 0, "English has no /e/, and says so");
 
 var rc = assert_summary();
 syscall(SYS_EXIT, rc);

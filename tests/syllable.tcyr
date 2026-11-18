@@ -149,17 +149,22 @@ assert_eq(vec_get(shabda_syllable_coda(pk0), 0), SVARA_PH_PLOSIVE_P, "pk syl0 co
 assert_eq(vec_len(shabda_syllable_onset(pk1)), 1, "pk syl1 onset len 1");
 assert_eq(vec_get(shabda_syllable_onset(pk1), 0), SVARA_PH_PLOSIVE_K, "pk syl1 onset = K");
 
-# rising sonority whole-cluster onset: æ t l ə : [t l] sonority 1,4 rises ->
-# whole cluster is a legal onset, so coda1 empty, onset2 = [t l].
-test_group("MOP: tl (rising cluster to onset)");
+# æ t l ɑ: /tl/ rises in sonority but is no English onset ("atlas" is /ˈæt.ləs/), so
+# English splits it at.la. Through 3.1.2 this test pinned a.tla, the sonority rule's
+# answer, for English too. The sonority rule still gives a.tla where a language
+# allows the cluster (Hindi here).
+test_group("MOP: tl (English splits it, the sonority rule keeps it)");
 var tl = _mk4(SVARA_PH_VOWEL_ASH, SVARA_PH_PLOSIVE_T, SVARA_PH_LATERAL_L, SVARA_PH_VOWEL_A);
 var tlsyls = shabda_syllabify(tl);
 var tl0 = vec_get(tlsyls, 0);
 var tl1 = vec_get(tlsyls, 1);
-assert_eq(vec_len(shabda_syllable_coda(tl0)), 0, "tl syl0 coda empty");
-assert_eq(vec_len(shabda_syllable_onset(tl1)), 2, "tl syl1 onset len 2");
-assert_eq(vec_get(shabda_syllable_onset(tl1), 0), SVARA_PH_PLOSIVE_T, "tl syl1 onset0 = T");
-assert_eq(vec_get(shabda_syllable_onset(tl1), 1), SVARA_PH_LATERAL_L, "tl syl1 onset1 = L");
+assert_eq(vec_len(shabda_syllable_coda(tl0)), 1, "tl syl0 coda len 1");
+assert_eq(vec_get(shabda_syllable_coda(tl0), 0), SVARA_PH_PLOSIVE_T, "tl syl0 coda = T");
+assert_eq(vec_len(shabda_syllable_onset(tl1)), 1, "tl syl1 onset len 1");
+assert_eq(vec_get(shabda_syllable_onset(tl1), 0), SVARA_PH_LATERAL_L, "tl syl1 onset = L");
+var tlh = shabda_syllabify_for(tl, SHABDA_LANG_HINDI);
+assert_eq(vec_len(shabda_syllable_coda(vec_get(tlh, 0))), 0, "SSP: tl syl0 coda empty");
+assert_eq(vec_len(shabda_syllable_onset(vec_get(tlh, 1))), 2, "SSP: tl syl1 onset len 2");
 
 # phonemes() round-trip on a multi-consonant syllable: onset [s t r] ++ [i] ++
 # coda [] flattens in order.
@@ -224,6 +229,96 @@ while (bi < 600) { vec_push(big, SVARA_PH_PLOSIVE_B); bi = bi + 1; }
 vec_push(big, SVARA_PH_VOWEL_A);
 var bsyl = shabda_syllabify(big);
 assert_eq(vec_len(bsyl), 2, "600-consonant cluster between two nuclei -> 2 syllables");
+
+# ================================================================
+# accuracy: sonority for every svara phoneme, and each language's onsets
+# ================================================================
+fn _mk5(a, b, c, d, e): i64 {
+    var v = _mk4(a, b, c, d); vec_push(v, e); return v;
+}
+# Onset length of syllable i of syllabify_for(v, lang).
+fn _onset_len(v, lang, i): i64 {
+    return vec_len(shabda_syllable_onset(vec_get(shabda_syllabify_for(v, lang), i)));
+}
+test_group("accuracy: sonority comes from svara's class, taps are liquids");
+# Through 3.1.2 everything outside the 18 English consonants listed ranked 1.
+assert_eq(_shabda_sonority(SVARA_PH_TAP_FLAP), 4, "tap ɾ is a liquid");
+assert_eq(_shabda_sonority(SVARA_PH_TRILL_ALVEOLAR), 4, "trill r is a liquid");
+assert_eq(_shabda_sonority(SVARA_PH_FLAP_RETRO), 4, "flap ɽ is a liquid");
+assert_eq(_shabda_sonority(SVARA_PH_NASAL_PALATAL), 3, "ɲ is a nasal");
+assert_eq(_shabda_sonority(SVARA_PH_NASAL_RETRO), 3, "ɳ is a nasal");
+assert_eq(_shabda_sonority(SVARA_PH_FRIC_UVULAR_R), 4, "ʁ, German's r, is a liquid");
+assert_eq(_shabda_sonority(SVARA_PH_FRIC_UVULAR_CH), 2, "χ is a fricative");
+assert_eq(_shabda_sonority(SVARA_PH_FRIC_PALATAL_C), 2, "ç is a fricative");
+assert_eq(_shabda_sonority(SVARA_PH_FRIC_PALATAL_J), 2, "ʝ is a fricative");
+assert_eq(_shabda_sonority(SVARA_PH_FRIC_RETRO_S), 2, "ʂ is a fricative");
+assert_eq(_shabda_sonority(SVARA_PH_FRIC_GLOTTAL_H), 2, "ɦ is a fricative");
+assert_eq(_shabda_sonority(SVARA_PH_FRIC_PHARYNGEAL_H), 2, "ħ is a fricative");
+assert_eq(_shabda_sonority(SVARA_PH_FRIC_PHARYNGEAL_A), 2, "ʕ is a fricative");
+assert_eq(_shabda_sonority(SVARA_PH_PLOSIVE_RETRO_D), 1, "ɖ is a stop");
+assert_eq(_shabda_sonority(SVARA_PH_PLOSIVE_UVULAR_Q), 1, "q is a stop");
+assert_eq(_shabda_sonority(SVARA_PH_AFFR_TS), 1, "ts is an affricate");
+assert_eq(_shabda_sonority(SVARA_PH_AFFR_PF), 1, "pf is an affricate");
+assert_eq(_shabda_sonority(SVARA_PH_VOWEL_FRONT_ROUND_O), 6, "ø is a vowel");
+assert_eq(_shabda_sonority(SVARA_PH_VOWEL_OPEN_FRONT_ROUND_O), 6, "œ is a vowel");
+# Every svara phoneme 0..99 gets a rank from 1 to 6.
+var son_ok = 1;
+var sp = 0;
+while (sp < 100) {
+    var sv = _shabda_sonority(sp);
+    if (sv < 1 || sv > 6) { son_ok = 0; }
+    sp = sp + 1;
+}
+assert_eq(son_ok, 1, "0..99 all ranked");
+assert_eq(_shabda_sonority(SVARA_PH_APPROX_RETRO), 5, "ɻ is an approximant");
+assert_eq(_shabda_sonority(SVARA_PH_LATERAL_PALATAL), 4, "ʎ is a lateral");
+assert_eq(_shabda_sonority(SVARA_PH_VOWEL_Y), 6, "y is a vowel");
+assert_eq(_shabda_sonority(SVARA_PH_PLOSIVE_RETRO_T), 1, "ʈ is a stop");
+
+test_group("accuracy: Spanish onsets");
+# otro /otɾo/ -> o.tɾo (was ot.ɾo: the tap ranked with the stops).
+var otro = _mk4(SVARA_PH_VOWEL_O, SVARA_PH_PLOSIVE_T, SVARA_PH_TAP_FLAP, SVARA_PH_VOWEL_O);
+assert_eq(_onset_len(otro, SHABDA_LANG_SPANISH, 1), 2, "otro -> o.tɾo");
+# esto /esto/ -> es.to: Spanish has no s + consonant onset.
+var esto = _mk4(SVARA_PH_VOWEL_E, SVARA_PH_FRIC_S, SVARA_PH_PLOSIVE_T, SVARA_PH_VOWEL_O);
+assert_eq(_onset_len(esto, SHABDA_LANG_SPANISH, 1), 1, "esto -> es.to");
+# hablar /aβlaɾ/ with b: a.bla; atlas -> at.las.
+var abla = _mk4(SVARA_PH_VOWEL_A, SVARA_PH_PLOSIVE_B, SVARA_PH_LATERAL_L, SVARA_PH_VOWEL_A);
+assert_eq(_onset_len(abla, SHABDA_LANG_SPANISH, 1), 2, "abla -> a.bla");
+var atla = _mk4(SVARA_PH_VOWEL_A, SVARA_PH_PLOSIVE_T, SVARA_PH_LATERAL_L, SVARA_PH_VOWEL_A);
+assert_eq(_onset_len(atla, SHABDA_LANG_SPANISH, 1), 1, "atla -> at.la");
+# honra /onra/ -> hon.ra: the trill never closes a cluster in Spanish.
+var honra = _mk4(SVARA_PH_VOWEL_O, SVARA_PH_NASAL_N, SVARA_PH_TRILL_ALVEOLAR, SVARA_PH_VOWEL_A);
+assert_eq(_onset_len(honra, SHABDA_LANG_SPANISH, 1), 1, "honra -> on.ra");
+assert_eq(vec_len(shabda_syllable_coda(vec_get(shabda_syllabify_for(honra, SHABDA_LANG_SPANISH), 0))), 1,
+  "honra: n closes the first syllable");
+
+test_group("accuracy: German onsets");
+# Abreise /abʁaɪzə/ -> a.bʁaɪ.zə; Afrika /afʁika/ -> a.fʁi.ka (ʁ ranked 2 split af.ʁi).
+var abr = _mk5(SVARA_PH_VOWEL_A, SVARA_PH_PLOSIVE_B, SVARA_PH_FRIC_UVULAR_R, SVARA_PH_DIPH_AI, SVARA_PH_FRIC_Z);
+vec_push(abr, SVARA_PH_VOWEL_SCHWA);
+assert_eq(_onset_len(abr, SHABDA_LANG_GERMAN, 1), 2, "Abreise -> a.bʁaɪ");
+assert_eq(_onset_len(abr, SHABDA_LANG_GERMAN, 2), 1, "Abreise -> ...ʁaɪ.zə");
+var afr = _mk5(SVARA_PH_VOWEL_A, SVARA_PH_FRIC_F, SVARA_PH_FRIC_UVULAR_R, SVARA_PH_VOWEL_I, SVARA_PH_PLOSIVE_K);
+vec_push(afr, SVARA_PH_VOWEL_A);
+assert_eq(_onset_len(afr, SHABDA_LANG_GERMAN, 1), 2, "Afrika -> a.fʁi");
+
+test_group("accuracy: Arabic onsets are one consonant");
+# madrasa /madrasa/ -> mad.ra.sa (the sonority rule gave ma.dra.sa).
+var madr = _mk5(SVARA_PH_NASAL_M, SVARA_PH_VOWEL_A, SVARA_PH_PLOSIVE_D, SVARA_PH_APPROX_R, SVARA_PH_VOWEL_A);
+assert_eq(_onset_len(madr, SHABDA_LANG_ARABIC, 1), 1, "madra -> mad.ra");
+assert_eq(_onset_len(madr, SHABDA_LANG_HINDI, 1), 2, "the sonority rule: ma.dra");
+
+test_group("accuracy: English onsets");
+# singer /sɪŋɚ/ -> sɪŋ.ɚ: ŋ never begins an English syllable.
+var singer = _mk4(SVARA_PH_FRIC_S, SVARA_PH_VOWEL_NEAR_I, SVARA_PH_NASAL_NG, SVARA_PH_VOWEL_BIRD);
+var sgs = shabda_syllabify_for(singer, SHABDA_LANG_ENGLISH);
+assert_eq(vec_len(shabda_syllable_coda(vec_get(sgs, 0))), 1, "singer: ŋ closes the first syllable");
+assert_eq(vec_len(shabda_syllable_onset(vec_get(sgs, 1))), 0, "singer: second syllable has no onset");
+# astray /əstɹeɪ/ -> ə.stɹeɪ, and the language-free form agrees with English.
+var astray = _mk5(SVARA_PH_VOWEL_SCHWA, SVARA_PH_FRIC_S, SVARA_PH_PLOSIVE_T, SVARA_PH_APPROX_R, SVARA_PH_DIPH_EI);
+assert_eq(_onset_len(astray, SHABDA_LANG_ENGLISH, 1), 3, "astray -> ə.stɹeɪ");
+assert_eq(vec_len(shabda_syllable_onset(vec_get(shabda_syllabify(astray), 1))), 3, "syllabify agrees");
 
 var rc = assert_summary();
 syscall(SYS_EXIT, rc);

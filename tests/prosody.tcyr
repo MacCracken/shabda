@@ -224,5 +224,82 @@ assert_eq(_ev_same(ev_ar, SVARA_PH_VOWEL_A, ev_d, SVARA_STRESS_PRIMARY), 1, "a v
 assert_eq(_ev_same(ev_ar, SVARA_PH_SILENCE, f64_from(0), SVARA_STRESS_UNSTRESSED), 1, "a silence, dirtied arena");
 assert_eq(_ev_same(ev_ar, SVARA_PH_PLOSIVE_K, ev_d, SVARA_STRESS_SECONDARY), 1, "a plosive, dirtied arena");
 
+# ================================================================
+# accuracy: English stress (shabda_assign_stress_english)
+# ================================================================
+# A phoneme vec from up to ten svara ordinals; -1 slots are left out.
+fn _ph(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9): i64 {
+    var v = vec_new();
+    if (a0 >= 0) { vec_push(v, a0); } if (a1 >= 0) { vec_push(v, a1); } if (a2 >= 0) { vec_push(v, a2); }
+    if (a3 >= 0) { vec_push(v, a3); } if (a4 >= 0) { vec_push(v, a4); } if (a5 >= 0) { vec_push(v, a5); }
+    if (a6 >= 0) { vec_push(v, a6); } if (a7 >= 0) { vec_push(v, a7); } if (a8 >= 0) { vec_push(v, a8); }
+    if (a9 >= 0) { vec_push(v, a9); }
+    return v;
+}
+# Index (among vowel events) of the one Primary-stressed vowel, -1 if none, -2 if several.
+fn _primary_vowel(events): i64 {
+    var idx = 0 - 1;
+    var vi = 0;
+    var i = 0;
+    while (i < vec_len(events)) {
+        var e = vec_get(events, i);
+        var c = svara_phoneme_class(SvPhonemeEvent_phoneme(e));
+        if (c == SVARA_CLASS_VOWEL || c == SVARA_CLASS_DIPHTHONG) {
+            if (SvPhonemeEvent_stress(e) == SVARA_STRESS_PRIMARY) {
+                if (idx >= 0) { return 0 - 2; }
+                idx = vi;
+            }
+            vi = vi + 1;
+        }
+        i = i + 1;
+    }
+    return idx;
+}
+fn _en(word, ph): i64 {
+    return _primary_vowel(shabda_assign_stress_english(word, shabda_syllabify(ph), shabda_is_content_word(word)));
+}
+var X_ = 0 - 1;
+var P_SCH = SVARA_PH_VOWEL_SCHWA;
+var P_IH = SVARA_PH_VOWEL_NEAR_I;
+var P_IY = SVARA_PH_VOWEL_LONG_I;
+test_group("accuracy: English stress, CMUdict's primary syllable");
+# The syllabic rule puts these on the first or the antepenult syllable; CMUdict's
+# primary stress is the one asserted. Phonemes are shabdakosh's for each word.
+# rule 1: /ə/ is never stressed — about AH0 B AW1 T
+assert_eq(_en("about", _ph(P_SCH, 21, 16, 22, X_, X_, X_, X_, X_, X_)), 1, "about: ə.ˈbaʊt");
+# abolish AH0 B AA1 L IH0 SH: antepenult is /ə/ -> the next full vowel
+assert_eq(_en("abolish", _ph(P_SCH, 21, 10, 42, P_IH, 30, X_, X_, X_, X_)), 1, "abolish: ə.ˈbɑ.lɪʃ");
+# rule 2: apparently AH0 P EH1 R AH0 N T L IY0 = apparent + -ly (the syllabic rule
+# picked the heavy /ɹənt/, then its /ə/ moved on to -ly)
+assert_eq(_en("apparently", _ph(P_SCH, 20, 11, 43, P_SCH, 36, 22, 42, P_IY, X_)), 1, "apparently: -ly is neutral");
+# rule 3: ability AH0 B IH1 L AH0 T IY0 (-ity)
+assert_eq(_en("ability", _ph(P_SCH, 21, P_IH, 42, P_SCH, 22, P_IY, X_, X_, X_)), 1, "ability: before -ity");
+# rule 3: academic AE2 K AH0 D EH1 M IH0 K (-ic)
+assert_eq(_en("academic", _ph(7, 24, P_SCH, 23, 11, 35, P_IH, 24, X_, X_)), 2, "academic: before -ic");
+# rule 3: abolition AE2 B AH0 L IH1 SH AH0 N (-ion after ʃ)
+assert_eq(_en("abolition", _ph(7, 21, P_SCH, 42, P_IH, 30, P_SCH, 36, X_, X_)), 2, "abolition: before -tion");
+# rule 3: career K ER0 IH1 R (-eer takes the stress)
+assert_eq(_en("career", _ph(24, 13, P_IH, 43, X_, X_, X_, X_, X_, X_)), 1, "career: -eer is stressed");
+# rule 4: begin B IH0 G IH1 N; decide D IH0 S AY1 D
+assert_eq(_en("begin", _ph(21, P_IH, 25, P_IH, 36, X_, X_, X_, X_, X_)), 1, "begin: be- is unstressed");
+assert_eq(_en("decide", _ph(23, P_IH, 28, 15, 23, X_, X_, X_, X_, X_)), 1, "decide: de- is unstressed");
+# ... but not with a full vowel: record (noun) R EH1 K ER0 D, decade D EH1 K EY0 D
+assert_eq(_en("record", _ph(43, 11, 24, 13, 23, X_, X_, X_, X_, X_)), 0, "record (noun): ˈrɛ.kɚd");
+assert_eq(_en("decade", _ph(23, 11, 24, 18, 23, X_, X_, X_, X_, X_)), 0, "decade: ˈdɛ.keɪd");
+# untouched: a plain disyllable and a monosyllable
+assert_eq(_en("abbey", _ph(7, 21, P_IY, X_, X_, X_, X_, X_, X_, X_)), 0, "abbey: ˈæ.bi");
+assert_eq(_en("cat", _ph(24, 7, 22, X_, X_, X_, X_, X_, X_, X_)), 0, "cat");
+# a function word has no primary stress
+assert_eq(_en("about", _ph(P_SCH, 21, 16, 22, X_, X_, X_, X_, X_, X_)), 1, "content word stressed");
+var of_sy = shabda_syllabify(_ph(12, 27, X_, X_, X_, X_, X_, X_, X_, X_));
+assert_eq(_primary_vowel(shabda_assign_stress_english("of", of_sy, 0)), 0 - 1, "function word: no primary");
+assert_eq(vec_len(shabda_assign_stress_english("x", vec_new(), 1)), 0, "no syllables -> no events");
+# same events as the syllabic rule, apart from where the primary goes
+var abo_ev = shabda_assign_stress_english("abbey", shabda_syllabify(_ph(7, 21, P_IY, X_, X_, X_, X_, X_, X_, X_)), 1);
+var abo_sy = shabda_assign_stress_syllabic(shabda_syllabify(_ph(7, 21, P_IY, X_, X_, X_, X_, X_, X_, X_)), 1);
+assert_eq(vec_len(abo_ev), vec_len(abo_sy), "one event per phoneme");
+assert_eq(SvPhonemeEvent_duration(vec_get(abo_ev, 1)), SvPhonemeEvent_duration(vec_get(abo_sy, 1)),
+  "svara's durations");
+
 var rc = assert_summary();
 syscall(SYS_EXIT, rc);

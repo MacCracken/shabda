@@ -303,12 +303,13 @@ fn _shabda_engine_count_script_cps(text, script): i64 {
 # Rust: English -> PronunciationDict::english(); every other language ->
 # PronunciationDict::new() (EMPTY — NOT a language-specific dict).
 #
-# It also builds the three tables a conversion reads that are built once per
-# process and then shared: the heteronym rules and varna's inventory and
-# phonotactics for the language. Through 3.1.1 the first conversion built them,
-# so with shabda_convert_a they would have landed in the caller's Allocator and
-# been reused after it was reset. Built here, on the default heap like the engine,
-# no conversion writes anything outside its Allocator and the event vec it returns.
+# It also builds the tables a conversion reads that are built once per process and
+# then shared: the heteronym rules, varna's inventory and phonotactics for the
+# language, and the English letter-to-sound rules (every language falls back to
+# them). Through 3.1.1 the first conversion built them, so with shabda_convert_a they
+# would have landed in the caller's Allocator and been reused after it was reset.
+# Built here, on the default heap like the engine, no conversion writes anything
+# outside its Allocator and the event vec it returns.
 #must_use
 fn shabda_g2p_new(language): i64 {
     var e = alloc(SHABDA_ENGINE_SIZE);
@@ -321,6 +322,7 @@ fn shabda_g2p_new(language): i64 {
     var _rules = _shabda_het_rules();
     var _inv = shabda_inventory_for(language);
     var _pt = shabda_phonotactics_for(language);
+    var _en = _shabda_en_rules_table();
     return e;
 }
 
@@ -506,6 +508,90 @@ fn _shabda_dict_lookup_all_a(a, d, word): i64 {
 }
 
 # ================================================================
+# Letter names. A spelled-out acronym reaches the engine as one token of letters
+# joined by hyphens ("f-b-i", from shabda_expand_acronyms or a dotted "U.S."), and a
+# lone letter as itself ("plan b"). English says each letter by its name, as CMUdict
+# gives them: /ˌɛf ˌbiː ˈaɪ/. Through 3.1.2 the letters went to the rules one by one,
+# which gave the bare sounds /f b aɪ/.
+# ================================================================
+# The phonemes of the name of lowercase letter `c`, as a cstr of svara ordinals, or 0.
+fn _shabda_letter_name(c): cstring {
+    if (c == 97) { return "\x12"; }                       # a  EY
+    if (c == 98) { return "\x15\x0e"; }                   # b  B IY
+    if (c == 99) { return "\x1c\x0e"; }                   # c  S IY
+    if (c == 100) { return "\x17\x0e"; }                  # d  D IY
+    if (c == 101) { return "\x0e"; }                      # e  IY
+    if (c == 102) { return "\x0b\x1a"; }                  # f  EH F
+    if (c == 103) { return "\x27\x0e"; }                  # g  JH IY
+    if (c == 104) { return "\x12\x26"; }                  # h  EY CH
+    if (c == 105) { return "\x0f"; }                      # i  AY
+    if (c == 106) { return "\x27\x12"; }                  # j  JH EY
+    if (c == 107) { return "\x18\x12"; }                  # k  K EY
+    if (c == 108) { return "\x0b\x2a"; }                  # l  EH L
+    if (c == 109) { return "\x0b\x23"; }                  # m  EH M
+    if (c == 110) { return "\x0b\x24"; }                  # n  EH N
+    if (c == 111) { return "\x13"; }                      # o  OW
+    if (c == 112) { return "\x14\x0e"; }                  # p  P IY
+    if (c == 113) { return "\x18\x2d\x04"; }              # q  K Y UW
+    if (c == 114) { return "\x0a\x2b"; }                  # r  AA R
+    if (c == 115) { return "\x0b\x1c"; }                  # s  EH S
+    if (c == 116) { return "\x16\x0e"; }                  # t  T IY
+    if (c == 117) { return "\x2d\x04"; }                  # u  Y UW
+    if (c == 118) { return "\x1b\x0e"; }                  # v  V IY
+    if (c == 119) { return "\x17\x0c\x15\x05\x2a\x2d\x04"; }   # w  D AH B AH0 L Y UW
+    if (c == 120) { return "\x0b\x18\x1c"; }              # x  EH K S
+    if (c == 121) { return "\x2c\x0f"; }                  # y  W AY
+    if (c == 122) { return "\x1d\x0e"; }                  # z  Z IY
+    return 0;
+}
+
+# 1 if `word` is letters joined by hyphens ("f-b-i"), at least two of them.
+fn _shabda_engine_is_spelled(word): i64 {
+    var n = strlen(word);
+    if (n < 3 || (n % 2) == 0) { return 0; }
+    var k = 0;
+    while (k < n) {
+        var c = load8(word + k);
+        if (c < 97 || c > 122) { return 0; }
+        if (k + 1 < n && load8(word + k + 1) != 45) { return 0; }
+        k = k + 2;
+    }
+    return 1;
+}
+
+# The events of a spelled token, or of a lone letter the dictionary does not have,
+# each letter by its name: the last letter's vowel Primary, the others' Secondary
+# (CMUdict's "F.B.I." EH2 F B IY2 AY1). 0 when `word` is neither.
+#must_use
+fn _shabda_engine_spelled_a(a, dict, word): i64 {
+    var n = strlen(word);
+    if (_shabda_engine_is_spelled(word) == 0) {
+        if (n != 1 || _shabda_letter_name(load8(word)) == 0) { return 0; }
+        if (_shabda_dict_lookup_a(a, dict, word) != 0) { return 0; }   # "a", "i": the words
+    }
+    var events = vec_new_a(a);
+    var k = 0;
+    while (k < n) {
+        var name = _shabda_letter_name(load8(word + k));
+        var first_vowel = 1;
+        var j = 0;
+        while (load8(name + j) != 0) {
+            var ph = load8(name + j);
+            var st = SVARA_STRESS_UNSTRESSED;
+            if (_shabda_prosody_is_vowel_like(ph) == 1 && first_vowel == 1) {
+                st = SVARA_STRESS_SECONDARY;
+                if (k + 2 >= n) { st = SVARA_STRESS_PRIMARY; }
+                first_vowel = 0;
+            }
+            _shabda_vec_push_a(a, events, _shabda_event_new_a(a, ph, svara_phoneme_duration(ph), st));
+            j = j + 1;
+        }
+        k = k + 2;
+    }
+    return events;
+}
+
+# ================================================================
 # LOOKUP (the exact fallback order from engine.rs convert_with).
 # Returns a phonemes vec (owned).
 # ================================================================
@@ -532,7 +618,11 @@ fn _shabda_engine_lookup_a(a, e, word, preceding): i64 {
         return _shabda_engine_copy_vec_a(a, dhit);
     }
 
-    if (_shabda_is_foreign_word_a(a, word) == 1) {
+    # A word with accented Latin letters is a loan word only in English, whose
+    # dictionary and rules are ASCII. In Spanish and German the accents are the
+    # language's own letters (ñ, á, ü, ö, ß ...), which the rules read: stripping
+    # them made "niño" "nino" and "über" "uber".
+    if (language == SHABDA_LANG_ENGLISH && _shabda_is_foreign_word_a(a, word) == 1) {
         var stripped = _shabda_strip_diacritics_a(a, word);
         var shit = _shabda_dict_lookup_a(a, dict, stripped);
         if (shit != 0) {
@@ -638,30 +728,41 @@ fn shabda_convert_with_a(a, e, text, options, out_events): i64 {
             continue;
         }
 
-        # e. preceding context.
-        var preceding = _shabda_engine_preceding_a(a, words, i);
-
-        # f. LOOKUP (dict-first, rule fallback).
-        var phonemes = _shabda_engine_lookup_a(a, e, word, preceding);
-
-        # g. debug validation — always compiled, results DISCARDED, never abort.
-        var _invalid = _shabda_validate_phonemes_for_a(a, phonemes, inv, language);
-        var _violations = _shabda_validate_phonotactics_a(a, phonemes, language);
-
-        # h. skip empties.
-        if (vec_len(phonemes) == 0) {
-            i = i + 1;
-            continue;
+        # e. English letter names (a spelled acronym, a lone letter).
+        var word_events = 0;
+        if (language == SHABDA_LANG_ENGLISH) {
+            word_events = _shabda_engine_spelled_a(a, load64(e + SHABDA_ENGINE_DICT), word);
         }
 
-        # i/j/k. syllabify + assign stress.
-        var is_content = _shabda_is_content_word_a(a, word);
-        var syllables = _shabda_syllabify_a(a, phonemes);
-        var word_events = 0;
-        if (vec_len(syllables) == 0) {
-            word_events = _shabda_assign_stress_a(a, phonemes, is_content);
-        } else {
-            word_events = _shabda_assign_stress_syllabic_a(a, syllables, is_content);
+        if (word_events == 0) {
+            # e. preceding context.
+            var preceding = _shabda_engine_preceding_a(a, words, i);
+
+            # f. LOOKUP (dict-first, rule fallback).
+            var phonemes = _shabda_engine_lookup_a(a, e, word, preceding);
+
+            # g. debug validation — always compiled, results DISCARDED, never abort.
+            var _invalid = _shabda_validate_phonemes_for_a(a, phonemes, inv, language);
+            var _violations = _shabda_validate_phonotactics_a(a, phonemes, language);
+
+            # h. skip empties.
+            if (vec_len(phonemes) == 0) {
+                i = i + 1;
+                continue;
+            }
+
+            # i/j/k. syllabify + assign stress: the language's onsets, and for English
+            # its own stress rules (the syllabic rule is Latin's; see
+            # shabda_assign_stress_english).
+            var is_content = _shabda_is_content_word_a(a, word);
+            var syllables = _shabda_syllabify_for_a(a, phonemes, language);
+            if (vec_len(syllables) == 0) {
+                word_events = _shabda_assign_stress_a(a, phonemes, is_content);
+            } elif (language == SHABDA_LANG_ENGLISH) {
+                word_events = _shabda_assign_stress_english_a(a, word, syllables, is_content);
+            } else {
+                word_events = _shabda_assign_stress_syllabic_a(a, syllables, is_content);
+            }
         }
 
         # l. emphasis if active.
@@ -794,23 +895,36 @@ fn _shabda_engine_render_ssml_nodes(e, nodes, base_options, events): i64 {
             var duration_secs = f64_div(f64_from(duration_ms), f64_from(1000));
             vec_push(events, _shabda_engine_silence(duration_secs));
         } elif (tag == SHABDA_SSML_EMPHASIS) {
-            # base + emphasis=1; recurse; then boost per level.
+            # base + emphasis detection (on, or off for level="none"); recurse; then
+            # mark the content per level. SSML 1.1 §3.2.2: moderate (the default) is
+            # emphasis, strong more of it, none prevents it, reduced is its opposite.
+            # Through 3.1.2 moderate did nothing to a lowercase word, and none was read
+            # as moderate.
+            var level = shabda_ssml_node_level(node);
             var eopts = _shabda_engine_opts_with_emphasis(base_options);
+            if (level == SHABDA_EMPH_NONE) { store64(eopts + SHABDA_OPT_EMPHASIS, 0); }
             var start = vec_len(events);
             var erc = _shabda_engine_render_ssml_nodes(e, shabda_ssml_node_children(node), eopts, events);
             if (shabda_is_err(erc) == 1) { return erc; }
-            var level = shabda_ssml_node_level(node);
             if (level == SHABDA_EMPH_STRONG) {
+                # Primary stress and 1.3x vowels, as an ALL-CAPS word gets.
                 _shabda_engine_apply_emphasis_range(events, start);
             } elif (level == SHABDA_EMPH_REDUCED) {
                 _shabda_engine_destress_range(events, start);
+            } elif (level == SHABDA_EMPH_MODERATE) {
+                # Primary stress without the lengthening: less than strong.
+                _shabda_engine_stress_range(events, start);
             }
-            # Moderate: nothing (emphasis=true already handled it).
         } elif (tag == SHABDA_SSML_PROSODY) {
             # rate? base+speaking_rate : base.
             var popts = base_options;
             var rate = shabda_ssml_node_rate(node);
-            if (rate != SHABDA_RATE_NONE) {
+            if (rate == SHABDA_RATE_PERCENT) {
+                # A multiplier of the default rate (SSML 1.1 §3.2.4).
+                var pbase = shabda_speaking_rate_wpm(SHABDA_RATE_MEDIUM);
+                var pwpm = f64_div(f64_mul(pbase, shabda_ssml_node_rate_percent(node)), f64_from(100));
+                popts = _shabda_engine_opts_with_rate(base_options, pwpm);
+            } elif (rate != SHABDA_RATE_NONE) {
                 popts = _shabda_engine_opts_with_rate(base_options, shabda_speaking_rate_wpm(rate));
             }
             var prc = _shabda_engine_render_ssml_nodes(e, shabda_ssml_node_children(node), popts, events);
@@ -858,6 +972,22 @@ fn _shabda_engine_apply_emphasis_range(events, start): i64 {
             # children already produced, and each visit minted a fresh SvPhonemeEvent.
             var edur = f64_mul(SvPhonemeEvent_duration(ev), SHABDA_PROSODY_EMPHASIS_DURATION_SCALE);
             SvPhonemeEvent_set_duration(ev, edur);
+            SvPhonemeEvent_set_stress(ev, SVARA_STRESS_PRIMARY);
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+# Primary stress on every vowel of events[start..], durations unchanged: SSML
+# level="moderate".
+fn _shabda_engine_stress_range(events, start): i64 {
+    var n = vec_len(events);
+    var i = start;
+    while (i < n) {
+        var ev = vec_get(events, i);
+        var c = svara_phoneme_class(SvPhonemeEvent_phoneme(ev));
+        if (c == SVARA_CLASS_VOWEL || c == SVARA_CLASS_DIPHTHONG) {
             SvPhonemeEvent_set_stress(ev, SVARA_STRESS_PRIMARY);
         }
         i = i + 1;
@@ -918,6 +1048,14 @@ fn shabda_convert_streaming(e, text, callback_fp): i64 {
             continue;
         }
 
+        var spelled = 0;
+        if (language == SHABDA_LANG_ENGLISH) { spelled = _shabda_engine_spelled_a(default_alloc(), dict, word); }
+        if (spelled != 0) {
+            var sr = callptr(callback_fp, word, spelled);
+            i = i + 1;
+            continue;
+        }
+
         # dict.lookup | <lang>_rules (no heteronym/foreign/emphasis).
         var phonemes = shbdk_dict_lookup(dict, word);
         if (phonemes != 0) {
@@ -932,10 +1070,12 @@ fn shabda_convert_streaming(e, text, callback_fp): i64 {
         }
 
         var is_content = shabda_is_content_word(word);
-        var syllables = shabda_syllabify(phonemes);
+        var syllables = shabda_syllabify_for(phonemes, language);
         var word_events = 0;
         if (vec_len(syllables) == 0) {
             word_events = shabda_assign_stress(phonemes, is_content);
+        } elif (language == SHABDA_LANG_ENGLISH) {
+            word_events = shabda_assign_stress_english(word, syllables, is_content);
         } else {
             word_events = shabda_assign_stress_syllabic(syllables, is_content);
         }

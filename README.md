@@ -1,6 +1,6 @@
 # shabda
 
-[![version](https://img.shields.io/badge/version-3.1.2-blue.svg)](VERSION)
+[![version](https://img.shields.io/badge/version-3.1.3-blue.svg)](VERSION)
 [![license](https://img.shields.io/badge/license-GPL--3.0--only-green.svg)](LICENSE)
 [![language](https://img.shields.io/badge/language-CYRIUS-orange.svg)](cyrius.cyml)
 
@@ -16,12 +16,14 @@ phoneme-inventory validation.
 > shabda is a full-parity **CYRIUS port** of a ~5,000-line Rust library. It is no
 > longer a Rust crate: the API is flat, `shabda_`-prefixed C-style functions
 > (`shabda_g2p_new`, `shabda_convert`, `shabda_speak`, …) — no methods, traits,
-> generics, `Cargo.toml`, or crates.io. Consumers pull `dist/shabda.cyr`.
+> generics, `Cargo.toml`, or crates.io. Consumers pull `dist/shabda.cyr`. The parity is in
+> capabilities: where the Rust's output was inaccurate, shabda's is accurate instead, and the
+> CHANGELOG lists each difference ([ADR-0002](docs/adr/0002-accuracy-over-rust-parity.md)).
 
 ## Features
 
 - **G2P pipeline** — normalize → dictionary lookup (shabdakosh, 10k+ entries) / letter-to-sound rules fallback → syllabify (Maximal Onset Principle) → prosody → svara `PhonemeEvent`s. One call, `shabda_convert`.
-- **Languages** — English (dictionary + rules) and Spanish / German / Hindi / Arabic / Sanskrit (rules; native scripts + romanized fallback). `shabda_detect_language` picks a language from script.
+- **Languages** — English (dictionary + rules) and Spanish / German / Hindi / Arabic / Sanskrit (rules; native scripts + romanized fallback). `shabda_detect_language` picks a language from script. The English letter-to-sound rules are NRL's (1976), tuned on CMUdict; every language's rules use the phonemes its phonology has (3.1.3, measured against gold data in the CHANGELOG).
 - **Normalization** — abbreviation expansion (Dr.→doctor), acronym heuristic (NASA→word, FBI→spelled out), number-to-words (42→"forty two"), foreign-word diacritic detection, and emphasis markers (ALL-CAPS / `*asterisk*`).
 - **Prosody & SSML** — syllable-weight stress, emphasis, speaking-rate clamp (50–300 WPM), a `TimingProfile` for independent vowel/consonant/pause scaling, intonation mapping, and an SSML subset (`<break>`, `<emphasis>`, `<prosody>`) via `shabda_convert_ssml`.
 - **Heteronym disambiguation** — context triggers pick the right pronunciation for `read`, `lead`, `live`, `wind`, …
@@ -158,8 +160,8 @@ Direct dependencies (git+tag; no `path`, which would make the tag inert):
 
 ## Tests & Benchmarks
 
-- **840 assertions** across 11 `.tcyr` suites — error (25), normalize (65), syllable (55), heteronym (23), ssml (66), rules (133), prosody (54), validate (127), engine (246), crate-level shabda (37), allocator (9, including four threads converting at once). All green, plus a fuzz corpus (`cyrius fuzz`) of every shape that produced a defect, 400 random-byte rounds and 400 random-markup rounds, each also checking that `shabda_convert_a` matches `shabda_convert` and keeps nothing on the default heap.
-- **Benchmarks** (`tests/shabda.bcyr`, x86_64, cyrius 6.7.18, median of 12): `g2p_hello_world` 17.0 µs, `g2p_sentence` 68.4 µs, `g2p_sentence_arena` (through `shabda_convert_a`) 64.5 µs, `speak_hello` 3.83 ms, `speak_sentence` 12.0 ms, `dict_english_construction` 8.64 ms, `dict_lookup_hit` 160 ns, `dict_lookup_miss` 176 ns. Figures from different sessions on this machine differ by up to about 20%; compare builds only within one session (see `docs/development/state.md`).
+- **1,342 assertions** across 11 `.tcyr` suites — error (25), normalize (120), syllable (96), heteronym (48), ssml (97), rules (294), prosody (72), validate (235), engine (309), crate-level shabda (37), allocator (9, including four threads converting at once). All green, plus a fuzz corpus (`cyrius fuzz`) of every shape that produced a defect, 400 random-byte rounds and 400 random-markup rounds, each run through all six engines and checking that `shabda_convert_a` matches `shabda_convert` and keeps nothing on the default heap.
+- **Benchmarks** (`tests/shabda.bcyr`, x86_64, cyrius 6.7.18, median of 8): `g2p_hello_world` 17.1 µs, `g2p_sentence` 71.5 µs, `g2p_sentence_arena` (through `shabda_convert_a`) 67.9 µs, `speak_hello` 3.74 ms, `speak_sentence` 11.0 ms, `dict_english_construction` 7.96 ms, `dict_lookup_hit` 143 ns, `dict_lookup_miss` 150 ns. Figures from different sessions on this machine differ by up to about 20%; compare builds only within one session (see `docs/development/state.md`).
 
 ## Consumers
 

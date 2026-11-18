@@ -1,13 +1,15 @@
 # rules.cyr — rule-based grapheme-to-phoneme conversion (6 language engines).
 #
-# Ports rust-old/src/rules.rs (1545 LOC). Six public #must_use engines, each
-# taking a cstring word and returning a `vec` of svara phoneme ordinals:
-#   shabda_english_rules(word)   — silent-letter strip, prefix/suffix, patterns
-#   shabda_spanish_rules(word)
-#   shabda_german_rules(word)    — + final devoicing post-pass
-#   shabda_hindi_rules(word)     — Devanagari + word-final schwa DELETION
-#   shabda_sanskrit_rules(word)  — Devanagari + schwa PRESERVATION
-#   shabda_arabic_rules(word)    — abjad + harakat/tanween/shadda
+# The capabilities of rust-old/src/rules.rs (1545 LOC); since 3.1.3 their output is
+# accurate rather than the Rust's (ADR-0002, the 3.1.3 CHANGELOG entry). Six public
+# #must_use engines, each taking a cstring word and returning a `vec` of svara
+# phoneme ordinals:
+#   shabda_english_rules(word)   — context-sensitive NRL rules + vowel reduction
+#   shabda_spanish_rules(word)   — /a e i o u/, glides, trill / tap, yeísmo
+#   shabda_german_rules(word)    — vowel length, schwa, ç / χ, ʁ, affricates, devoicing
+#   shabda_hindi_rules(word)     — Devanagari + Ohala's final and medial schwa deletion
+#   shabda_sanskrit_rules(word)  — Devanagari + IAST, schwa PRESERVATION
+#   shabda_arabic_rules(word)    — abjad + harakat/tanween/shadda, matres, the article
 #
 # DEPENDENCY POSITION: needs the vendored svara bundle (SVARA_PH_* ordinals) and
 # src/error.cyr (for shared L0 tags — not strictly used here but part of the
@@ -143,268 +145,156 @@ fn _shabda_cp_at(chars, idx): i64 {
 }
 
 # ================================================================
-# English G2P rules — ports english_rules().
+# English letter-to-sound rules (3.1.3).
+#
+# A context-sensitive rule set after Elovitz, Johnson, McHugh and Shore, "Letter-to-Sound
+# Rules for Automatic Translation of English Text to Phonetics", NRL Report 7948 (1976;
+# a US Government work, public domain), with additions measured against CMUdict (the
+# 3.1.3 CHANGELOG entry lists them and the accuracy). Through 3.1.2 the rules were the
+# Rust's: one phoneme per letter plus 2- to 4-letter patterns with no context, which got
+# 13.5% of CMUdict's words exactly right.
+#
+# A rule is LEFT [MATCH] RIGHT -> ARPABET. The word is scanned left to right; at each
+# position the first rule for the letter there whose MATCH spells the next letters and
+# whose LEFT / RIGHT contexts fit gives the phonemes, and the scan moves past MATCH.
+# Context symbols (NRL's):
+#   ' '  a word boundary (any non-letter)     #  one or more vowels (a e i o u)
+#   ':'  zero or more consonants              ^  one consonant (y counts as one)
+#   '.'  a voiced consonant b d v g j l m n r w z
+#   '+'  a front vowel e i y                  %  a suffix: er e es ed ing ely
+#   '&'  a sibilant s c g z x j ch sh         @  t s r d l z n j th ch sh
+# Letters match themselves. LEFT is read right to left from the letter before MATCH.
+#
+# The ARPABET maps to svara exactly as shabdakosh maps CMUdict (AH0 is schwa, AH1 / AH2
+# is /ʌ/, IY is /iː/), so the rules and the dictionary never disagree on a symbol;
+# tests/engine.tcyr checks every symbol against shbdk_arpabet_to_phoneme_with_stress.
+#
+# The table is built once per process on the default heap, like the heteronym rules,
+# and shabda_g2p_new builds it, so a conversion through an Allocator never builds it.
 # ================================================================
 
-# --- Step 1: silent-letter pre-processing. Ports preprocess_silent().
-# Mutates a copy of `chars` in place (removals), returns the new vec.
-#must_use
-fn _shabda_preprocess_silent_a(a, chars): i64 {
-    # copy into a fresh vec
-    var result = vec_new_a(a);
+var _SHABDA_EN_RULES = 0;
+
+# Rule record (40 bytes): left, match, right (cstrings), phonemes (vec), match length.
+var SHABDA_EN_LEFT   = 0;
+var SHABDA_EN_MATCH  = 8;
+var SHABDA_EN_RIGHT  = 16;
+var SHABDA_EN_PH     = 24;
+var SHABDA_EN_MLEN   = 32;
+var SHABDA_EN_SIZE   = 40;
+
+# ARPABET symbol (the `len` bytes at `s`, with or without a stress digit) -> svara
+# ordinal, or -1. shabdakosh's mapping: AH with stress 0 is schwa.
+fn _shabda_en_arpabet(s, len): i64 {
+    var d = load8(s + len - 1);
+    var base = len;
+    if (d >= 48 && d <= 50) { base = len - 1; }
+    var c0 = load8(s);
+    var c1 = 0;
+    if (base >= 2) { c1 = load8(s + 1); }
+    if (base == 2) {
+        if (c0 == 65 && c1 == 65) { return SVARA_PH_VOWEL_OPEN_A; }                   # AA
+        if (c0 == 65 && c1 == 69) { return SVARA_PH_VOWEL_ASH; }                      # AE
+        if (c0 == 65 && c1 == 72) {                                                    # AH
+            if (d == 48) { return SVARA_PH_VOWEL_SCHWA; }
+            return SVARA_PH_VOWEL_CUP_V;
+        }
+        if (c0 == 65 && c1 == 79) { return SVARA_PH_VOWEL_OPEN_O; }                   # AO
+        if (c0 == 65 && c1 == 87) { return SVARA_PH_DIPH_AU; }                        # AW
+        if (c0 == 65 && c1 == 89) { return SVARA_PH_DIPH_AI; }                        # AY
+        if (c0 == 69 && c1 == 72) { return SVARA_PH_VOWEL_OPEN_E; }                   # EH
+        if (c0 == 69 && c1 == 82) { return SVARA_PH_VOWEL_BIRD; }                     # ER
+        if (c0 == 69 && c1 == 89) { return SVARA_PH_DIPH_EI; }                        # EY
+        if (c0 == 73 && c1 == 72) { return SVARA_PH_VOWEL_NEAR_I; }                   # IH
+        if (c0 == 73 && c1 == 89) { return SVARA_PH_VOWEL_LONG_I; }                   # IY
+        if (c0 == 79 && c1 == 87) { return SVARA_PH_DIPH_OU; }                        # OW
+        if (c0 == 79 && c1 == 89) { return SVARA_PH_DIPH_OI; }                        # OY
+        if (c0 == 85 && c1 == 72) { return SVARA_PH_VOWEL_NEAR_U; }                   # UH
+        if (c0 == 85 && c1 == 87) { return SVARA_PH_VOWEL_U; }                        # UW
+        if (c0 == 67 && c1 == 72) { return SVARA_PH_AFFR_CH; }                        # CH
+        if (c0 == 68 && c1 == 72) { return SVARA_PH_FRIC_DH; }                        # DH
+        if (c0 == 72 && c1 == 72) { return SVARA_PH_FRIC_H; }                         # HH
+        if (c0 == 74 && c1 == 72) { return SVARA_PH_AFFR_J; }                         # JH
+        if (c0 == 78 && c1 == 71) { return SVARA_PH_NASAL_NG; }                       # NG
+        if (c0 == 83 && c1 == 72) { return SVARA_PH_FRIC_SH; }                        # SH
+        if (c0 == 84 && c1 == 72) { return SVARA_PH_FRIC_TH; }                        # TH
+        if (c0 == 90 && c1 == 72) { return SVARA_PH_FRIC_ZH; }                        # ZH
+        return 0 - 1;
+    }
+    if (base != 1) { return 0 - 1; }
+    if (c0 == 66) { return SVARA_PH_PLOSIVE_B; }
+    if (c0 == 68) { return SVARA_PH_PLOSIVE_D; }
+    if (c0 == 70) { return SVARA_PH_FRIC_F; }
+    if (c0 == 71) { return SVARA_PH_PLOSIVE_G; }
+    if (c0 == 75) { return SVARA_PH_PLOSIVE_K; }
+    if (c0 == 76) { return SVARA_PH_LATERAL_L; }
+    if (c0 == 77) { return SVARA_PH_NASAL_M; }
+    if (c0 == 78) { return SVARA_PH_NASAL_N; }
+    if (c0 == 80) { return SVARA_PH_PLOSIVE_P; }
+    if (c0 == 82) { return SVARA_PH_APPROX_R; }
+    if (c0 == 83) { return SVARA_PH_FRIC_S; }
+    if (c0 == 84) { return SVARA_PH_PLOSIVE_T; }
+    if (c0 == 86) { return SVARA_PH_FRIC_V; }
+    if (c0 == 87) { return SVARA_PH_APPROX_W; }
+    if (c0 == 89) { return SVARA_PH_APPROX_J; }
+    if (c0 == 90) { return SVARA_PH_FRIC_Z; }
+    return 0 - 1;
+}
+
+# Space-separated ARPABET -> vec of svara ordinals (default heap; the table only).
+fn _shabda_en_phonemes(spec): i64 {
+    var v = vec_new();
+    var n = strlen(spec);
     var i = 0;
-    var n = vec_len(chars);
     while (i < n) {
-        _shabda_vec_push_a(a, result, vec_get(chars, i));
-        i = i + 1;
-    }
-
-    # Word-initial silent patterns: kn gn wr ps pn mn -> drop first.
-    if (vec_len(result) >= 2) {
-        var c0 = vec_get(result, 0);
-        var c1 = vec_get(result, 1);
-        var skip_first = 0;
-        if (c0 == 0x6B) { if (c1 == 0x6E) { skip_first = 1; } }   # kn
-        if (c0 == 0x67) { if (c1 == 0x6E) { skip_first = 1; } }   # gn
-        if (c0 == 0x77) { if (c1 == 0x72) { skip_first = 1; } }   # wr
-        if (c0 == 0x70) { if (c1 == 0x73) { skip_first = 1; } }   # ps
-        if (c0 == 0x70) { if (c1 == 0x6E) { skip_first = 1; } }   # pn
-        if (c0 == 0x6D) { if (c1 == 0x6E) { skip_first = 1; } }   # mn
-        if (skip_first == 1) {
-            vec_remove(result, 0);
+        while (i < n && load8(spec + i) == 32) { i = i + 1; }
+        var j = i;
+        while (j < n && load8(spec + j) != 32) { j = j + 1; }
+        if (j > i) {
+            var ph = _shabda_en_arpabet(spec + i, j - i);
+            if (ph >= 0) { vec_push(v, ph); }
         }
+        i = j;
     }
-
-    # Word-final silent patterns: mb bt mn -> drop last.
-    if (vec_len(result) >= 2) {
-        var len = vec_len(result);
-        var p2 = vec_get(result, len - 2);
-        var p1 = vec_get(result, len - 1);
-        var strip_last = 0;
-        if (p2 == 0x6D) { if (p1 == 0x62) { strip_last = 1; } }   # mb
-        if (p2 == 0x62) { if (p1 == 0x74) { strip_last = 1; } }   # bt
-        if (p2 == 0x6D) { if (p1 == 0x6E) { strip_last = 1; } }   # mn
-        if (strip_last == 1) {
-            vec_pop(result);
-        }
-        # gn at word-final (sign, design) — strip the g.
-        var len2 = vec_len(result);
-        if (len2 >= 2) {
-            var g2 = vec_get(result, len2 - 2);
-            var g1 = vec_get(result, len2 - 1);
-            if (g2 == 0x67) {
-                if (g1 == 0x6E) {
-                    vec_remove(result, len2 - 2);
-                }
-            }
-        }
-    }
-
-    return result;
+    return v;
 }
 
-# --- magic-e long vowel. Ports magic_e_vowel(). Pushes onto out.
-fn _shabda_push_magic_e_vowel_a(a, out, v): i64 {
-    if (v == 0x61) { _shabda_vec_push_a(a, out, SVARA_PH_DIPH_EI); return 0; }   # a
-    if (v == 0x69) { _shabda_vec_push_a(a, out, SVARA_PH_DIPH_AI); return 0; }   # i
-    if (v == 0x6F) { _shabda_vec_push_a(a, out, SVARA_PH_DIPH_OU); return 0; }   # o
-    if (v == 0x75) { _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_U); return 0; }   # u
-    if (v == 0x65) { _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_E); return 0; }   # e
-    _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_SCHWA);
+# Bucket index of a letter: a..z -> 0..25, apostrophe 26, anything else -1.
+fn _shabda_en_bucket(c): i64 {
+    if (c >= 97 && c <= 122) { return c - 97; }
+    if (c == 39) { return 26; }
+    return 0 - 1;
+}
+
+# Append one rule to the bucket of its first MATCH letter.
+fn _shabda_en_r(tab, left, spell, right, spec): i64 {
+    var r = alloc(SHABDA_EN_SIZE);
+    store64(r + SHABDA_EN_LEFT, left);
+    store64(r + SHABDA_EN_MATCH, spell);
+    store64(r + SHABDA_EN_RIGHT, right);
+    store64(r + SHABDA_EN_PH, _shabda_en_phonemes(spec));
+    store64(r + SHABDA_EN_MLEN, strlen(spell));
+    vec_push(vec_get(tab, _shabda_en_bucket(load8(spell))), r);
     return 0;
 }
 
-# --- single consonant (magic-e). Ports single_consonant(). Pushes onto out.
-fn _shabda_push_single_consonant_a(a, out, c): i64 {
-    if (c == 0x62) { _shabda_vec_push_a(a, out, SVARA_PH_PLOSIVE_B); return 0; }   # b
-    if (c == 0x63) { _shabda_vec_push_a(a, out, SVARA_PH_PLOSIVE_K); return 0; }   # c
-    if (c == 0x64) { _shabda_vec_push_a(a, out, SVARA_PH_PLOSIVE_D); return 0; }   # d
-    if (c == 0x66) { _shabda_vec_push_a(a, out, SVARA_PH_FRIC_F); return 0; }      # f
-    if (c == 0x67) { _shabda_vec_push_a(a, out, SVARA_PH_PLOSIVE_G); return 0; }   # g
-    if (c == 0x6B) { _shabda_vec_push_a(a, out, SVARA_PH_PLOSIVE_K); return 0; }   # k
-    if (c == 0x6C) { _shabda_vec_push_a(a, out, SVARA_PH_LATERAL_L); return 0; }   # l
-    if (c == 0x6D) { _shabda_vec_push_a(a, out, SVARA_PH_NASAL_M); return 0; }     # m
-    if (c == 0x6E) { _shabda_vec_push_a(a, out, SVARA_PH_NASAL_N); return 0; }     # n
-    if (c == 0x70) { _shabda_vec_push_a(a, out, SVARA_PH_PLOSIVE_P); return 0; }   # p
-    if (c == 0x72) { _shabda_vec_push_a(a, out, SVARA_PH_APPROX_R); return 0; }    # r
-    if (c == 0x73) { _shabda_vec_push_a(a, out, SVARA_PH_FRIC_S); return 0; }      # s
-    if (c == 0x74) { _shabda_vec_push_a(a, out, SVARA_PH_PLOSIVE_T); return 0; }   # t
-    if (c == 0x76) { _shabda_vec_push_a(a, out, SVARA_PH_FRIC_V); return 0; }      # v
-    if (c == 0x7A) { _shabda_vec_push_a(a, out, SVARA_PH_FRIC_Z); return 0; }      # z
-    return 0;
+# The rule table, built on first use (on the default heap) and kept.
+fn _shabda_en_rules_table(): i64 {
+    if (_SHABDA_EN_RULES != 0) { return _SHABDA_EN_RULES; }
+    var tab = vec_new();
+    var k = 0;
+    while (k < 27) { vec_push(tab, vec_new()); k = k + 1; }
+    _shabda_en_rules_a_e(tab);
+    _shabda_en_rules_f_n(tab);
+    _shabda_en_rules_o_s(tab);
+    _shabda_en_rules_t_z(tab);
+    _shabda_en_stress_lists();
+    _SHABDA_EN_RULES = tab;
+    return tab;
 }
 
-# --- Step 4: English pattern matching. Ports match_pattern().
-# `chars` is the stem vec, `pos` the current index. Pushes the matched phoneme
-# sequence onto `out` and returns the number of chars consumed. Longest-match
-# (4 -> 3 -> 2 -> 1).
-fn _shabda_english_match_a(a, chars, pos, out): i64 {
-    var n = vec_len(chars);
-    var rem = n - pos;
-    if (rem <= 0) { return 1; }
-
-    var c0 = vec_get(chars, pos);
-
-    # 4-letter patterns
-    if (rem >= 4) {
-        var ca = c0;
-        var b = vec_get(chars, pos + 1);
-        var c = vec_get(chars, pos + 2);
-        var d = vec_get(chars, pos + 3);
-        # eigh
-        if (ca == 0x65) { if (b == 0x69) { if (c == 0x67) { if (d == 0x68) {
-                        _shabda_vec_push_a(a, out, SVARA_PH_DIPH_EI); return 4; } } } }
-        # augh
-        if (ca == 0x61) { if (b == 0x75) { if (c == 0x67) { if (d == 0x68) {
-                        _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_OPEN_O); return 4; } } } }
-        # ough
-        if (ca == 0x6F) { if (b == 0x75) { if (c == 0x67) { if (d == 0x68) {
-                        _shabda_vec_push_a(a, out, SVARA_PH_DIPH_OU); return 4; } } } }
-        # tion -> Sh schwa N
-        if (ca == 0x74) { if (b == 0x69) { if (c == 0x6F) { if (d == 0x6E) {
-                        _shabda_vec_push_a(a, out, SVARA_PH_FRIC_SH); _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_SCHWA);
-                        _shabda_vec_push_a(a, out, SVARA_PH_NASAL_N); return 4; } } } }
-        # sion -> Zh schwa N
-        if (ca == 0x73) { if (b == 0x69) { if (c == 0x6F) { if (d == 0x6E) {
-                        _shabda_vec_push_a(a, out, SVARA_PH_FRIC_ZH); _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_SCHWA);
-                        _shabda_vec_push_a(a, out, SVARA_PH_NASAL_N); return 4; } } } }
-        # cian -> same as tion
-        if (ca == 0x63) { if (b == 0x69) { if (c == 0x61) { if (d == 0x6E) {
-                        _shabda_vec_push_a(a, out, SVARA_PH_FRIC_SH); _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_SCHWA);
-                        _shabda_vec_push_a(a, out, SVARA_PH_NASAL_N); return 4; } } } }
-    }
-
-    # 3-letter patterns
-    if (rem >= 3) {
-        var t0 = c0;
-        var t1 = vec_get(chars, pos + 1);
-        var t2 = vec_get(chars, pos + 2);
-
-        # Magic-e: VCe at word end (rem == 3, vowel, non-vowel, 'e')
-        if (rem == 3) {
-            if (t2 == 0x65) {
-                if (_shabda_is_vowel_char(t0) == 1) {
-                    if (_shabda_is_vowel_char(t1) == 0) {
-                        _shabda_push_magic_e_vowel_a(a, out, t0);
-                        _shabda_push_single_consonant_a(a, out, t1);
-                        return 3;
-                    }
-                }
-            }
-        }
-        # air -> OpenE R
-        if (t0 == 0x61) { if (t1 == 0x69) { if (t2 == 0x72) {
-                    _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_OPEN_E);
-                    _shabda_vec_push_a(a, out, SVARA_PH_APPROX_R); return 3; } } }
-        # ear -> NearI R
-        if (t0 == 0x65) { if (t1 == 0x61) { if (t2 == 0x72) {
-                    _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_NEAR_I);
-                    _shabda_vec_push_a(a, out, SVARA_PH_APPROX_R); return 3; } } }
-        # our -> AU R
-        if (t0 == 0x6F) { if (t1 == 0x75) { if (t2 == 0x72) {
-                    _shabda_vec_push_a(a, out, SVARA_PH_DIPH_AU);
-                    _shabda_vec_push_a(a, out, SVARA_PH_APPROX_R); return 3; } } }
-        # igh -> AI
-        if (t0 == 0x69) { if (t1 == 0x67) { if (t2 == 0x68) {
-                    _shabda_vec_push_a(a, out, SVARA_PH_DIPH_AI); return 3; } } }
-        # thr -> Th R
-        if (t0 == 0x74) { if (t1 == 0x68) { if (t2 == 0x72) {
-                    _shabda_vec_push_a(a, out, SVARA_PH_FRIC_TH);
-                    _shabda_vec_push_a(a, out, SVARA_PH_APPROX_R); return 3; } } }
-        # the -> Dh schwa
-        if (t0 == 0x74) { if (t1 == 0x68) { if (t2 == 0x65) {
-                    _shabda_vec_push_a(a, out, SVARA_PH_FRIC_DH);
-                    _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_SCHWA); return 3; } } }
-        # sh_ (consume 2)
-        if (t0 == 0x73) { if (t1 == 0x68) {
-                _shabda_vec_push_a(a, out, SVARA_PH_FRIC_SH); return 2; } }
-        # ch_ (consume 2)
-        if (t0 == 0x63) { if (t1 == 0x68) {
-                _shabda_vec_push_a(a, out, SVARA_PH_AFFR_CH); return 2; } }
-        # th_ (consume 2)
-        if (t0 == 0x74) { if (t1 == 0x68) {
-                _shabda_vec_push_a(a, out, SVARA_PH_FRIC_TH); return 2; } }
-        # ng_ : Rust guards `!chars[2].is_alphabetic() || chars.len() == 3`.
-        # Here rem is the remaining-slice length; rem == 3 corresponds to
-        # chars.len() == 3 in Rust's remaining slice. t2 alphabetic check below.
-        if (t0 == 0x6E) { if (t1 == 0x67) {
-                var ng_ok = 0;
-                if (rem == 3) { ng_ok = 1; }
-                if (_shabda_rules_is_ascii_alpha(t2) == 0) { ng_ok = 1; }
-                if (ng_ok == 1) {
-                    _shabda_vec_push_a(a, out, SVARA_PH_NASAL_NG); return 2;
-                }
-            } }
-        # ing (only when rem == 3)
-        if (t0 == 0x69) { if (t1 == 0x6E) { if (t2 == 0x67) {
-                    if (rem == 3) {
-                        _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_NEAR_I);
-                        _shabda_vec_push_a(a, out, SVARA_PH_NASAL_NG); return 3;
-                    }
-                } } }
-        # ou_
-        if (t0 == 0x6F) { if (t1 == 0x75) {
-                _shabda_vec_push_a(a, out, SVARA_PH_DIPH_AU); return 2; } }
-        # ow_
-        if (t0 == 0x6F) { if (t1 == 0x77) {
-                _shabda_vec_push_a(a, out, SVARA_PH_DIPH_OU); return 2; } }
-        # ai_
-        if (t0 == 0x61) { if (t1 == 0x69) {
-                _shabda_vec_push_a(a, out, SVARA_PH_DIPH_AI); return 2; } }
-        # ee_
-        if (t0 == 0x65) { if (t1 == 0x65) {
-                _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_E); return 2; } }
-        # oo_
-        if (t0 == 0x6F) { if (t1 == 0x6F) {
-                _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_U); return 2; } }
-        # ea_
-        if (t0 == 0x65) { if (t1 == 0x61) {
-                _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_E); return 2; } }
-    }
-
-    # 2-letter patterns
-    if (rem >= 2) {
-        var d0 = c0;
-        var d1 = vec_get(chars, pos + 1);
-        if (d0 == 0x73) { if (d1 == 0x68) { _shabda_vec_push_a(a, out, SVARA_PH_FRIC_SH); return 2; } }   # sh
-        if (d0 == 0x63) { if (d1 == 0x68) { _shabda_vec_push_a(a, out, SVARA_PH_AFFR_CH); return 2; } }   # ch
-        if (d0 == 0x74) { if (d1 == 0x68) { _shabda_vec_push_a(a, out, SVARA_PH_FRIC_TH); return 2; } }   # th
-        if (d0 == 0x77) { if (d1 == 0x68) { _shabda_vec_push_a(a, out, SVARA_PH_APPROX_W); return 2; } }  # wh
-        if (d0 == 0x70) { if (d1 == 0x68) { _shabda_vec_push_a(a, out, SVARA_PH_FRIC_F); return 2; } }    # ph
-        if (d0 == 0x63) { if (d1 == 0x6B) { _shabda_vec_push_a(a, out, SVARA_PH_PLOSIVE_K); return 2; } } # ck
-        if (d0 == 0x71) { if (d1 == 0x75) {                                                  # qu
-                _shabda_vec_push_a(a, out, SVARA_PH_PLOSIVE_K);
-                _shabda_vec_push_a(a, out, SVARA_PH_APPROX_W); return 2; } }
-        if (d0 == 0x61) { if (d1 == 0x72) {                                                  # ar
-                _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_OPEN_A);
-                _shabda_vec_push_a(a, out, SVARA_PH_APPROX_R); return 2; } }
-        # er/ir/ur -> Bird R
-        if (d1 == 0x72) {
-            if (d0 == 0x65) {
-                _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_BIRD);
-                _shabda_vec_push_a(a, out, SVARA_PH_APPROX_R); return 2;
-            }
-            if (d0 == 0x69) {
-                _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_BIRD);
-                _shabda_vec_push_a(a, out, SVARA_PH_APPROX_R); return 2;
-            }
-            if (d0 == 0x75) {
-                _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_BIRD);
-                _shabda_vec_push_a(a, out, SVARA_PH_APPROX_R); return 2;
-            }
-            # or
-            if (d0 == 0x6F) {
-                _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_OPEN_O);
-                _shabda_vec_push_a(a, out, SVARA_PH_APPROX_R); return 2;
-            }
-        }
-    }
-
-    # Single-letter patterns.
-    return _shabda_english_single_a(a, chars, pos, out);
-}
-
-# ASCII alphabetic test (Rust char::is_alphabetic for ASCII inputs).
+# ASCII alphabetic test (Rust char::is_alphabetic for ASCII inputs). The Hindi, Sanskrit
+# and Arabic rules use it for their romanized input.
 #must_use
 fn _shabda_rules_is_ascii_alpha(cp): i64 {
     if (cp >= 0x61) { if (cp <= 0x7A) { return 1; } }
@@ -412,262 +302,832 @@ fn _shabda_rules_is_ascii_alpha(cp): i64 {
     return 0;
 }
 
-# Single-letter English rule. Pushes phoneme(s), returns consumed (always 1).
-fn _shabda_english_single_a(a, chars, pos, out): i64 {
-    var n = vec_len(chars);
-    var rem = n - pos;
-    var ch = vec_get(chars, pos);
-    var next = 0;
-    if (rem > 1) { next = vec_get(chars, pos + 1); }
+# ---- character classes over the word, with a boundary outside it ----------------
+# The letter at i, or 32 (a boundary) outside the word or at a non-letter. An
+# apostrophe stays itself so the rules can name it.
+fn _shabda_en_ch(chars, i): i64 {
+    if (i < 0) { return 32; }
+    if (i >= vec_len(chars)) { return 32; }
+    var c = vec_get(chars, i);
+    if (c >= 97 && c <= 122) { return c; }
+    if (c == 39) { return 39; }
+    return 32;
+}
 
-    if (ch == 0x61) { _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_ASH); return 1; }   # a
-    if (ch == 0x62) { _shabda_vec_push_a(a, out, SVARA_PH_PLOSIVE_B); return 1; }   # b
-    if (ch == 0x63) {                                                  # c
-        if (rem > 1) {
-            if (next == 0x65) { _shabda_vec_push_a(a, out, SVARA_PH_FRIC_S); return 1; }
-            if (next == 0x69) { _shabda_vec_push_a(a, out, SVARA_PH_FRIC_S); return 1; }
-            if (next == 0x79) { _shabda_vec_push_a(a, out, SVARA_PH_FRIC_S); return 1; }
-        }
-        _shabda_vec_push_a(a, out, SVARA_PH_PLOSIVE_K); return 1;
-    }
-    if (ch == 0x64) { _shabda_vec_push_a(a, out, SVARA_PH_PLOSIVE_D); return 1; }   # d
-    if (ch == 0x65) {                                                  # e
-        if (rem == 1) { return 1; }
-        _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_OPEN_E); return 1;
-    }
-    if (ch == 0x66) { _shabda_vec_push_a(a, out, SVARA_PH_FRIC_F); return 1; }      # f
-    if (ch == 0x67) {                                                  # g
-        if (rem > 1) {
-            if (next == 0x65) { _shabda_vec_push_a(a, out, SVARA_PH_AFFR_J); return 1; }
-            if (next == 0x69) { _shabda_vec_push_a(a, out, SVARA_PH_AFFR_J); return 1; }
-            if (next == 0x79) { _shabda_vec_push_a(a, out, SVARA_PH_AFFR_J); return 1; }
-        }
-        _shabda_vec_push_a(a, out, SVARA_PH_PLOSIVE_G); return 1;
-    }
-    if (ch == 0x68) { _shabda_vec_push_a(a, out, SVARA_PH_FRIC_H); return 1; }      # h
-    if (ch == 0x69) { _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_NEAR_I); return 1; } # i
-    if (ch == 0x6A) { _shabda_vec_push_a(a, out, SVARA_PH_AFFR_J); return 1; }      # j
-    if (ch == 0x6B) { _shabda_vec_push_a(a, out, SVARA_PH_PLOSIVE_K); return 1; }   # k
-    if (ch == 0x6C) { _shabda_vec_push_a(a, out, SVARA_PH_LATERAL_L); return 1; }   # l
-    if (ch == 0x6D) { _shabda_vec_push_a(a, out, SVARA_PH_NASAL_M); return 1; }     # m
-    if (ch == 0x6E) { _shabda_vec_push_a(a, out, SVARA_PH_NASAL_N); return 1; }     # n
-    if (ch == 0x6F) { _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_O); return 1; }     # o
-    if (ch == 0x70) { _shabda_vec_push_a(a, out, SVARA_PH_PLOSIVE_P); return 1; }   # p
-    if (ch == 0x72) { _shabda_vec_push_a(a, out, SVARA_PH_APPROX_R); return 1; }    # r
-    if (ch == 0x73) { _shabda_vec_push_a(a, out, SVARA_PH_FRIC_S); return 1; }      # s
-    if (ch == 0x74) { _shabda_vec_push_a(a, out, SVARA_PH_PLOSIVE_T); return 1; }   # t
-    if (ch == 0x75) { _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_CUP_V); return 1; } # u
-    if (ch == 0x76) { _shabda_vec_push_a(a, out, SVARA_PH_FRIC_V); return 1; }      # v
-    if (ch == 0x77) { _shabda_vec_push_a(a, out, SVARA_PH_APPROX_W); return 1; }    # w
-    if (ch == 0x78) {                                                  # x -> ks
-        _shabda_vec_push_a(a, out, SVARA_PH_PLOSIVE_K); _shabda_vec_push_a(a, out, SVARA_PH_FRIC_S); return 1;
-    }
-    if (ch == 0x79) {                                                  # y
-        if (rem > 1) { _shabda_vec_push_a(a, out, SVARA_PH_APPROX_J); return 1; }
-        _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_E); return 1;
-    }
-    if (ch == 0x7A) { _shabda_vec_push_a(a, out, SVARA_PH_FRIC_Z); return 1; }      # z
-    if (ch == 0x27) { return 1; }                                      # ' (apostrophe)
-    if (ch == 0x2D) { _shabda_vec_push_a(a, out, SVARA_PH_SILENCE); return 1; }     # -
+fn _shabda_en_is_vowel(c): i64 {
+    if (c == 97 || c == 101 || c == 105 || c == 111 || c == 117) { return 1; }
+    return 0;
+}
+
+fn _shabda_en_is_cons(c): i64 {
+    if (c < 97 || c > 122) { return 0; }
+    if (_shabda_en_is_vowel(c) == 1) { return 0; }
     return 1;
 }
 
-# Public English engine. Ports english_rules().
+fn _shabda_en_is_voiced(c): i64 {
+    if (c == 98 || c == 100 || c == 118 || c == 103 || c == 106 || c == 108) { return 1; }
+    if (c == 109 || c == 110 || c == 114 || c == 119 || c == 122) { return 1; }
+    return 0;
+}
+
+fn _shabda_en_is_front(c): i64 {
+    if (c == 101 || c == 105 || c == 121) { return 1; }
+    return 0;
+}
+
+fn _shabda_en_is_sib1(c): i64 {
+    if (c == 115 || c == 99 || c == 103 || c == 122 || c == 120 || c == 106) { return 1; }
+    return 0;
+}
+
+fn _shabda_en_is_at1(c): i64 {
+    if (c == 116 || c == 115 || c == 114 || c == 100 || c == 108 || c == 122) { return 1; }
+    if (c == 110 || c == 106) { return 1; }
+    return 0;
+}
+
+# LEFT context `pat` against the letters before `pos`, read right to left. 1 or 0.
+fn _shabda_en_left_ok(chars, pos, pat): i64 {
+    var t = pos - 1;
+    var k = strlen(pat) - 1;
+    while (k >= 0) {
+        var p = load8(pat + k);
+        var c = _shabda_en_ch(chars, t);
+        if (p == 35) {                                       # '#'
+            if (_shabda_en_is_vowel(c) == 0) { return 0; }
+            t = t - 1;
+            while (_shabda_en_is_vowel(_shabda_en_ch(chars, t)) == 1) { t = t - 1; }
+        } elif (p == 58) {                                   # ':'
+            while (_shabda_en_is_cons(_shabda_en_ch(chars, t)) == 1) { t = t - 1; }
+        } elif (p == 94) {                                   # '^'
+            if (_shabda_en_is_cons(c) == 0) { return 0; }
+            t = t - 1;
+        } elif (p == 46) {                                   # '.'
+            if (_shabda_en_is_voiced(c) == 0) { return 0; }
+            t = t - 1;
+        } elif (p == 43) {                                   # '+'
+            if (_shabda_en_is_front(c) == 0) { return 0; }
+            t = t - 1;
+        } elif (p == 38) {                                   # '&'
+            if (_shabda_en_is_sib1(c) == 1) {
+                t = t - 1;
+            } elif (c == 104 && (_shabda_en_ch(chars, t - 1) == 99 || _shabda_en_ch(chars, t - 1) == 115)) {
+                t = t - 2;
+            } else { return 0; }
+        } elif (p == 64) {                                   # '@'
+            if (_shabda_en_is_at1(c) == 1) {
+                t = t - 1;
+            } elif (c == 104 && (_shabda_en_ch(chars, t - 1) == 116 || _shabda_en_ch(chars, t - 1) == 99
+                || _shabda_en_ch(chars, t - 1) == 115)) {
+                t = t - 2;
+            } else { return 0; }
+        } elif (p == 32) {                                   # boundary
+            if (c != 32) { return 0; }
+            t = t - 1;
+        } else {
+            if (c != p) { return 0; }
+            t = t - 1;
+        }
+        k = k - 1;
+    }
+    return 1;
+}
+
+# RIGHT context `pat` against the letters from `pos` on, read left to right. 1 or 0.
+fn _shabda_en_right_ok(chars, pos, pat): i64 {
+    var t = pos;
+    var n = strlen(pat);
+    var k = 0;
+    while (k < n) {
+        var p = load8(pat + k);
+        var c = _shabda_en_ch(chars, t);
+        if (p == 35) {
+            if (_shabda_en_is_vowel(c) == 0) { return 0; }
+            t = t + 1;
+            while (_shabda_en_is_vowel(_shabda_en_ch(chars, t)) == 1) { t = t + 1; }
+        } elif (p == 58) {
+            while (_shabda_en_is_cons(_shabda_en_ch(chars, t)) == 1) { t = t + 1; }
+        } elif (p == 94) {
+            if (_shabda_en_is_cons(c) == 0) { return 0; }
+            t = t + 1;
+        } elif (p == 46) {
+            if (_shabda_en_is_voiced(c) == 0) { return 0; }
+            t = t + 1;
+        } elif (p == 43) {
+            if (_shabda_en_is_front(c) == 0) { return 0; }
+            t = t + 1;
+        } elif (p == 37) {                                   # '%': er e es ed ing ely
+            if (c == 101) {
+                t = t + 1;
+                var c2 = _shabda_en_ch(chars, t);
+                if (c2 == 108 && _shabda_en_ch(chars, t + 1) == 121) {
+                    t = t + 2;
+                } elif (c2 == 114 || c2 == 115 || c2 == 100) {
+                    t = t + 1;
+                }
+            } elif (c == 105 && _shabda_en_ch(chars, t + 1) == 110 && _shabda_en_ch(chars, t + 2) == 103) {
+                t = t + 3;
+            } else { return 0; }
+        } elif (p == 38) {
+            if (c == 99 || c == 115) {
+                if (_shabda_en_ch(chars, t + 1) == 104) { t = t + 2; } else { t = t + 1; }
+            } elif (_shabda_en_is_sib1(c) == 1) {
+                t = t + 1;
+            } else { return 0; }
+        } elif (p == 64) {
+            if ((c == 116 || c == 99 || c == 115) && _shabda_en_ch(chars, t + 1) == 104) {
+                t = t + 2;
+            } elif (_shabda_en_is_at1(c) == 1) {
+                t = t + 1;
+            } else { return 0; }
+        } elif (p == 32) {
+            if (c != 32) { return 0; }
+            t = t + 1;
+        } else {
+            if (c != p) { return 0; }
+            t = t + 1;
+        }
+        k = k + 1;
+    }
+    return 1;
+}
+
+# 1 if rule `r`'s MATCH spells the letters at `pos` and both contexts fit.
+fn _shabda_en_fits(chars, pos, r): i64 {
+    var m = load64(r + SHABDA_EN_MATCH);
+    var ml = load64(r + SHABDA_EN_MLEN);
+    var k = 0;
+    while (k < ml) {
+        if (_shabda_en_ch(chars, pos + k) != load8(m + k)) { return 0; }
+        k = k + 1;
+    }
+    if (_shabda_en_left_ok(chars, pos, load64(r + SHABDA_EN_LEFT)) == 0) { return 0; }
+    if (_shabda_en_right_ok(chars, pos + ml, load64(r + SHABDA_EN_RIGHT)) == 0) { return 0; }
+    return 1;
+}
+
+# Public English engine. Returns a fresh vec of svara phoneme ordinals.
 #must_use
 fn shabda_english_rules(word): i64 {
     return _shabda_english_rules_a(default_alloc(), word);
 }
 
-# shabda_english_rules, with every allocation drawn from Allocator `a`.
+# shabda_english_rules, with every allocation drawn from Allocator `a`. The rule table
+# itself is the process's, built on the default heap (shabda_g2p_new builds it first).
 #must_use
 fn _shabda_english_rules_a(a, word): i64 {
-    var chars0 = _shabda_word_chars_a(a, word);
-    if (vec_len(chars0) == 0) {
-        return vec_new_a(a);
-    }
-
-    # Step 1: strip silent letters.
-    var chars = _shabda_preprocess_silent_a(a, chars0);
-
-    # Step 2: detect + strip prefix. We compute the prefix phonemes (pushed later)
-    # and the stem-start offset into `chars`.
-    var prefix_out = vec_new_a(a);
-    var stem_start = _shabda_strip_prefix_a(a, chars, prefix_out);
-
-    # Build the stem vec (chars[stem_start..]).
-    var stem_full = vec_new_a(a);
-    var si = stem_start;
-    var cn = vec_len(chars);
-    while (si < cn) {
-        _shabda_vec_push_a(a, stem_full, vec_get(chars, si));
-        si = si + 1;
-    }
-
-    # Step 3: detect suffix (-ed) and shorten the stem.
-    var suffix = _shabda_detect_suffix(stem_full);
-    var stem = stem_full;
-    if (suffix == 1) {
-        # drop the last 2 chars
-        var stem2 = vec_new_a(a);
+    var chars = _shabda_word_chars_a(a, word);
+    var out = vec_new_a(a);
+    var tab = _shabda_en_rules_table();
+    var n = vec_len(chars);
+    var i = 0;
+    while (i < n) {
+        var c = vec_get(chars, i);
+        if (c == 45) {                                       # '-': a pause
+            _shabda_vec_push_a(a, out, SVARA_PH_SILENCE);
+            i = i + 1;
+            continue;
+        }
+        var b = _shabda_en_bucket(_shabda_en_ch(chars, i));
+        if (b < 0) { i = i + 1; continue; }                  # not a letter: no sound
+        var rules = vec_get(tab, b);
+        var nr = vec_len(rules);
+        var step = 1;
         var k = 0;
-        var slen = vec_len(stem_full) - 2;
-        while (k < slen) {
-            _shabda_vec_push_a(a, stem2, vec_get(stem_full, k));
+        while (k < nr) {
+            var r = vec_get(rules, k);
+            if (_shabda_en_fits(chars, i, r) == 1) {
+                var ph = load64(r + SHABDA_EN_PH);
+                var q = 0;
+                while (q < vec_len(ph)) { _shabda_vec_push_a(a, out, vec_get(ph, q)); q = q + 1; }
+                step = load64(r + SHABDA_EN_MLEN);
+                break;
+            }
             k = k + 1;
         }
-        stem = stem2;
+        i = i + step;
     }
-
-    # Step 4: assemble phonemes: prefix, then left-to-right pattern match.
-    var phonemes = vec_new_a(a);
-    var pi = 0;
-    var plen = vec_len(prefix_out);
-    while (pi < plen) {
-        _shabda_vec_push_a(a, phonemes, vec_get(prefix_out, pi));
-        pi = pi + 1;
-    }
-
-    var i = 0;
-    var stemlen = vec_len(stem);
-    while (i < stemlen) {
-        var consumed = _shabda_english_match_a(a, stem, i, phonemes);
-        i = i + consumed;
-    }
-
-    # Step 5: post-process the -ed suffix.
-    _shabda_apply_suffix_a(a, phonemes, suffix);
-
-    return phonemes;
+    _shabda_en_ed_voicing(chars, out);
+    _shabda_en_reduce(chars, out);
+    return out;
 }
 
-# --- Step 2 helper: strip_prefix. Pushes prefix phonemes onto `prefix_out` and
-# returns the stem-start offset. Only strips when remainder >= 4 and remainder[0]
-# is a consonant. Ports strip_prefix(). Prefix order matters (un, dis, mis, pre,
-# re) — 're' is checked last so 'pre' wins first.
-#must_use
-fn _shabda_strip_prefix_a(a, chars, prefix_out): i64 {
-    var n = vec_len(chars);
-
-    # un (len 2)
-    if (_shabda_prefix_matches(chars, 0x75, 0x6E, 0, 0, 2) == 1) {
-        var rem = n - 2;
-        if (rem >= 4) {
-            if (_shabda_is_vowel_char(vec_get(chars, 2)) == 0) {
-                _shabda_vec_push_a(a, prefix_out, SVARA_PH_VOWEL_CUP_V);
-                _shabda_vec_push_a(a, prefix_out, SVARA_PH_NASAL_N);
-                return 2;
-            }
-        }
-    }
-    # dis (len 3)
-    if (_shabda_prefix_matches(chars, 0x64, 0x69, 0x73, 0, 3) == 1) {
-        var rem = n - 3;
-        if (rem >= 4) {
-            if (_shabda_is_vowel_char(vec_get(chars, 3)) == 0) {
-                _shabda_vec_push_a(a, prefix_out, SVARA_PH_PLOSIVE_D);
-                _shabda_vec_push_a(a, prefix_out, SVARA_PH_VOWEL_NEAR_I);
-                _shabda_vec_push_a(a, prefix_out, SVARA_PH_FRIC_S);
-                return 3;
-            }
-        }
-    }
-    # mis (len 3)
-    if (_shabda_prefix_matches(chars, 0x6D, 0x69, 0x73, 0, 3) == 1) {
-        var rem = n - 3;
-        if (rem >= 4) {
-            if (_shabda_is_vowel_char(vec_get(chars, 3)) == 0) {
-                _shabda_vec_push_a(a, prefix_out, SVARA_PH_NASAL_M);
-                _shabda_vec_push_a(a, prefix_out, SVARA_PH_VOWEL_NEAR_I);
-                _shabda_vec_push_a(a, prefix_out, SVARA_PH_FRIC_S);
-                return 3;
-            }
-        }
-    }
-    # pre (len 3)
-    if (_shabda_prefix_matches(chars, 0x70, 0x72, 0x65, 0, 3) == 1) {
-        var rem = n - 3;
-        if (rem >= 4) {
-            if (_shabda_is_vowel_char(vec_get(chars, 3)) == 0) {
-                _shabda_vec_push_a(a, prefix_out, SVARA_PH_PLOSIVE_P);
-                _shabda_vec_push_a(a, prefix_out, SVARA_PH_APPROX_R);
-                _shabda_vec_push_a(a, prefix_out, SVARA_PH_VOWEL_E);
-                return 3;
-            }
-        }
-    }
-    # re (len 2)
-    if (_shabda_prefix_matches(chars, 0x72, 0x65, 0, 0, 2) == 1) {
-        var rem = n - 2;
-        if (rem >= 4) {
-            if (_shabda_is_vowel_char(vec_get(chars, 2)) == 0) {
-                _shabda_vec_push_a(a, prefix_out, SVARA_PH_APPROX_R);
-                _shabda_vec_push_a(a, prefix_out, SVARA_PH_VOWEL_E);
-                return 2;
-            }
-        }
+# The -ed of a past tense after a silent e is /t/ after a voiceless consonant and /d/
+# otherwise ("walked", "played", "hoped"): the letter rules only see letters, and y or
+# a vowel before the e is neither of their voiced-consonant contexts. Fixes the output
+# in place.
+fn _shabda_en_ed_voicing(chars, out): i64 {
+    var n = vec_len(out);
+    if (vec_len(chars) < 4 || n < 2) { return 0; }
+    if (_shabda_en_ends(chars, "ed") == 0) { return 0; }
+    var last = vec_get(out, n - 1);
+    if (last != SVARA_PH_PLOSIVE_T && last != SVARA_PH_PLOSIVE_D) { return 0; }
+    var prev = vec_get(out, n - 2);
+    if (prev == SVARA_PH_PLOSIVE_T || prev == SVARA_PH_PLOSIVE_D) { return 0; }
+    if (prev == SVARA_PH_PLOSIVE_P || prev == SVARA_PH_PLOSIVE_K || prev == SVARA_PH_FRIC_F
+      || prev == SVARA_PH_FRIC_S || prev == SVARA_PH_FRIC_SH || prev == SVARA_PH_AFFR_CH
+      || prev == SVARA_PH_FRIC_TH) {
+        vec_set(out, n - 1, SVARA_PH_PLOSIVE_T);
+    } else {
+        vec_set(out, n - 1, SVARA_PH_PLOSIVE_D);
     }
     return 0;
 }
 
-# Does `chars` start with the given prefix (up to `plen` codepoints)?
-#must_use
-fn _shabda_prefix_matches(chars, p0, p1, p2, p3, plen): i64 {
-    if (vec_len(chars) < plen) { return 0; }
-    if (vec_get(chars, 0) != p0) { return 0; }
-    if (plen >= 2) { if (vec_get(chars, 1) != p1) { return 0; } }
-    if (plen >= 3) { if (vec_get(chars, 2) != p2) { return 0; } }
-    if (plen >= 4) { if (vec_get(chars, 3) != p3) { return 0; } }
+# ---- vowel reduction --------------------------------------------------------------------
+# Letter rules cannot see stress, so they give a full vowel where English reduces an
+# unstressed one to schwa: CMUdict's AH0 in "abandon", "absolute", "academy". This pass
+# predicts the primary stress, keeps a secondary two syllables before it (CMUdict's 2),
+# and turns AA, AE, AH, AO and EH in every other syllable into schwa. IH, IY, UW, the
+# diphthongs and ER stay: CMUdict keeps them unstressed (IH0, IY0, OW0).
+#
+# The stress guess, in order: a stress-taking suffix (-ee, -eer, -ese, -ique, -oon,
+# -ette, -esque, -aire, -ade) stresses the last syllable; -ity, -ify, -ible, -ical,
+# -graphy, -logy, -ometer, -inal, -itive, -ative stress the third from last; -tion,
+# -sion, -cian, -tian, -ic, -ically, -ial, -ian, -ious, -eous, -ual, -uous, -ient,
+# -ience, -itis, -osis the second from last. Otherwise a two-syllable word is stressed
+# on the first syllable unless it starts with an unstressed prefix (a-, be-, de-, re-,
+# con-, ex-, …) before a consonant; a longer word follows the Latin rule: the second
+# from last if that syllable is heavy (a long vowel or diphthong, or two consonants
+# after it), else the third from last. Measured on CMUdict: +3.5 points of exact words
+# on both halves (the 3.1.3 CHANGELOG entry).
+
+# 1 if the last letters of `chars` spell `suf`.
+fn _shabda_en_ends(chars, suf): i64 {
+    var n = vec_len(chars);
+    var m = strlen(suf);
+    if (m > n) { return 0; }
+    var k = 0;
+    while (k < m) {
+        if (vec_get(chars, n - m + k) != load8(suf + k)) { return 0; }
+        k = k + 1;
+    }
     return 1;
 }
 
-# --- Step 3 helper: detect_suffix. Returns 1 for -ed, 0 for none. Ports
-# detect_suffix(): -ed only when len >= 4 and last two chars are 'e','d'.
-#must_use
-fn _shabda_detect_suffix(chars): i64 {
+# 1 if `chars` starts with `pre`, has more than two letters after it, and the letter
+# right after it is a consonant.
+fn _shabda_en_unstressed_prefix(chars, pre): i64 {
     var n = vec_len(chars);
-    if (n >= 3) {
-        if (vec_get(chars, n - 2) == 0x65) {
-            if (vec_get(chars, n - 1) == 0x64) {
-                if (n >= 4) {
-                    return 1;
-                }
-            }
-        }
+    var m = strlen(pre);
+    if (n <= m + 2) { return 0; }
+    var k = 0;
+    while (k < m) {
+        if (vec_get(chars, k) != load8(pre + k)) { return 0; }
+        k = k + 1;
+    }
+    if (_shabda_en_is_vowel(_shabda_en_ch(chars, m)) == 1) { return 0; }
+    return 1;
+}
+
+fn _shabda_en_any_suffix(chars, list, count): i64 {
+    var k = 0;
+    while (k < count) {
+        if (_shabda_en_ends(chars, load64(list + k * 8)) == 1) { return 1; }
+        k = k + 1;
     }
     return 0;
 }
 
-# --- Step 5 helper: apply_suffix (-ed). Ports apply_suffix(). Mutates in place.
-fn _shabda_apply_suffix_a(a, phonemes, suffix): i64 {
-    if (suffix == 0) { return 0; }
-    var n = vec_len(phonemes);
-    if (n == 0) {
-        # Rust: last == None -> falls to the _ arm -> push /d/
-        _shabda_vec_push_a(a, phonemes, SVARA_PH_PLOSIVE_D);
+var _SHABDA_EN_SUF_LAST = 0;
+var _SHABDA_EN_SUF_ANTE = 0;
+var _SHABDA_EN_SUF_PEN = 0;
+var _SHABDA_EN_PREFIXES = 0;
+var _SHABDA_EN_PREFIXES2 = 0;
+
+# A list of 17 cstring pointers, built once on the default heap ("" fills the tail).
+fn _shabda_en_list(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15, a16): i64 {
+    var l = alloc(17 * 8);
+    store64(l, a0); store64(l + 8, a1); store64(l + 16, a2); store64(l + 24, a3);
+    store64(l + 32, a4); store64(l + 40, a5); store64(l + 48, a6); store64(l + 56, a7);
+    store64(l + 64, a8); store64(l + 72, a9); store64(l + 80, a10); store64(l + 88, a11);
+    store64(l + 96, a12); store64(l + 104, a13); store64(l + 112, a14); store64(l + 120, a15);
+    store64(l + 128, a16);
+    return l;
+}
+
+fn _shabda_en_stress_lists(): i64 {
+    if (_SHABDA_EN_SUF_LAST != 0) { return 0; }
+    _SHABDA_EN_SUF_ANTE = _shabda_en_list("ity", "ify", "ible", "ical", "graphy", "logy", "ometer",
+      "inal", "itive", "ative", "", "", "", "", "", "", "");
+    _SHABDA_EN_SUF_PEN = _shabda_en_list("tion", "sion", "cian", "tian", "ic", "ical", "ically", "ial",
+      "ian", "ious", "eous", "ual", "uous", "ient", "ience", "itis", "osis");
+    _SHABDA_EN_PREFIXES = _shabda_en_list("a", "be", "de", "re", "pre", "con", "com", "ex", "in", "dis",
+      "mis", "ob", "sub", "per", "pro", "sus", "e");
+    _SHABDA_EN_PREFIXES2 = _shabda_en_list("en", "em", "ad", "ac", "ap", "as", "at", "af", "al", "an",
+      "ar", "im", "un", "for", "fore", "", "");
+    _SHABDA_EN_SUF_LAST = _shabda_en_list("ee", "eer", "ese", "ique", "oon", "ette", "esque", "aire",
+      "ade", "", "", "", "", "", "", "", "");
+    return 0;
+}
+
+fn _shabda_en_is_long(ph): i64 {
+    if (ph >= SVARA_PH_DIPH_AI && ph <= SVARA_PH_DIPH_OU) { return 1; }
+    if (ph == SVARA_PH_VOWEL_LONG_I || ph == SVARA_PH_VOWEL_U || ph == SVARA_PH_VOWEL_O) { return 1; }
+    return 0;
+}
+
+fn _shabda_en_is_nucleus(ph): i64 {
+    var c = svara_phoneme_class(ph);
+    if (c == SVARA_CLASS_VOWEL || c == SVARA_CLASS_DIPHTHONG) { return 1; }
+    return 0;
+}
+
+fn _shabda_en_reducible(ph): i64 {
+    if (ph == SVARA_PH_VOWEL_OPEN_A || ph == SVARA_PH_VOWEL_ASH || ph == SVARA_PH_VOWEL_CUP_V) { return 1; }
+    if (ph == SVARA_PH_VOWEL_OPEN_O || ph == SVARA_PH_VOWEL_OPEN_E) { return 1; }
+    return 0;
+}
+
+# The predicted primary-stress syllable (0-based) of an `n`-syllable word.
+fn _shabda_en_stress_index(chars, out, n): i64 {
+    if (n <= 1) { return 0; }
+    if (_shabda_en_any_suffix(chars, _SHABDA_EN_SUF_LAST, 9) == 1) { return n - 1; }
+    if (n >= 3 && _shabda_en_any_suffix(chars, _SHABDA_EN_SUF_ANTE, 10) == 1) { return n - 3; }
+    if (_shabda_en_any_suffix(chars, _SHABDA_EN_SUF_PEN, 17) == 1) { return n - 2; }
+    if (n == 2) {
+        var k = 0;
+        while (k < 17) {
+            if (_shabda_en_unstressed_prefix(chars, load64(_SHABDA_EN_PREFIXES + k * 8)) == 1) { return 1; }
+            k = k + 1;
+        }
+        k = 0;
+        while (k < 15) {
+            if (_shabda_en_unstressed_prefix(chars, load64(_SHABDA_EN_PREFIXES2 + k * 8)) == 1) { return 1; }
+            k = k + 1;
+        }
         return 0;
     }
-    var last = vec_get(phonemes, n - 1);
-    # After /t/ or /d/: -ed = /ɪd/
-    if (last == SVARA_PH_PLOSIVE_T) {
-        _shabda_vec_push_a(a, phonemes, SVARA_PH_VOWEL_NEAR_I);
-        _shabda_vec_push_a(a, phonemes, SVARA_PH_PLOSIVE_D);
-        return 0;
+    # Latin rule over the last two nuclei.
+    var pen = 0 - 1;
+    var fin = 0 - 1;
+    var i = 0;
+    while (i < vec_len(out)) {
+        if (_shabda_en_is_nucleus(vec_get(out, i)) == 1) { pen = fin; fin = i; }
+        i = i + 1;
     }
-    if (last == SVARA_PH_PLOSIVE_D) {
-        _shabda_vec_push_a(a, phonemes, SVARA_PH_VOWEL_NEAR_I);
-        _shabda_vec_push_a(a, phonemes, SVARA_PH_PLOSIVE_D);
-        return 0;
+    if (_shabda_en_is_long(vec_get(out, pen)) == 1 || fin - pen - 1 >= 2) { return n - 2; }
+    return n - 3;
+}
+
+# Reduce the unstressed full vowels of `out` (in place) to schwa.
+fn _shabda_en_reduce(chars, out): i64 {
+    _shabda_en_stress_lists();
+    var n = 0;
+    var i = 0;
+    while (i < vec_len(out)) {
+        if (_shabda_en_is_nucleus(vec_get(out, i)) == 1) { n = n + 1; }
+        i = i + 1;
     }
-    # After voiceless consonants: -ed = /t/
-    if (last == SVARA_PH_PLOSIVE_P) { _shabda_vec_push_a(a, phonemes, SVARA_PH_PLOSIVE_T); return 0; }
-    if (last == SVARA_PH_PLOSIVE_K) { _shabda_vec_push_a(a, phonemes, SVARA_PH_PLOSIVE_T); return 0; }
-    if (last == SVARA_PH_FRIC_F)    { _shabda_vec_push_a(a, phonemes, SVARA_PH_PLOSIVE_T); return 0; }
-    if (last == SVARA_PH_FRIC_S)    { _shabda_vec_push_a(a, phonemes, SVARA_PH_PLOSIVE_T); return 0; }
-    if (last == SVARA_PH_FRIC_SH)   { _shabda_vec_push_a(a, phonemes, SVARA_PH_PLOSIVE_T); return 0; }
-    if (last == SVARA_PH_AFFR_CH)   { _shabda_vec_push_a(a, phonemes, SVARA_PH_PLOSIVE_T); return 0; }
-    if (last == SVARA_PH_FRIC_TH)   { _shabda_vec_push_a(a, phonemes, SVARA_PH_PLOSIVE_T); return 0; }
-    # After voiced consonants and vowels: -ed = /d/
-    _shabda_vec_push_a(a, phonemes, SVARA_PH_PLOSIVE_D);
+    if (n <= 1) { return 0; }
+    var s = _shabda_en_stress_index(chars, out, n);
+    var k = 0;
+    i = 0;
+    while (i < vec_len(out)) {
+        var ph = vec_get(out, i);
+        if (_shabda_en_is_nucleus(ph) == 1) {
+            if (k != s && k != s - 2 && _shabda_en_reducible(ph) == 1) { vec_set(out, i, SVARA_PH_VOWEL_SCHWA); }
+            k = k + 1;
+        }
+        i = i + 1;
+    }
+    # A schwa, r and a vowel after a first syllable is CMUdict's ER0 + vowel ("memory",
+    # "accessory"): the r is the vowel's colouring, not a consonant of its own.
+    i = 1;
+    while (i + 2 < vec_len(out)) {
+        if (vec_get(out, i) == SVARA_PH_VOWEL_SCHWA && vec_get(out, i + 1) == SVARA_PH_APPROX_R
+          && _shabda_en_is_nucleus(vec_get(out, i + 2)) == 1) {
+            vec_set(out, i, SVARA_PH_VOWEL_BIRD);
+            vec_remove(out, i + 1);
+        }
+        i = i + 1;
+    }
+    # A medial /ɪ/ after a full vowel is unstressed and reduces too ("accident", "ability").
+    n = 0;
+    i = 0;
+    while (i < vec_len(out)) {
+        if (_shabda_en_is_nucleus(vec_get(out, i)) == 1) { n = n + 1; }
+        i = i + 1;
+    }
+    if (n < 3) { return 0; }
+    k = 0;
+    var prev = 0 - 1;
+    i = 0;
+    while (i < vec_len(out)) {
+        var q = vec_get(out, i);
+        if (_shabda_en_is_nucleus(q) == 1) {
+            if (k > 0 && k < n - 1 && q == SVARA_PH_VOWEL_NEAR_I && prev != SVARA_PH_VOWEL_SCHWA) {
+                vec_set(out, i, SVARA_PH_VOWEL_SCHWA);
+            }
+            prev = vec_get(out, i);
+            k = k + 1;
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+# ---- the rules, by first letter -------------------------------------------------------
+# NRL Report 7948's rules in its order, its phoneme codes written as ARPABET (its AX is
+# AH0, its AH is AH1). Lines marked `+` are additions beyond NRL (see the CHANGELOG).
+fn _shabda_en_rules_a_e(t): i64 {
+    # a
+    _shabda_en_r(t, "", "a", " ", "AH0");
+    _shabda_en_r(t, "", "ay", "", "EY1");
+    _shabda_en_r(t, "", "a", "x", "AE1");
+    _shabda_en_r(t, "", "alm", "", "AA1 M");
+    _shabda_en_r(t, "#:", "ance", " ", "AH0 N S");
+    _shabda_en_r(t, "#:", "ancy", " ", "AH0 N S IY0");
+    _shabda_en_r(t, "#:", "ant", " ", "AH0 N T");
+    _shabda_en_r(t, "#:", "ants", " ", "AH0 N T S");
+    _shabda_en_r(t, " ", "are", " ", "AA1 R");
+    _shabda_en_r(t, " ", "ar", "o", "AH0 R");
+    _shabda_en_r(t, "", "ar", "#", "EH1 R");
+    _shabda_en_r(t, "^", "as", "#", "EY1 S");
+    _shabda_en_r(t, "", "a", "wa", "AH0");
+    _shabda_en_r(t, "", "aw", "", "AO1");
+    _shabda_en_r(t, " :", "any", "", "EH1 N IY0");
+    _shabda_en_r(t, "", "a", "^+#", "EY1");
+    _shabda_en_r(t, "#:", "ally", "", "AH0 L IY0");
+    _shabda_en_r(t, " ", "al", "#", "AH0 L");
+    _shabda_en_r(t, "", "again", "", "AH0 G EH1 N");
+    _shabda_en_r(t, "#:", "ag", "e", "IH0 JH");
+    _shabda_en_r(t, "", "a", "^+:#", "AE1");
+    _shabda_en_r(t, " :", "a", "^+ ", "EY1");
+    _shabda_en_r(t, "", "a", "^%", "EY1");
+    _shabda_en_r(t, " ", "arr", "", "AH0 R");
+    _shabda_en_r(t, "", "arr", "", "AE1 R");
+    _shabda_en_r(t, " :", "ar", " ", "AA1 R");
+    _shabda_en_r(t, "", "ar", " ", "ER0");
+    _shabda_en_r(t, "", "ar", "", "AA1 R");
+    _shabda_en_r(t, "", "air", "", "EH1 R");
+    _shabda_en_r(t, "", "ai", "", "EY1");
+    _shabda_en_r(t, "", "au", "", "AO1");
+    _shabda_en_r(t, "#:", "al", " ", "AH0 L");
+    _shabda_en_r(t, "#:", "als", " ", "AH0 L Z");
+    _shabda_en_r(t, "", "alk", "", "AO1 K");
+    _shabda_en_r(t, "", "al", "^", "AO1 L");
+    _shabda_en_r(t, " :", "able", "", "EY1 B AH0 L");
+    _shabda_en_r(t, "", "able", "", "AH0 B AH0 L");
+    _shabda_en_r(t, "", "ang", "+", "EY1 N JH");
+    _shabda_en_r(t, "", "a", "", "AE1");
+    # b
+    _shabda_en_r(t, "b", "b", "", "");
+    _shabda_en_r(t, " ", "be", "^#", "B IH0");
+    _shabda_en_r(t, "", "being", "", "B IY1 IH0 NG");
+    _shabda_en_r(t, " ", "both", " ", "B OW1 TH");
+    _shabda_en_r(t, " ", "bus", "#", "B IH1 Z");
+    _shabda_en_r(t, "", "buil", "", "B IH1 L");
+    _shabda_en_r(t, "m", "b", " ", "");                                     # + lamb, climb
+    _shabda_en_r(t, "", "b", "t ", "");                                     # + debt, doubt
+    _shabda_en_r(t, "", "b", "", "B");
+    # c
+    _shabda_en_r(t, "", "cc", "+", "K S");
+    _shabda_en_r(t, "", "cc", "", "K");
+    _shabda_en_r(t, " ", "ch", "^", "K");
+    _shabda_en_r(t, "^e", "ch", "", "K");
+    _shabda_en_r(t, "", "ch", "", "CH");
+    _shabda_en_r(t, " s", "ci", "#", "S AY1");
+    _shabda_en_r(t, "", "ci", "a", "SH");
+    _shabda_en_r(t, "", "ci", "o", "SH");
+    _shabda_en_r(t, "", "ci", "en", "SH");
+    _shabda_en_r(t, "", "c", "+", "S");
+    _shabda_en_r(t, "", "ck", "", "K");
+    _shabda_en_r(t, "", "com", "%", "K AH1 M");
+    _shabda_en_r(t, "", "c", "", "K");
+    # d
+    _shabda_en_r(t, "d", "d", "", "");
+    _shabda_en_r(t, "", "dg", "+", "JH");
+    _shabda_en_r(t, "", "dj", "", "JH");
+    _shabda_en_r(t, "#:", "ded", " ", "D IH0 D");
+    _shabda_en_r(t, ".e", "d", " ", "D");
+    _shabda_en_r(t, "#:^e", "d", " ", "T");
+    _shabda_en_r(t, " ", "de", "^#", "D IH0");
+    _shabda_en_r(t, " ", "do", " ", "D UW1");
+    _shabda_en_r(t, " ", "does", "", "D AH1 Z");
+    _shabda_en_r(t, " ", "doing", "", "D UW1 IH0 NG");
+    _shabda_en_r(t, " ", "dow", "", "D AW1");
+    _shabda_en_r(t, "", "du", "a", "JH UW1");
+    _shabda_en_r(t, "", "d", "", "D");
+    # e
+    _shabda_en_r(t, "#:", "ence", " ", "AH0 N S");
+    _shabda_en_r(t, "#:", "ency", " ", "AH0 N S IY0");
+    _shabda_en_r(t, "#:", "ent", " ", "AH0 N T");
+    _shabda_en_r(t, "#:", "ents", " ", "AH0 N T S");
+    _shabda_en_r(t, "#:", "e", " ", "");
+    _shabda_en_r(t, "'^:", "e", " ", "");
+    _shabda_en_r(t, " :", "e", " ", "IY1");
+    _shabda_en_r(t, "#", "ed", " ", "D");
+    _shabda_en_r(t, "#:", "e", "d ", "");
+    _shabda_en_r(t, "#:", "ere", " ", "IH1 R");
+    _shabda_en_r(t, " :", "ere", " ", "IH1 R");
+    _shabda_en_r(t, "", "ey", "", "IY0");
+    _shabda_en_r(t, "", "ev", "er", "EH1 V");
+    _shabda_en_r(t, "", "e", "^%", "IY1");
+    _shabda_en_r(t, "", "eri", "#", "IY1 R IY0");
+    _shabda_en_r(t, "", "eri", "", "EH1 R IH0");
+    _shabda_en_r(t, "#:", "er", "#", "ER0");
+    _shabda_en_r(t, "", "er", "#", "EH1 R");
+    _shabda_en_r(t, "", "er", "", "ER0");
+    _shabda_en_r(t, " ", "even", "", "IY1 V EH0 N");
+    _shabda_en_r(t, "#:", "e", "w", "");
+    _shabda_en_r(t, "@", "ew", "", "UW1");
+    _shabda_en_r(t, "", "ew", "", "Y UW1");
+    _shabda_en_r(t, "", "e", "o", "IY0");
+    _shabda_en_r(t, "#:&", "es", " ", "IH0 Z");
+    _shabda_en_r(t, "#:", "e", "s ", "");
+    _shabda_en_r(t, "#:", "ely", " ", "L IY0");
+    _shabda_en_r(t, "#:", "ement", "", "M AH0 N T");
+    _shabda_en_r(t, "", "eful", "", "F UH0 L");
+    _shabda_en_r(t, "", "ee", "", "IY1");
+    _shabda_en_r(t, "", "ear", "#", "IH1 R");
+    _shabda_en_r(t, "", "ear", " ", "IH1 R");
+    _shabda_en_r(t, "", "ear", "s ", "IH1 R");
+    _shabda_en_r(t, "", "earn", "", "ER1 N");
+    _shabda_en_r(t, " ", "ear", "^", "ER1");
+    _shabda_en_r(t, "", "ead", "", "EH1 D");
+    _shabda_en_r(t, "#:", "ea", " ", "IY0 AH0");
+    _shabda_en_r(t, "", "ea", "su", "EH1");
+    _shabda_en_r(t, "", "ea", "", "IY1");
+    _shabda_en_r(t, "", "eigh", "", "EY1");
+    _shabda_en_r(t, "", "ei", "", "IY1");
+    _shabda_en_r(t, " ", "eye", "", "AY1");
+    _shabda_en_r(t, "", "eu", "", "Y UW1");
+    _shabda_en_r(t, "", "e", "", "EH1");
+    return 0;
+}
+
+fn _shabda_en_rules_f_n(t): i64 {
+    # f
+    _shabda_en_r(t, "f", "f", "", "");
+    _shabda_en_r(t, "", "ful", "", "F UH0 L");
+    _shabda_en_r(t, "", "f", "", "F");
+    # g
+    _shabda_en_r(t, "", "giv", "", "G IH1 V");
+    _shabda_en_r(t, " ", "g", "i^", "G");
+    _shabda_en_r(t, "", "ge", "t", "G EH1");
+    _shabda_en_r(t, "su", "gges", "", "G JH EH1 S");
+    _shabda_en_r(t, "", "gg", "", "G");
+    _shabda_en_r(t, " b#", "g", "", "G");
+    _shabda_en_r(t, " ", "gn", "", "N");                                    # + gnome, gnaw
+    _shabda_en_r(t, "", "gn", " ", "N");                                    # + sign, design
+    _shabda_en_r(t, "", "g", "+", "JH");
+    _shabda_en_r(t, "", "great", "", "G R EY1 T");
+    _shabda_en_r(t, "#", "gh", "", "");
+    _shabda_en_r(t, "", "g", "", "G");
+    # h
+    _shabda_en_r(t, " ", "hav", "", "HH AE1 V");
+    _shabda_en_r(t, " ", "here", "", "HH IH1 R");
+    _shabda_en_r(t, " ", "hour", "", "AW1 ER0");
+    _shabda_en_r(t, "", "how", "", "HH AW1");
+    _shabda_en_r(t, "", "h", "#", "HH");
+    _shabda_en_r(t, "", "h", "", "");
+    # i
+    _shabda_en_r(t, "#:^", "ity", " ", "AH0 T IY0");
+    _shabda_en_r(t, "", "ible", "", "AH0 B AH0 L");
+    _shabda_en_r(t, "t", "ive", " ", "IH0 V");
+    _shabda_en_r(t, "s", "ive", " ", "IH0 V");
+    _shabda_en_r(t, " ", "in", "", "IH0 N");
+    _shabda_en_r(t, " ", "i", " ", "AY1");
+    _shabda_en_r(t, "", "in", "d", "AY1 N");
+    _shabda_en_r(t, "", "ier", "", "IY0 ER0");
+    _shabda_en_r(t, "#:r", "ied", "", "IY0 D");
+    _shabda_en_r(t, "", "ied", " ", "AY1 D");
+    _shabda_en_r(t, "", "ien", "", "IY0 EH0 N");
+    _shabda_en_r(t, "", "ie", "t", "AY1 EH0");
+    _shabda_en_r(t, "", "ie", "^e", "IY1");
+    _shabda_en_r(t, " :", "i", "%", "AY1");
+    _shabda_en_r(t, "", "i", "%", "IY1");
+    _shabda_en_r(t, "", "ie", "", "IY1");
+    _shabda_en_r(t, "#:^", "i", "#", "IY0");
+    _shabda_en_r(t, "", "i", "^+:#", "IH1");
+    _shabda_en_r(t, "", "ir", "#", "AY1 R");
+    _shabda_en_r(t, "", "iz", "%", "AY1 Z");
+    _shabda_en_r(t, "", "is", "%", "AY1 Z");
+    _shabda_en_r(t, "", "i", "d%", "AY1");
+    _shabda_en_r(t, "+^", "i", "^+", "IH1");
+    _shabda_en_r(t, "", "i", "t%", "AY1");
+    _shabda_en_r(t, "#:^", "i", "^+", "IH1");
+    _shabda_en_r(t, "", "i", "^+", "AY1");
+    _shabda_en_r(t, "", "ir", "", "ER1");
+    _shabda_en_r(t, "", "igh", "", "AY1");
+    _shabda_en_r(t, "", "ild", "", "AY1 L D");
+    _shabda_en_r(t, "", "ign", " ", "AY1 N");
+    _shabda_en_r(t, "", "ign", "^", "AY1 N");
+    _shabda_en_r(t, "", "ign", "%", "AY1 N");
+    _shabda_en_r(t, "", "ique", "", "IY1 K");
+    _shabda_en_r(t, "", "i", "", "IH1");
+    # j
+    _shabda_en_r(t, "", "j", "", "JH");
+    # k
+    _shabda_en_r(t, " ", "k", "n", "");
+    _shabda_en_r(t, "", "k", "", "K");
+    # l
+    _shabda_en_r(t, "", "lo", "c#", "L OW1");
+    _shabda_en_r(t, "l", "l", "", "");
+    _shabda_en_r(t, "#:^", "l", "%", "AH0 L");
+    _shabda_en_r(t, "", "lead", "", "L IY1 D");
+    _shabda_en_r(t, "", "l", "", "L");
+    # m
+    _shabda_en_r(t, "m", "m", "", "");
+    _shabda_en_r(t, "#:", "ment", "", "M AH0 N T");
+    _shabda_en_r(t, "", "mov", "", "M UW1 V");
+    _shabda_en_r(t, "", "m", "", "M");
+    # n
+    _shabda_en_r(t, "n", "n", "", "");
+    _shabda_en_r(t, "e", "ng", "+", "N JH");
+    _shabda_en_r(t, "", "ng", "r", "NG G");
+    _shabda_en_r(t, "", "ng", "#", "NG G");
+    _shabda_en_r(t, "", "ngl", "%", "NG G AH0 L");
+    _shabda_en_r(t, "", "ng", "", "NG");
+    _shabda_en_r(t, "", "nk", "", "NG K");
+    _shabda_en_r(t, " ", "now", " ", "N AW1");
+    _shabda_en_r(t, "", "n", "", "N");
+    return 0;
+}
+
+fn _shabda_en_rules_o_s(t): i64 {
+    # o
+    _shabda_en_r(t, "", "of", " ", "AH0 V");
+    _shabda_en_r(t, "", "oy", "", "OY1");
+    _shabda_en_r(t, "", "orough", "", "ER1 OW0");
+    _shabda_en_r(t, "#:", "or", " ", "ER0");
+    _shabda_en_r(t, "#:", "ors", " ", "ER0 Z");
+    _shabda_en_r(t, "", "or", "", "AO1 R");
+    _shabda_en_r(t, " ", "one", "", "W AH1 N");
+    _shabda_en_r(t, "", "ow", "", "OW1");
+    _shabda_en_r(t, " ", "over", "", "OW1 V ER0");
+    _shabda_en_r(t, "", "ov", "", "AH1 V");
+    _shabda_en_r(t, "", "o", "^%", "OW1");
+    _shabda_en_r(t, "", "o", "^en", "OW1");
+    _shabda_en_r(t, "", "o", "^i#", "OW1");
+    _shabda_en_r(t, "", "ol", "d", "OW1 L");
+    _shabda_en_r(t, "", "ought", "", "AO1 T");
+    _shabda_en_r(t, "", "ough", "", "AH1 F");
+    _shabda_en_r(t, " ", "ou", "", "AW1");
+    _shabda_en_r(t, "h", "ou", "s#", "AW1");
+    _shabda_en_r(t, "", "ous", "", "AH0 S");
+    _shabda_en_r(t, "", "our", "", "AO1 R");
+    _shabda_en_r(t, "", "ould", "", "UH1 D");
+    _shabda_en_r(t, "^", "ou", "^l", "AH1");
+    _shabda_en_r(t, "", "oup", "", "UW1 P");
+    _shabda_en_r(t, "", "ou", "", "AW1");
+    _shabda_en_r(t, "", "oing", "", "OW1 IH0 NG");
+    _shabda_en_r(t, "", "oi", "", "OY1");
+    _shabda_en_r(t, "", "oor", "", "AO1 R");
+    _shabda_en_r(t, "", "ook", "", "UH1 K");
+    _shabda_en_r(t, "", "ood", "", "UH1 D");
+    _shabda_en_r(t, "", "oo", "", "UW1");
+    _shabda_en_r(t, "", "o", "e", "OW1");
+    _shabda_en_r(t, "", "o", " ", "OW1");
+    _shabda_en_r(t, "", "oa", "", "OW1");
+    _shabda_en_r(t, " ", "only", "", "OW1 N L IY0");
+    _shabda_en_r(t, " ", "once", "", "W AH1 N S");
+    _shabda_en_r(t, "", "on't", "", "OW1 N T");
+    _shabda_en_r(t, "c", "o", "n", "AA0");
+    _shabda_en_r(t, "", "o", "ng", "AO1");
+    _shabda_en_r(t, " :^", "o", "n", "AH1");
+    _shabda_en_r(t, "i", "on", "", "AH0 N");
+    _shabda_en_r(t, "#:", "on", " ", "AH0 N");
+    _shabda_en_r(t, "#^", "on", "", "AH0 N");
+    _shabda_en_r(t, "", "o", "st ", "OW1");
+    _shabda_en_r(t, "", "of", "^", "AO1 F");
+    _shabda_en_r(t, "", "other", "", "AH1 DH ER0");
+    _shabda_en_r(t, "", "oss", " ", "AO1 S");
+    _shabda_en_r(t, "#:^", "om", "", "AH1 M");
+    _shabda_en_r(t, "", "o", "", "AA1");
+    # p
+    _shabda_en_r(t, "p", "p", "", "");
+    _shabda_en_r(t, "", "ph", "", "F");
+    _shabda_en_r(t, "", "peop", "", "P IY1 P");
+    _shabda_en_r(t, "", "pow", "", "P AW1");
+    _shabda_en_r(t, "", "put", " ", "P UH1 T");
+    _shabda_en_r(t, " ", "ps", "", "S");                                    # + psalm, psyche
+    _shabda_en_r(t, " ", "pn", "", "N");                                    # + pneumonia
+    _shabda_en_r(t, "", "p", "", "P");
+    # q
+    _shabda_en_r(t, "", "quar", "", "K W AO1 R");
+    _shabda_en_r(t, "", "qu", "", "K W");
+    _shabda_en_r(t, "", "q", "", "K");
+    # r
+    _shabda_en_r(t, "r", "r", "", "");
+    _shabda_en_r(t, " ", "re", "^#", "R IH0");
+    _shabda_en_r(t, " ", "re", "^^#", "R IH0");
+    _shabda_en_r(t, "", "r", "", "R");
+    # s
+    _shabda_en_r(t, "", "sh", "", "SH");
+    _shabda_en_r(t, "#", "sion", "", "ZH AH0 N");
+    _shabda_en_r(t, "", "some", "", "S AH1 M");
+    _shabda_en_r(t, "#", "sur", "#", "ZH ER0");
+    _shabda_en_r(t, "", "sur", "#", "SH ER0");
+    _shabda_en_r(t, "#", "su", "#", "ZH UW0");
+    _shabda_en_r(t, "#", "ssu", "#", "SH UW0");
+    _shabda_en_r(t, "#", "sed", " ", "Z D");
+    _shabda_en_r(t, "#", "s", "#", "Z");
+    _shabda_en_r(t, "", "said", "", "S EH1 D");
+    _shabda_en_r(t, "^", "sion", "", "SH AH0 N");
+    _shabda_en_r(t, "", "s", "s", "");
+    _shabda_en_r(t, ".", "s", " ", "Z");
+    _shabda_en_r(t, "#:.e", "s", " ", "Z");
+    _shabda_en_r(t, "#:^##", "s", " ", "Z");
+    _shabda_en_r(t, "#:^#", "s", " ", "S");
+    _shabda_en_r(t, "u", "s", " ", "S");
+    _shabda_en_r(t, " :#", "s", " ", "Z");
+    _shabda_en_r(t, " ", "sch", "", "S K");
+    _shabda_en_r(t, "", "s", "c+", "");
+    _shabda_en_r(t, "#", "sm", "", "Z M");
+    _shabda_en_r(t, "#", "sn", "'", "Z AH0 N");
+    _shabda_en_r(t, "", "s", "", "S");
+    return 0;
+}
+
+fn _shabda_en_rules_t_z(t): i64 {
+    # t
+    _shabda_en_r(t, "t", "t", "", "");
+    _shabda_en_r(t, "", "ture", " ", "CH ER0");
+    _shabda_en_r(t, "", "tures", " ", "CH ER0 Z");
+    _shabda_en_r(t, "", "tch", "", "CH");
+    _shabda_en_r(t, "s", "t", "le", "");
+    _shabda_en_r(t, "s", "t", "en ", "");
+    _shabda_en_r(t, " ", "the", " ", "DH AH0");
+    _shabda_en_r(t, "", "to", " ", "T UW1");
+    _shabda_en_r(t, "", "that", " ", "DH AE1 T");
+    _shabda_en_r(t, " ", "this", " ", "DH IH1 S");
+    _shabda_en_r(t, " ", "they", "", "DH EY1");
+    _shabda_en_r(t, " ", "there", "", "DH EH1 R");
+    _shabda_en_r(t, "", "ther", "", "DH ER0");
+    _shabda_en_r(t, "", "their", "", "DH EH1 R");
+    _shabda_en_r(t, " ", "than", " ", "DH AE1 N");
+    _shabda_en_r(t, " ", "them", " ", "DH EH1 M");
+    _shabda_en_r(t, "", "these", " ", "DH IY1 Z");
+    _shabda_en_r(t, " ", "then", "", "DH EH1 N");
+    _shabda_en_r(t, "", "through", "", "TH R UW1");
+    _shabda_en_r(t, "", "those", "", "DH OW1 Z");
+    _shabda_en_r(t, "", "though", " ", "DH OW1");
+    _shabda_en_r(t, " ", "thus", "", "DH AH1 S");
+    _shabda_en_r(t, "", "th", "", "TH");
+    _shabda_en_r(t, "#:", "ted", " ", "T IH0 D");
+    _shabda_en_r(t, "s", "ti", "#n", "CH");
+    _shabda_en_r(t, "", "ti", "o", "SH");
+    _shabda_en_r(t, "", "ti", "a", "SH");
+    _shabda_en_r(t, "", "tien", "", "SH AH0 N");
+    _shabda_en_r(t, "", "tur", "#", "CH ER0");
+    _shabda_en_r(t, "", "tu", "a", "CH UW0");
+    _shabda_en_r(t, " ", "two", "", "T UW1");
+    _shabda_en_r(t, "", "t", "", "T");
+    # u
+    _shabda_en_r(t, " ", "un", "i", "Y UW1 N");
+    _shabda_en_r(t, " ", "un", "", "AH0 N");
+    _shabda_en_r(t, " ", "upon", "", "AH0 P AO1 N");
+    _shabda_en_r(t, "@", "ur", "#", "UH1 R");
+    _shabda_en_r(t, "", "ur", "#", "Y UH1 R");
+    _shabda_en_r(t, "", "ur", "", "ER1");
+    _shabda_en_r(t, "", "u", "^ ", "AH1");
+    _shabda_en_r(t, "", "u", "^^", "AH1");
+    _shabda_en_r(t, "", "uy", "", "AY1");
+    _shabda_en_r(t, " g", "u", "#", "");
+    _shabda_en_r(t, "g", "u", "%", "");
+    _shabda_en_r(t, "g", "u", "#", "W");
+    _shabda_en_r(t, "#n", "u", "", "Y UW1");
+    _shabda_en_r(t, "@", "u", "", "UW1");
+    _shabda_en_r(t, "", "u", "", "Y UW1");
+    # v
+    _shabda_en_r(t, "", "view", "", "V Y UW1");
+    _shabda_en_r(t, "", "v", "", "V");
+    # w
+    _shabda_en_r(t, " ", "were", "", "W ER1");
+    _shabda_en_r(t, "", "wa", "s", "W AA1");
+    _shabda_en_r(t, "", "wa", "t", "W AA1");
+    _shabda_en_r(t, "", "where", "", "W EH1 R");
+    _shabda_en_r(t, "", "what", "", "W AH1 T");
+    _shabda_en_r(t, "", "whol", "", "HH OW1 L");
+    _shabda_en_r(t, "", "who", "", "HH UW1");
+    _shabda_en_r(t, "", "wh", "", "W");
+    _shabda_en_r(t, "", "war", "", "W AO1 R");
+    _shabda_en_r(t, "", "wor", "^", "W ER1");
+    _shabda_en_r(t, "", "wr", "", "R");
+    _shabda_en_r(t, "", "w", "", "W");
+    # x
+    _shabda_en_r(t, "", "x", "", "K S");
+    # y
+    _shabda_en_r(t, "", "young", "", "Y AH1 NG");
+    _shabda_en_r(t, " ", "you", "", "Y UW1");
+    _shabda_en_r(t, " ", "yes", "", "Y EH1 S");
+    _shabda_en_r(t, " ", "y", "", "Y");
+    _shabda_en_r(t, "#:^", "y", " ", "IY0");
+    _shabda_en_r(t, "#:^", "y", "i", "IY0");
+    _shabda_en_r(t, " :", "y", " ", "AY1");
+    _shabda_en_r(t, " :", "y", "#", "AY1");
+    _shabda_en_r(t, " :", "y", "^+:#", "IH1");
+    _shabda_en_r(t, " :", "y", "^#", "AY1");
+    _shabda_en_r(t, "", "y", "", "IH1");
+    # z
+    _shabda_en_r(t, "z", "z", "", "");
+    _shabda_en_r(t, "", "z", "", "Z");
+    # apostrophe
+    _shabda_en_r(t, "", "'s", "", "Z");
+    _shabda_en_r(t, "", "'", "", "");
     return 0;
 }
 
@@ -675,7 +1135,59 @@ fn _shabda_apply_suffix_a(a, phonemes, suffix): i64 {
 # Spanish G2P rules — ports spanish_rules(). Accented codepoints (2-byte UTF-8):
 #   á=0xE1 é=0xE9 í=0xED ó=0xF3 ú=0xFA ü=0xFC ñ=0xF1. ASCII-lower leaves them
 #   as-is (already lowercase in inputs), matching Rust's word.to_lowercase().
+#
+# Phonemic, standard Castilian: distinción (c before e/i and z are /θ/, s is /s/), the jota
+# /x/, and yeísmo (ll and consonantal y are one phoneme, /ʝ/). Five vowels /a e i o u/ are
+# svara's VOWEL_A/E/I/O/U; an unaccented i or u next to another vowel is the glide /j/ or /w/
+# (quién, fuego, aire, auto; in iu/ui the second vowel is the nucleus: ciudad, cuidado). The
+# allophones [β ð ɣ] and nasal place assimilation are not written: /b d ɡ/ and /n/ are.
+# Accuracy over the Rust (ADR-0002): the Rust spelled a e i u with English vowels (ɑ ɛ ɪ ʌ),
+# ñ /ŋ/, ll and y /j/, the jota /h/, and the glides as full vowels.
+# svara has no velar /x/: the jota is FRIC_UVULAR_CH (χ), the realization north and central
+# Spain give it, and a dorsal fricative where FRIC_H is a glottal one.
 # ================================================================
+
+# 1 if `cp` is a Spanish vowel letter, accented or not (ü included).
+#must_use
+fn _shabda_es_is_vowel(cp): i64 {
+    if (_shabda_is_vowel_char(cp) == 1) { return 1; }
+    if (cp == 0xE1 || cp == 0xE9 || cp == 0xED || cp == 0xF3 || cp == 0xFA || cp == 0xFC) { return 1; }
+    return 0;
+}
+
+# 1 if `cp` is e, i, é or í: the letters that make c /θ/, g /x/ and the u of gu / qu silent.
+#must_use
+fn _shabda_es_is_front(cp): i64 {
+    if (cp == 0x65 || cp == 0x69 || cp == 0xE9 || cp == 0xED) { return 1; }
+    return 0;
+}
+
+# 1 if `cp` is a, e or o, accented or not: a vowel an unaccented i or u next to it glides into.
+#must_use
+fn _shabda_es_is_strong(cp): i64 {
+    if (cp == 0x61 || cp == 0x65 || cp == 0x6F || cp == 0xE1 || cp == 0xE9 || cp == 0xF3) { return 1; }
+    return 0;
+}
+
+# 1 if the unaccented i or u at chars[pos] is a glide: a vowel follows it (quién, fuego, cuidar,
+# ciudad), or a, e or o comes before it (aire, reina, auto, deuda). Written stress (día, país,
+# baúl) marks a full vowel, which is why only the unaccented letters reach here.
+#must_use
+fn _shabda_es_is_glide(chars, pos): i64 {
+    if (_shabda_es_is_vowel(_shabda_cp_at(chars, pos + 1)) == 1) { return 1; }
+    if (_shabda_es_is_strong(_shabda_cp_at(chars, pos - 1)) == 1) { return 1; }
+    return 0;
+}
+
+# 1 if the single r at chars[pos] is the Spanish trill: at the start of the word, or after n, l
+# or s. Through 3.1.1, as in the Rust, every single r was the tap and rr was svara's English
+# approximant /ɹ/; svara has the trill now (SVARA_PH_TRILL_ALVEOLAR).
+fn _shabda_spanish_r_is_trill(chars, pos): i64 {
+    if (pos == 0) { return 1; }
+    var prev = vec_get(chars, pos - 1);
+    if (prev == 0x6E || prev == 0x6C || prev == 0x73) { return 1; }
+    return 0;
+}
 
 # Spanish pattern match at `pos`. Pushes phonemes onto `out`, returns consumed.
 fn _shabda_spanish_match_a(a, chars, pos, out): i64 {
@@ -684,77 +1196,91 @@ fn _shabda_spanish_match_a(a, chars, pos, out): i64 {
     if (rem <= 0) { return 1; }
 
     var c0 = vec_get(chars, pos);
+    var next = _shabda_cp_at(chars, pos + 1);
 
     # 2-letter digraphs first.
     if (rem >= 2) {
-        var c1 = vec_get(chars, pos + 1);
-        if (c0 == 0x63) { if (c1 == 0x68) { _shabda_vec_push_a(a, out, SVARA_PH_AFFR_CH); return 2; } }   # ch
-        if (c0 == 0x6C) { if (c1 == 0x6C) { _shabda_vec_push_a(a, out, SVARA_PH_APPROX_J); return 2; } }  # ll
-        if (c0 == 0x72) { if (c1 == 0x72) { _shabda_vec_push_a(a, out, SVARA_PH_APPROX_R); return 2; } }  # rr
-        if (c0 == 0x71) { if (c1 == 0x75) { _shabda_vec_push_a(a, out, SVARA_PH_PLOSIVE_K); return 2; } } # qu
-        # gu before e/i: u silent, g -> /g/
+        if (c0 == 0x63) { if (next == 0x68) { _shabda_vec_push_a(a, out, SVARA_PH_AFFR_CH); return 2; } }   # ch
+        # ll: /ʝ/, one phoneme with consonantal y (yeísmo)
+        if (c0 == 0x6C) { if (next == 0x6C) { _shabda_vec_push_a(a, out, SVARA_PH_FRIC_PALATAL_J); return 2; } }
+        # rr: the alveolar trill /r/
+        if (c0 == 0x72) { if (next == 0x72) { _shabda_vec_push_a(a, out, SVARA_PH_TRILL_ALVEOLAR); return 2; } }
+        if (c0 == 0x71) { if (next == 0x75) { _shabda_vec_push_a(a, out, SVARA_PH_PLOSIVE_K); return 2; } } # qu
+        # gu before e/i/é/í: u silent, g -> /g/ (guerra, guía); gü keeps the u as /w/
         if (c0 == 0x67) {
-            if (c1 == 0x75) {
-                if (rem >= 3) {
-                    var c2 = vec_get(chars, pos + 2);
-                    if (c2 == 0x65) { _shabda_vec_push_a(a, out, SVARA_PH_PLOSIVE_G); return 2; }
-                    if (c2 == 0x69) { _shabda_vec_push_a(a, out, SVARA_PH_PLOSIVE_G); return 2; }
+            if (next == 0x75) {
+                if (_shabda_es_is_front(_shabda_cp_at(chars, pos + 2)) == 1) {
+                    _shabda_vec_push_a(a, out, SVARA_PH_PLOSIVE_G); return 2;
                 }
             }
         }
     }
 
-    # Single characters.
-    var next = 0;
-    if (rem > 1) { next = vec_get(chars, pos + 1); }
-
-    if (c0 == 0x61) { _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_OPEN_A); return 1; }   # a
-    if (c0 == 0xE1) { _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_OPEN_A); return 1; }   # á
-    if (c0 == 0x65) { _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_OPEN_E); return 1; }   # e
-    if (c0 == 0xE9) { _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_OPEN_E); return 1; }   # é
-    if (c0 == 0x69) { _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_NEAR_I); return 1; }   # i
-    if (c0 == 0xED) { _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_NEAR_I); return 1; }   # í
+    # Vowels and glides.
+    if (c0 == 0x61) { _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_A); return 1; }        # a
+    if (c0 == 0xE1) { _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_A); return 1; }        # á
+    if (c0 == 0x65) { _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_E); return 1; }        # e
+    if (c0 == 0xE9) { _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_E); return 1; }        # é
     if (c0 == 0x6F) { _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_O); return 1; }        # o
     if (c0 == 0xF3) { _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_O); return 1; }        # ó
-    if (c0 == 0x75) { _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_CUP_V); return 1; }    # u
-    if (c0 == 0xFA) { _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_CUP_V); return 1; }    # ú
-    if (c0 == 0xFC) { _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_CUP_V); return 1; }    # ü
+    if (c0 == 0xED) { _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_I); return 1; }        # í
+    if (c0 == 0xFA) { _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_U); return 1; }        # ú
+    if (c0 == 0x69) {                                                     # i: /i/ or the glide /j/
+        if (_shabda_es_is_glide(chars, pos) == 1) { _shabda_vec_push_a(a, out, SVARA_PH_APPROX_J); return 1; }
+        _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_I); return 1;
+    }
+    if (c0 == 0x75) {                                                     # u: /u/ or the glide /w/
+        if (_shabda_es_is_glide(chars, pos) == 1) { _shabda_vec_push_a(a, out, SVARA_PH_APPROX_W); return 1; }
+        _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_U); return 1;
+    }
+    if (c0 == 0xFC) { _shabda_vec_push_a(a, out, SVARA_PH_APPROX_W); return 1; }       # ü: gü /ɡw/
+
+    # Consonants.
     if (c0 == 0x62) { _shabda_vec_push_a(a, out, SVARA_PH_PLOSIVE_B); return 1; }      # b
     if (c0 == 0x76) { _shabda_vec_push_a(a, out, SVARA_PH_PLOSIVE_B); return 1; }      # v
-    if (c0 == 0x63) {                                                     # c
-        if (rem > 1) {
-            if (next == 0x65) { _shabda_vec_push_a(a, out, SVARA_PH_FRIC_TH); return 1; }
-            if (next == 0x69) { _shabda_vec_push_a(a, out, SVARA_PH_FRIC_TH); return 1; }
-        }
+    if (c0 == 0x63) {                                                     # c: /θ/ before e/i
+        if (_shabda_es_is_front(next) == 1) { _shabda_vec_push_a(a, out, SVARA_PH_FRIC_TH); return 1; }
         _shabda_vec_push_a(a, out, SVARA_PH_PLOSIVE_K); return 1;
     }
     if (c0 == 0x64) { _shabda_vec_push_a(a, out, SVARA_PH_PLOSIVE_D); return 1; }      # d
     if (c0 == 0x66) { _shabda_vec_push_a(a, out, SVARA_PH_FRIC_F); return 1; }         # f
-    if (c0 == 0x67) {                                                     # g
-        if (rem > 1) {
-            if (next == 0x65) { _shabda_vec_push_a(a, out, SVARA_PH_FRIC_H); return 1; }
-            if (next == 0x69) { _shabda_vec_push_a(a, out, SVARA_PH_FRIC_H); return 1; }
-        }
+    if (c0 == 0x67) {                                                     # g: the jota before e/i
+        if (_shabda_es_is_front(next) == 1) { _shabda_vec_push_a(a, out, SVARA_PH_FRIC_UVULAR_CH); return 1; }
         _shabda_vec_push_a(a, out, SVARA_PH_PLOSIVE_G); return 1;
     }
     if (c0 == 0x68) { return 1; }                                        # h — silent
-    if (c0 == 0x6A) { _shabda_vec_push_a(a, out, SVARA_PH_FRIC_H); return 1; }         # j /x/
+    if (c0 == 0x6A) { _shabda_vec_push_a(a, out, SVARA_PH_FRIC_UVULAR_CH); return 1; } # j: the jota /x/
     if (c0 == 0x6B) { _shabda_vec_push_a(a, out, SVARA_PH_PLOSIVE_K); return 1; }      # k
     if (c0 == 0x6C) { _shabda_vec_push_a(a, out, SVARA_PH_LATERAL_L); return 1; }      # l
     if (c0 == 0x6D) { _shabda_vec_push_a(a, out, SVARA_PH_NASAL_M); return 1; }        # m
     if (c0 == 0x6E) { _shabda_vec_push_a(a, out, SVARA_PH_NASAL_N); return 1; }        # n
-    if (c0 == 0xF1) { _shabda_vec_push_a(a, out, SVARA_PH_NASAL_NG); return 1; }       # ñ palatal nasal
+    if (c0 == 0xF1) { _shabda_vec_push_a(a, out, SVARA_PH_NASAL_PALATAL); return 1; }  # ñ /ɲ/
     if (c0 == 0x70) { _shabda_vec_push_a(a, out, SVARA_PH_PLOSIVE_P); return 1; }      # p
-    if (c0 == 0x72) { _shabda_vec_push_a(a, out, SVARA_PH_TAP_FLAP); return 1; }       # r
+    # r: the trill /r/ at the start of a word and after n, l or s (rojo, honra, alrededor,
+    # Israel), the tap /ɾ/ everywhere else (pero, caro). rr is the trill above.
+    if (c0 == 0x72) {
+        if (_shabda_spanish_r_is_trill(chars, pos) == 1) {
+            _shabda_vec_push_a(a, out, SVARA_PH_TRILL_ALVEOLAR);
+        } else {
+            _shabda_vec_push_a(a, out, SVARA_PH_TAP_FLAP);
+        }
+        return 1;
+    }
     if (c0 == 0x73) { _shabda_vec_push_a(a, out, SVARA_PH_FRIC_S); return 1; }         # s
     if (c0 == 0x74) { _shabda_vec_push_a(a, out, SVARA_PH_PLOSIVE_T); return 1; }      # t
     if (c0 == 0x77) { _shabda_vec_push_a(a, out, SVARA_PH_APPROX_W); return 1; }       # w
-    if (c0 == 0x78) {                                                     # x -> ks
+    if (c0 == 0x78) {                                                     # x: /s/ word-initially, else /ks/
+        if (pos == 0) { _shabda_vec_push_a(a, out, SVARA_PH_FRIC_S); return 1; }
         _shabda_vec_push_a(a, out, SVARA_PH_PLOSIVE_K); _shabda_vec_push_a(a, out, SVARA_PH_FRIC_S); return 1;
     }
     if (c0 == 0x79) {                                                     # y
-        if (rem == 1) { _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_NEAR_I); return 1; }
-        _shabda_vec_push_a(a, out, SVARA_PH_APPROX_J); return 1;
+        # /ʝ/ before a vowel (yo, mayo, cónyuge); the glide /j/ after one (hoy, muy, rey);
+        # the vowel /i/ alone (the word y) or before a consonant.
+        if (_shabda_es_is_vowel(next) == 1) { _shabda_vec_push_a(a, out, SVARA_PH_FRIC_PALATAL_J); return 1; }
+        if (_shabda_es_is_vowel(_shabda_cp_at(chars, pos - 1)) == 1) {
+            _shabda_vec_push_a(a, out, SVARA_PH_APPROX_J); return 1;
+        }
+        _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_I); return 1;
     }
     if (c0 == 0x7A) { _shabda_vec_push_a(a, out, SVARA_PH_FRIC_TH); return 1; }        # z Castilian /θ/
     if (c0 == 0x27) { return 1; }                                        # '
@@ -787,9 +1313,453 @@ fn _shabda_spanish_rules_a(a, word): i64 {
 
 # ================================================================
 # German G2P rules — ports german_rules(). Accented codepoints (2-byte UTF-8):
-#   ä=0xE4 ö=0xF6 ü=0xFC ß=0xDF á=0xE1. Post-pass: final devoicing on the last
-#   phoneme (b->p d->t g->k v->f z->s).
+#   ä=0xE4 ö=0xF6 ü=0xFC ß=0xDF á=0xE1.
+#
+# Phonemic Standard German. Two passes: the word's vowel nuclei are found first (digraphs ie
+# ei ey ai ay au eu äu aa ee oo are one nucleus), and an unstressed prefix (be- ge- ver- zer-
+# er- ent-) before a stem with a full vowel; then each letter is spelled with that context:
+#   - a stressed vowel is long (tense) before h, ß, a vowel, the end of the word, one consonant
+#     and a vowel, or b / d / g and a consonant (lebt, gibt, möglich); short (lax) before a
+#     double consonant, a cluster, ch / sch / x, and one final consonant in a short function
+#     word (in, mit, das). Long / short: iː ɪ, eː ɛ, oː ɔ, uː ʊ, øː œ; a is /a/ either way, ä
+#     is /ɛ/, ü and y are /y/ (svara has no ʏ).
+#   - e is /ə/ in the prefixes be- ge-, in a final -e -en -el -er -em -es -et -est -ern -eln
+#     -ens -ert -elt -end, and unstressed before r l n s (anderen, Lehrerin, Gelegenheit).
+#   - r is /ʁ/, ch is the ich-Laut /ç/ after front vowels, consonants and in -ig, the ach-Laut
+#     /x/ after a o u au; z / tz are /t͡s/, pf /p͡f/, tsch /t͡ʃ/, ng /ŋ/, n before k /ŋ/, chs /ks/,
+#     sp / st /ʃp ʃt/ at the start of the word or stem; b d g devoice before an obstruent, at
+#     the end and before -lich -ling -los -nis; s before a vowel is /z/ unless an obstruent
+#     precedes it; h after a vowel is silent.
+# svara has no velar /x/: the ach-Laut is FRIC_UVULAR_CH (χ), its own realization after a, and
+# a dorsal fricative where FRIC_H is a glottal one. The vocalized r [ɐ] (Wasser, wir) is not
+# written: svara has no ɐ, and /əʁ/, /ʁ/ are the phonemes. Accuracy over the Rust (ADR-0002):
+# the Rust spelled a /ɑ/, every e /ɛ/, o and u long, ö /ɛ/, r English /ɹ/, ch /ʃ/, z /t s/,
+# pf /p f/, ng /n ɡ/, x /k/, had no au, and devoiced only the last phoneme.
 # ================================================================
+
+# German vowel letter? (y included; a consonantal y is the caller's to rule out.)
+#must_use
+fn _shabda_de_is_vowel(cp): i64 {
+    if (_shabda_is_vowel_char(cp) == 1) { return 1; }
+    if (cp == 0xE4 || cp == 0xF6 || cp == 0xFC || cp == 0x79 || cp == 0xE1) { return 1; }
+    return 0;
+}
+
+# Length in letters of the vowel nucleus at chars[pos]: 2 for ie ei ey ai ay au eu äu aa ee oo.
+#must_use
+fn _shabda_de_nucleus_len(chars, pos): i64 {
+    var c0 = _shabda_cp_at(chars, pos);
+    var c1 = _shabda_cp_at(chars, pos + 1);
+    if (c0 == 0x69 && c1 == 0x65) { return 2; }                                    # ie
+    if (c0 == 0x65) { if (c1 == 0x69 || c1 == 0x79 || c1 == 0x75 || c1 == 0x65) { return 2; } }   # ei ey eu ee
+    if (c0 == 0x61) { if (c1 == 0x69 || c1 == 0x79 || c1 == 0x75 || c1 == 0x61) { return 2; } }   # ai ay au aa
+    if (c0 == 0xE4 && c1 == 0x75) { return 2; }                                    # äu
+    if (c0 == 0x6F && c1 == 0x6F) { return 2; }                                    # oo
+    return 1;
+}
+
+# 1 if the y at chars[pos] is the consonant /j/: word-initial before a vowel (Yacht).
+#must_use
+fn _shabda_de_y_consonant(chars, pos): i64 {
+    if (pos != 0) { return 0; }
+    if (_shabda_cp_at(chars, 0) != 0x79) { return 0; }
+    return _shabda_de_is_vowel(_shabda_cp_at(chars, 1));
+}
+
+# Push the start position and letter length of every vowel nucleus onto `nuc` / `nl`.
+# The u of qu is a consonant (/kv/), so it is skipped.
+fn _shabda_de_scan_a(a, chars, nuc, nl): i64 {
+    var n = vec_len(chars);
+    var i = 0;
+    while (i < n) {
+        var c = vec_get(chars, i);
+        if (c == 0x71 && _shabda_cp_at(chars, i + 1) == 0x75) {
+            i = i + 2;
+        } elif (_shabda_de_is_vowel(c) == 1 && _shabda_de_y_consonant(chars, i) == 0) {
+            var len = _shabda_de_nucleus_len(chars, i);
+            _shabda_vec_push_a(a, nuc, i);
+            _shabda_vec_push_a(a, nl, len);
+            i = i + len;
+        } else {
+            i = i + 1;
+        }
+    }
+    return 0;
+}
+
+# 1 if chars[from..] is a coda the unstressed final syllable -e… takes: nothing, n l r m s t,
+# st nd ns rn rs ls ln rt lt, nds rst (Sonne, leben, Vogel, Wasser, alles, Eltern, abends).
+#must_use
+fn _shabda_de_schwa_coda(chars, from): i64 {
+    var m = vec_len(chars) - from;
+    var r0 = _shabda_cp_at(chars, from);
+    var r1 = _shabda_cp_at(chars, from + 1);
+    var r2 = _shabda_cp_at(chars, from + 2);
+    if (m == 0) { return 1; }
+    if (m == 1) {
+        if (r0 == 0x6E || r0 == 0x6C || r0 == 0x72 || r0 == 0x6D || r0 == 0x73 || r0 == 0x74) { return 1; }
+        return 0;
+    }
+    if (m == 2) {
+        if (r1 == 0x74) { if (r0 == 0x73 || r0 == 0x72 || r0 == 0x6C) { return 1; } }      # st rt lt
+        if (r1 == 0x73) { if (r0 == 0x6E || r0 == 0x72 || r0 == 0x6C) { return 1; } }      # ns rs ls
+        if (r0 == 0x6E && r1 == 0x64) { return 1; }                                        # nd
+        if (r0 == 0x72 && r1 == 0x6E) { return 1; }                                        # rn
+        if (r0 == 0x6C && r1 == 0x6E) { return 1; }                                        # ln
+        return 0;
+    }
+    if (m == 3) {
+        if (r0 == 0x6E && r1 == 0x64 && r2 == 0x73) { return 1; }                          # nds
+        if (r0 == 0x72 && r1 == 0x73 && r2 == 0x74) { return 1; }                          # rst
+    }
+    return 0;
+}
+
+# 1 if the last nucleus is a single e with a schwa coda, in a word of 2+ nuclei.
+#must_use
+fn _shabda_de_last_is_schwa(chars, nuc, nl): i64 {
+    var k = vec_len(nuc);
+    if (k < 2) { return 0; }
+    var p = vec_get(nuc, k - 1);
+    if (vec_get(nl, k - 1) != 1) { return 0; }
+    if (vec_get(chars, p) != 0x65) { return 0; }
+    return _shabda_de_schwa_coda(chars, p + 1);
+}
+
+# Nuclei from index `from` on that carry a full vowel: all of them but a final schwa.
+#must_use
+fn _shabda_de_full_after(chars, nuc, nl, from): i64 {
+    var full = vec_len(nuc) - from;
+    if (full <= 0) { return 0; }
+    if (_shabda_de_last_is_schwa(chars, nuc, nl) == 1) { full = full - 1; }
+    return full;
+}
+
+# 1 if chars[from..to) is a German syllable onset (the consonants a prefix can stand before).
+#must_use
+fn _shabda_de_onset_ok(chars, from, to): i64 {
+    var m = to - from;
+    var o0 = _shabda_cp_at(chars, from);
+    var o1 = _shabda_cp_at(chars, from + 1);
+    var o2 = _shabda_cp_at(chars, from + 2);
+    var o3 = _shabda_cp_at(chars, from + 3);
+    if (m == 1) {
+        if (o0 == 0x78 || o0 == 0xDF) { return 0; }                                        # x ß
+        return 1;
+    }
+    var sch = 0;
+    if (o0 == 0x73 && o1 == 0x63 && o2 == 0x68) { sch = 1; }
+    if (m == 2) {
+        if (o0 == 0x73) { if (o1 == 0x74 || o1 == 0x70) { return 1; } }                    # st sp
+        if (o1 == 0x72) {                                                                   # br dr fr gr kr pr tr
+            if (o0 == 0x62 || o0 == 0x64 || o0 == 0x66 || o0 == 0x67 || o0 == 0x6B || o0 == 0x70 || o0 == 0x74) {
+                return 1;
+            }
+        }
+        if (o1 == 0x6C) {                                                                   # bl fl gl kl pl
+            if (o0 == 0x62 || o0 == 0x66 || o0 == 0x67 || o0 == 0x6B || o0 == 0x70) { return 1; }
+        }
+        if (o0 == 0x6B && o1 == 0x6E) { return 1; }                                        # kn
+        if (o0 == 0x7A && o1 == 0x77) { return 1; }                                        # zw
+        if (o0 == 0x70 && o1 == 0x66) { return 1; }                                        # pf
+        if (o0 == 0x71 && o1 == 0x75) { return 1; }                                        # qu
+        return 0;
+    }
+    if (m == 3) {
+        if (sch == 1) { return 1; }                                                         # sch
+        if (o0 == 0x73 && o2 == 0x72) { if (o1 == 0x74 || o1 == 0x70) { return 1; } }      # str spr
+        if (o0 == 0x70 && o1 == 0x66) { if (o2 == 0x6C || o2 == 0x72) { return 1; } }      # pfl pfr
+        return 0;
+    }
+    if (m == 4) {
+        if (sch == 1) {                                                                     # schw schl schr schm schn
+            if (o3 == 0x77 || o3 == 0x6C || o3 == 0x72 || o3 == 0x6D || o3 == 0x6E) { return 1; }
+        }
+    }
+    return 0;
+}
+
+# The unstressed prefix the word starts with, packed as length | (kind << 8): kind 1 is be- /
+# ge- (its e is /ə/), kind 2 is ver- zer- er- ent- (its e is /ɛ/); 0 if none. A prefix needs a
+# stem with a full vowel after it, so geben, gegen, beste, gestern, Ente, erste have none, and
+# be- / ge- need an onset after them (bestimmt, Geschichte; not Berlin, gern).
+#must_use
+fn _shabda_de_prefix(chars, nuc, nl): i64 {
+    if (vec_len(nuc) < 2) { return 0; }
+    if (vec_get(nl, 0) != 1) { return 0; }
+    var n0 = vec_get(nuc, 0);
+    var c0 = _shabda_cp_at(chars, 0);
+    var c1 = _shabda_cp_at(chars, 1);
+    var c2 = _shabda_cp_at(chars, 2);
+    var c3 = _shabda_cp_at(chars, 3);
+    var full = _shabda_de_full_after(chars, nuc, nl, 1);
+    if (full < 1) { return 0; }
+    if ((c0 == 0x62 || c0 == 0x67) && c1 == 0x65 && n0 == 1) {                             # be- ge-
+        var s1 = vec_get(nuc, 1);
+        if (s1 == 2) {
+            # hiatus: beachten, beobachten, geöffnet
+            if (c2 == 0x61 || c2 == 0x6F || c2 == 0xE4 || c2 == 0xF6 || c2 == 0xFC) { return 2 | (1 << 8); }
+            return 0;
+        }
+        if (_shabda_de_onset_ok(chars, 2, s1) == 1) { return 2 | (1 << 8); }
+        return 0;
+    }
+    if ((c0 == 0x76 || c0 == 0x7A) && c1 == 0x65 && c2 == 0x72 && n0 == 1) {              # ver- zer-
+        if (c0 == 0x7A && _shabda_de_is_vowel(c3) == 1) { return 0; }
+        return 3 | (2 << 8);
+    }
+    if (c0 == 0x65 && c1 == 0x6E && c2 == 0x74 && n0 == 0) { return 3 | (2 << 8); }      # ent-
+    if (c0 == 0x65 && c1 == 0x72 && n0 == 0) { return 2 | (2 << 8); }                     # er-
+    return 0;
+}
+
+# Index of the nucleus that starts at `pos`, or -1.
+#must_use
+fn _shabda_de_nucleus_index(nuc, pos): i64 {
+    var k = 0;
+    while (k < vec_len(nuc)) {
+        if (vec_get(nuc, k) == pos) { return k; }
+        k = k + 1;
+    }
+    return (0 - 1);
+}
+
+# 1 if the single-letter e nucleus at `pos` is /ə/: a final -e -en -el -er … syllable, or an
+# unstressed e before one r l n s (anderen, Lehrerin, Gelegenheit, Bundestag). The stressed
+# nucleus is the first, or the first after a prefix.
+#must_use
+fn _shabda_de_is_schwa(ctx, pos): i64 {
+    var chars = load64(ctx);
+    var nuc = load64(ctx + 8);
+    var nl = load64(ctx + 16);
+    var stressed = 0;
+    if (load64(ctx + 24) > 0) { stressed = 1; }
+    var k = _shabda_de_nucleus_index(nuc, pos);
+    var last = vec_len(nuc) - 1;
+    if (k <= stressed) { return 0; }
+    if (k == last) { return _shabda_de_schwa_coda(chars, pos + 1); }
+    var nx = _shabda_cp_at(chars, pos + 1);
+    if (nx == 0x72 || nx == 0x6C || nx == 0x6E || nx == 0x73) {
+        if (_shabda_cp_at(chars, pos + 2) != nx) { return 1; }
+    }
+    return 0;
+}
+
+# 1 if the word is a short-vowel function word ending in one consonant (an am ab es im in ob
+# um, bin bis das des hat hin man mit von vom was zum): elsewhere that vowel is long.
+#must_use
+fn _shabda_de_short_word(chars): i64 {
+    var n = vec_len(chars);
+    var c0 = _shabda_cp_at(chars, 0);
+    var c1 = _shabda_cp_at(chars, 1);
+    var c2 = _shabda_cp_at(chars, 2);
+    if (n == 2) {
+        if (c0 == 0x61) { if (c1 == 0x6E || c1 == 0x6D || c1 == 0x62) { return 1; } }      # an am ab
+        if (c0 == 0x69) { if (c1 == 0x6E || c1 == 0x6D) { return 1; } }                   # in im
+        if (c0 == 0x65 && c1 == 0x73) { return 1; }                                        # es
+        if (c0 == 0x6F && c1 == 0x62) { return 1; }                                        # ob
+        if (c0 == 0x75 && c1 == 0x6D) { return 1; }                                        # um
+        return 0;
+    }
+    if (n != 3) { return 0; }
+    if (c1 == 0x61) {                                                                       # das hat man was
+        if (c0 == 0x64 && c2 == 0x73) { return 1; }
+        if (c0 == 0x68 && c2 == 0x74) { return 1; }
+        if (c0 == 0x6D && c2 == 0x6E) { return 1; }
+        if (c0 == 0x77 && c2 == 0x73) { return 1; }
+    }
+    if (c1 == 0x69) {                                                                       # bin bis hin mit
+        if (c0 == 0x62) { if (c2 == 0x6E || c2 == 0x73) { return 1; } }
+        if (c0 == 0x68 && c2 == 0x6E) { return 1; }
+        if (c0 == 0x6D && c2 == 0x74) { return 1; }
+    }
+    if (c0 == 0x64 && c1 == 0x65 && c2 == 0x73) { return 1; }                              # des
+    if (c0 == 0x76 && c1 == 0x6F) { if (c2 == 0x6E || c2 == 0x6D) { return 1; } }         # von vom
+    if (c0 == 0x7A && c1 == 0x75 && c2 == 0x6D) { return 1; }                              # zum
+    return 0;
+}
+
+# 1 if the g at chars[gpos] ends the suffix -ig, which is /ɪç/: at the end, or before t s st
+# keit (König, zwanzig, fertigt, Ewigkeit). Not in ei / ie (Teig, Sieg), not in a monosyllable.
+#must_use
+fn _shabda_de_ig_final(chars, nuc, gpos): i64 {
+    if (_shabda_cp_at(chars, gpos) != 0x67) { return 0; }
+    if (_shabda_cp_at(chars, gpos - 1) != 0x69) { return 0; }
+    var pre = _shabda_cp_at(chars, gpos - 2);
+    if (pre == 0x65 || pre == 0x61) { return 0; }
+    if (vec_len(nuc) < 2) { return 0; }
+    var m = vec_len(chars) - gpos - 1;
+    var r0 = _shabda_cp_at(chars, gpos + 1);
+    var r1 = _shabda_cp_at(chars, gpos + 2);
+    if (m == 0) { return 1; }
+    if (m == 1) { if (r0 == 0x74 || r0 == 0x73) { return 1; } }
+    if (m == 2) { if (r0 == 0x73 && r1 == 0x74) { return 1; } }
+    if (m == 4) {
+        if (r0 == 0x6B && r1 == 0x65 && _shabda_cp_at(chars, gpos + 3) == 0x69) {
+            if (_shabda_cp_at(chars, gpos + 4) == 0x74) { return 1; }
+        }
+    }
+    return 0;
+}
+
+# 1 if chars[pos..] starts with the 3- or 4-letter ASCII string packed in `lit` (low byte
+# first) of length `len`.
+#must_use
+fn _shabda_de_starts(chars, pos, lit, len): i64 {
+    var i = 0;
+    while (i < len) {
+        if (_shabda_cp_at(chars, pos + i) != ((lit >> (i * 8)) & 0xFF)) { return 0; }
+        i = i + 1;
+    }
+    return 1;
+}
+
+# 1 if a b / d / g before chars[q] is devoiced (Auslautverhärtung): at the end of the word,
+# before an obstruent letter, or before the suffixes -lich -ling -los -nis.
+#must_use
+fn _shabda_de_devoice(chars, q): i64 {
+    var c = _shabda_cp_at(chars, q);
+    if (c == (0 - 1)) { return 1; }
+    if (c == 0x62 || c == 0x63 || c == 0x64 || c == 0x66 || c == 0x67 || c == 0x68 || c == 0x6B) { return 1; }
+    if (c == 0x70 || c == 0x71 || c == 0x73 || c == 0x74 || c == 0x76 || c == 0x77 || c == 0x78) { return 1; }
+    if (c == 0x7A || c == 0xDF) { return 1; }
+    if (_shabda_de_starts(chars, q, 0x6863696C, 4) == 1) { return 1; }                       # lich
+    if (_shabda_de_starts(chars, q, 0x676E696C, 4) == 1) { return 1; }                       # ling
+    if (_shabda_de_starts(chars, q, 0x736F6C, 3) == 1) { return 1; }                         # los
+    if (_shabda_de_starts(chars, q, 0x73696E, 3) == 1) { return 1; }                         # nis
+    return 0;
+}
+
+# 1 if the vowel at `pos` is short in an unstressed suffix whose consonant would make it long:
+# i before g (Königin, wenige), -erin (Lehrerin), -nis (Ergebnis); and final -um (warum,
+# Datum), except the suffix -tum after a consonant (Reichtum, Irrtum).
+#must_use
+fn _shabda_de_short_suffix(ctx, pos): i64 {
+    var chars = load64(ctx);
+    var n = vec_len(chars);
+    var v = vec_get(chars, pos);
+    var nx = _shabda_cp_at(chars, pos + 1);
+    if (v == 0x75 && nx == 0x6D && pos + 2 == n) {                                          # -um
+        if (_shabda_cp_at(chars, pos - 1) == 0x74 && pos >= 2) {
+            if (_shabda_de_is_vowel(_shabda_cp_at(chars, pos - 2)) == 0) { return 0; }    # -tum
+        }
+        return 1;
+    }
+    if (v != 0x69) { return 0; }
+    var stressed = 0;
+    if (load64(ctx + 24) > 0) { stressed = 1; }
+    if (_shabda_de_nucleus_index(load64(ctx + 8), pos) <= stressed) { return 0; }
+    if (nx == 0x67) { return 1; }                                                           # i before g
+    if (pos + 2 != n) { return 0; }
+    var p1 = _shabda_cp_at(chars, pos - 1);
+    if (nx == 0x6E && p1 == 0x72 && _shabda_cp_at(chars, pos - 2) == 0x65) { return 1; }  # -erin
+    if (nx == 0x73 && p1 == 0x6E) { return 1; }                                            # -nis
+    return 0;
+}
+
+# 1 if the single-letter vowel nucleus at `pos` (stressed or full, not /ə/) is long.
+#must_use
+fn _shabda_de_is_long(ctx, pos): i64 {
+    var chars = load64(ctx);
+    var nuc = load64(ctx + 8);
+    var pfx = load64(ctx + 24) & 0xFF;
+    var n = vec_len(chars);
+    var q = pos + 1;
+    if (q >= n) { return 1; }
+    var c = vec_get(chars, q);
+    if (_shabda_de_is_vowel(c) == 1) { return 1; }                                         # hiatus
+    if (c == 0x68 && q != pfx) { return 1; }                                               # lengthening h
+    if (c == 0xDF) { return 1; }                                                            # ß
+    if (_shabda_de_short_suffix(ctx, pos) == 1) { return 0; }
+    if (_shabda_de_ig_final(chars, nuc, q) == 1) { return 0; }                             # -ig
+    var c1 = _shabda_cp_at(chars, q + 1);
+    if (c == 0x63 && c1 == 0x68) {                                                          # ch: short, but u + ch
+        if (vec_get(chars, pos) == 0x75) {
+            if (q + 2 >= n || _shabda_de_is_vowel(_shabda_cp_at(chars, q + 2)) == 1) { return 1; }
+        }
+        return 0;
+    }
+    if (c == 0x78) { return 0; }                                                            # x /ks/
+    if (c == 0x71) { return 0; }                                                            # qu /kv/
+    if (c == 0x73 && c1 == 0x63) { return 0; }                                              # sch
+    var ulen = 1;
+    if (c1 == 0x68) { if (c == 0x70 || c == 0x74) { ulen = 2; } }                          # ph th: one consonant
+    var after = _shabda_cp_at(chars, q + ulen);
+    if (after == (0 - 1)) {                                                                 # one final consonant
+        if (_shabda_de_short_word(chars) == 1) { return 0; }
+        return 1;
+    }
+    if (_shabda_de_is_vowel(after) == 1) { return 1; }                                     # open syllable
+    if (after == c) { return 0; }                                                           # double consonant
+    if (c == 0x62 || c == 0x67) { return 1; }                                               # lebt, gibt, möglich
+    if (c == 0x64 && after != 0x74) { return 1; }                                           # Adler (not dt)
+    return 0;
+}
+
+# Push the vowel nucleus at `pos`; returns its letter length.
+fn _shabda_de_vowel_a(a, ctx, pos, out): i64 {
+    var chars = load64(ctx);
+    var plen = load64(ctx + 24) & 0xFF;
+    var kind = load64(ctx + 24) >> 8;
+    var c0 = vec_get(chars, pos);
+    var c1 = _shabda_cp_at(chars, pos + 1);
+    if (_shabda_de_nucleus_len(chars, pos) == 2) {
+        var ph = SVARA_PH_DIPH_AI;                                                          # ei ey ai ay
+        if (c0 == 0x69) { ph = SVARA_PH_VOWEL_LONG_I; }                                    # ie
+        if (c1 == 0x75) {
+            ph = SVARA_PH_DIPH_OI;                                                          # eu äu
+            if (c0 == 0x61) { ph = SVARA_PH_DIPH_AU; }                                     # au
+        }
+        if (c0 == c1) {                                                                     # aa ee oo
+            ph = SVARA_PH_VOWEL_A;
+            if (c0 == 0x65) { ph = SVARA_PH_VOWEL_E; }
+            if (c0 == 0x6F) { ph = SVARA_PH_VOWEL_O; }
+        }
+        _shabda_vec_push_a(a, out, ph);
+        return 2;
+    }
+    if (c0 == 0x65) {
+        if (pos < plen) {                                                                   # the prefix's e
+            if (kind == 1) { _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_SCHWA); return 1; }
+            _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_OPEN_E); return 1;
+        }
+        if (_shabda_de_is_schwa(ctx, pos) == 1) { _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_SCHWA); return 1; }
+    }
+    if (c0 == 0x61 || c0 == 0xE1) { _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_A); return 1; }   # a á
+    if (c0 == 0xE4) { _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_OPEN_E); return 1; }      # ä /ɛ ɛː/
+    if (c0 == 0xFC || c0 == 0x79) { _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_Y); return 1; }   # ü y /y/
+    var long = _shabda_de_is_long(ctx, pos);
+    var short = SVARA_PH_VOWEL_OPEN_E;                                                      # e: eː ɛ
+    var tense = SVARA_PH_VOWEL_E;
+    if (c0 == 0x69) { short = SVARA_PH_VOWEL_NEAR_I; tense = SVARA_PH_VOWEL_LONG_I; }      # i: iː ɪ
+    if (c0 == 0x6F) { short = SVARA_PH_VOWEL_OPEN_O; tense = SVARA_PH_VOWEL_O; }           # o: oː ɔ
+    if (c0 == 0x75) { short = SVARA_PH_VOWEL_NEAR_U; tense = SVARA_PH_VOWEL_U; }           # u: uː ʊ
+    if (c0 == 0xF6) {                                                                       # ö: øː œ
+        short = SVARA_PH_VOWEL_OPEN_FRONT_ROUND_O;
+        tense = SVARA_PH_VOWEL_FRONT_ROUND_O;
+    }
+    if (long == 1) { _shabda_vec_push_a(a, out, tense); return 1; }
+    _shabda_vec_push_a(a, out, short);
+    return 1;
+}
+
+# The phoneme ch at chars[pos] spells: /k/ word-initially before a o u l r (Chor, Christ), the
+# ach-Laut after a o u au (Bach, Buch, Bauch), else the ich-Laut /ç/ (ich, euch, Milch, China).
+#must_use
+fn _shabda_de_ch(chars, pos): i64 {
+    if (pos == 0) {
+        var nx = _shabda_cp_at(chars, 2);
+        if (nx == 0x61 || nx == 0x6F || nx == 0x75 || nx == 0x6C || nx == 0x72) { return SVARA_PH_PLOSIVE_K; }
+        return SVARA_PH_FRIC_PALATAL_C;
+    }
+    var prev = _shabda_cp_at(chars, pos - 1);
+    if (prev == 0x61 || prev == 0x6F || prev == 0x75) {
+        var pp = _shabda_cp_at(chars, pos - 2);
+        if (prev == 0x75 && (pp == 0x65 || pp == 0xE4)) { return SVARA_PH_FRIC_PALATAL_C; }   # eu äu
+        return SVARA_PH_FRIC_UVULAR_CH;
+    }
+    return SVARA_PH_FRIC_PALATAL_C;
+}
 
 # German double-consonant helper: for a doubled non-vowel `ch`, push its single
 # phoneme (Rust's inner match). Pushes onto out, returns 1 if handled else 0.
@@ -799,124 +1769,150 @@ fn _shabda_german_double_a(a, out, ch): i64 {
     if (ch == 0x64) { _shabda_vec_push_a(a, out, SVARA_PH_PLOSIVE_D); return 1; }   # d
     if (ch == 0x66) { _shabda_vec_push_a(a, out, SVARA_PH_FRIC_F); return 1; }      # f
     if (ch == 0x67) { _shabda_vec_push_a(a, out, SVARA_PH_PLOSIVE_G); return 1; }   # g
+    if (ch == 0x6B) { _shabda_vec_push_a(a, out, SVARA_PH_PLOSIVE_K); return 1; }   # k
     if (ch == 0x6C) { _shabda_vec_push_a(a, out, SVARA_PH_LATERAL_L); return 1; }   # l
     if (ch == 0x6D) { _shabda_vec_push_a(a, out, SVARA_PH_NASAL_M); return 1; }     # m
     if (ch == 0x6E) { _shabda_vec_push_a(a, out, SVARA_PH_NASAL_N); return 1; }     # n
     if (ch == 0x70) { _shabda_vec_push_a(a, out, SVARA_PH_PLOSIVE_P); return 1; }   # p
-    if (ch == 0x72) { _shabda_vec_push_a(a, out, SVARA_PH_APPROX_R); return 1; }    # r
+    if (ch == 0x72) { _shabda_vec_push_a(a, out, SVARA_PH_FRIC_UVULAR_R); return 1; }   # r /ʁ/
     if (ch == 0x73) { _shabda_vec_push_a(a, out, SVARA_PH_FRIC_S); return 1; }      # s
     if (ch == 0x74) { _shabda_vec_push_a(a, out, SVARA_PH_PLOSIVE_T); return 1; }   # t
     # _ arm: empty phoneme sequence, but still consumes 2.
     return 1;
 }
 
-# German pattern match at `pos`. Pushes phonemes onto `out`, returns consumed.
-fn _shabda_german_match_a(a, chars, pos, out): i64 {
+# German pattern match at `pos`. `ctx` holds chars (+0), the nuclei (+8, +16) and the prefix
+# (+24, length | kind << 8). Pushes phonemes onto `out`, returns consumed.
+fn _shabda_german_match_a(a, ctx, pos, out): i64 {
+    var chars = load64(ctx);
+    var nuc = load64(ctx + 8);
+    var pfx = load64(ctx + 24) & 0xFF;
     var n = vec_len(chars);
-    var rem = n - pos;
-    if (rem <= 0) { return 1; }
+    if (pos >= n) { return 1; }
 
     var c0 = vec_get(chars, pos);
+    var c1 = _shabda_cp_at(chars, pos + 1);
+    var c2 = _shabda_cp_at(chars, pos + 2);
+    var prev = _shabda_cp_at(chars, pos - 1);
 
-    # 3-letter: sch -> /ʃ/
-    if (rem >= 3) {
-        if (c0 == 0x73) {
-            if (vec_get(chars, pos + 1) == 0x63) {
-                if (vec_get(chars, pos + 2) == 0x68) {
-                    _shabda_vec_push_a(a, out, SVARA_PH_FRIC_SH); return 3;
-                }
-            }
-        }
+    if (_shabda_de_is_vowel(c0) == 1 && _shabda_de_y_consonant(chars, pos) == 0) {
+        return _shabda_de_vowel_a(a, ctx, pos, out);
+    }
+
+    # 4- and 3-letter patterns: tsch /t͡ʃ/, sch /ʃ/.
+    if (c0 == 0x74 && c1 == 0x73 && c2 == 0x63 && _shabda_cp_at(chars, pos + 3) == 0x68) {
+        _shabda_vec_push_a(a, out, SVARA_PH_AFFR_CH); return 4;
+    }
+    if (c0 == 0x73 && c1 == 0x63 && c2 == 0x68) { _shabda_vec_push_a(a, out, SVARA_PH_FRIC_SH); return 3; }
+    # chs /ks/ (sechs, wachsen, Fuchs), but chst is ch + st (machst, nächste)
+    if (c0 == 0x63 && c1 == 0x68 && c2 == 0x73 && _shabda_cp_at(chars, pos + 3) != 0x74) {
+        _shabda_vec_push_a(a, out, SVARA_PH_PLOSIVE_K); _shabda_vec_push_a(a, out, SVARA_PH_FRIC_S); return 3;
     }
 
     # 2-letter patterns.
-    if (rem >= 2) {
-        var c1 = vec_get(chars, pos + 1);
-        # ch (ich-Laut)
-        if (c0 == 0x63) { if (c1 == 0x68) { _shabda_vec_push_a(a, out, SVARA_PH_FRIC_SH); return 2; } }
-        if (c0 == 0x63) { if (c1 == 0x6B) { _shabda_vec_push_a(a, out, SVARA_PH_PLOSIVE_K); return 2; } } # ck
-        if (c0 == 0x65) { if (c1 == 0x69) { _shabda_vec_push_a(a, out, SVARA_PH_DIPH_AI); return 2; } }   # ei
-        # ie long /iː/
-        if (c0 == 0x69) { if (c1 == 0x65) { _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_E); return 2; } }
-        if (c0 == 0x65) { if (c1 == 0x75) { _shabda_vec_push_a(a, out, SVARA_PH_DIPH_OI); return 2; } }   # eu
-        if (c0 == 0xE4) { if (c1 == 0x75) { _shabda_vec_push_a(a, out, SVARA_PH_DIPH_OI); return 2; } }   # äu
-        if (c0 == 0x70) { if (c1 == 0x66) {                                                  # pf
-                _shabda_vec_push_a(a, out, SVARA_PH_PLOSIVE_P);
-                _shabda_vec_push_a(a, out, SVARA_PH_FRIC_F); return 2; } }
-        # ('t','z') | ('z',_) if chars[0]=='z' => {} : no-op, falls to single 'z'.
-        # (We simply don't match here for z; the single-char handler runs.)
-        # sp/st at word start -> /ʃp/, /ʃt/ : Dynamic(1, [Sh]) — consumes ONE.
-        if (c0 == 0x73) {
-            if (c1 == 0x70) { _shabda_vec_push_a(a, out, SVARA_PH_FRIC_SH); return 1; }   # sp
-            if (c1 == 0x74) { _shabda_vec_push_a(a, out, SVARA_PH_FRIC_SH); return 1; }   # st
-        }
-        if (c0 == 0x74) { if (c1 == 0x68) { _shabda_vec_push_a(a, out, SVARA_PH_PLOSIVE_T); return 2; } } # th
-        if (c0 == 0x70) { if (c1 == 0x68) { _shabda_vec_push_a(a, out, SVARA_PH_FRIC_F); return 2; } }    # ph
-        if (c0 == 0x71) { if (c1 == 0x75) {                                                  # qu
-                _shabda_vec_push_a(a, out, SVARA_PH_PLOSIVE_K);
-                _shabda_vec_push_a(a, out, SVARA_PH_FRIC_V); return 2; } }
-        # Double consonants -> single phoneme (only if a==b and non-vowel).
-        # Rust reaches this arm AFTER the z-guard no-op; z==z would have been
-        # caught by the no-op arm first, so exclude z here to match (z doubles
-        # fall through to single 'z' twice in Rust — but the no-op arm returns
-        # nothing and Rust re-loops; actually the no-op arm has empty body so the
-        # match falls through to single-char. Replicate: only handle a==b for
-        # non-vowel, non-z.)
-        if (c0 == c1) {
-            if (_shabda_is_vowel_char(c0) == 0) {
-                if (c0 != 0x7A) {
-                    _shabda_german_double_a(a, out, c0);
-                    return 2;
-                }
-            }
-        }
+    if (c0 == 0x63) {
+        if (c1 == 0x68) { _shabda_vec_push_a(a, out, _shabda_de_ch(chars, pos)); return 2; }   # ch
+        if (c1 == 0x6B) { _shabda_vec_push_a(a, out, SVARA_PH_PLOSIVE_K); return 2; }          # ck
+    }
+    if (c0 == 0x64 && c1 == 0x74) { _shabda_vec_push_a(a, out, SVARA_PH_PLOSIVE_T); return 2; }   # dt
+    if (c0 == 0x6E && c1 == 0x67) { _shabda_vec_push_a(a, out, SVARA_PH_NASAL_NG); return 2; }    # ng /ŋ/
+    if (c0 == 0x70) {
+        if (c1 == 0x66) { _shabda_vec_push_a(a, out, SVARA_PH_AFFR_PF); return 2; }            # pf /p͡f/
+        if (c1 == 0x68) { _shabda_vec_push_a(a, out, SVARA_PH_FRIC_F); return 2; }             # ph
+    }
+    if (c0 == 0x74) {
+        if (c1 == 0x68) { _shabda_vec_push_a(a, out, SVARA_PH_PLOSIVE_T); return 2; }          # th
+        if (c1 == 0x7A) { _shabda_vec_push_a(a, out, SVARA_PH_AFFR_TS); return 2; }            # tz /t͡s/
+    }
+    if (c0 == 0x72 && c1 == 0x68 && pos == 0) {                                             # rh (Rhein)
+        _shabda_vec_push_a(a, out, SVARA_PH_FRIC_UVULAR_R); return 2;
+    }
+    if (c0 == 0x71 && c1 == 0x75) {                                                         # qu /kv/
+        _shabda_vec_push_a(a, out, SVARA_PH_PLOSIVE_K); _shabda_vec_push_a(a, out, SVARA_PH_FRIC_V); return 2;
+    }
+    if (c0 == 0x7A && c1 == 0x7A) { _shabda_vec_push_a(a, out, SVARA_PH_AFFR_TS); return 2; }    # zz
+    # sp / st at the start of the word or of the stem after a prefix -> /ʃp/, /ʃt/ (Stadt,
+    # verstehen); elsewhere /sp/ /st/ (Fenster, ist). Consumes the s only.
+    if (c0 == 0x73 && (c1 == 0x70 || c1 == 0x74) && (pos == 0 || pos == pfx)) {
+        _shabda_vec_push_a(a, out, SVARA_PH_FRIC_SH); return 1;
+    }
+    # Double consonants -> single phoneme.
+    if (c0 == c1 && _shabda_de_is_vowel(c0) == 0) {
+        _shabda_german_double_a(a, out, c0);
+        return 2;
     }
 
-    # Single characters.
-    var next = 0;
-    if (rem > 1) { next = vec_get(chars, pos + 1); }
-
-    if (c0 == 0x61) { _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_OPEN_A); return 1; }   # a
-    if (c0 == 0xE1) { _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_OPEN_A); return 1; }   # á
-    if (c0 == 0xE4) { _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_OPEN_E); return 1; }   # ä
-    if (c0 == 0x65) { _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_OPEN_E); return 1; }   # e
-    if (c0 == 0x69) { _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_NEAR_I); return 1; }   # i
-    if (c0 == 0x6F) { _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_O); return 1; }        # o
-    if (c0 == 0xF6) { _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_OPEN_E); return 1; }   # ö /œ/
-    if (c0 == 0x75) { _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_U); return 1; }        # u
-    if (c0 == 0xFC) { _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_E); return 1; }        # ü /yː/
-    if (c0 == 0x62) { _shabda_vec_push_a(a, out, SVARA_PH_PLOSIVE_B); return 1; }      # b
-    if (c0 == 0x63) { _shabda_vec_push_a(a, out, SVARA_PH_PLOSIVE_K); return 1; }      # c
-    if (c0 == 0x64) { _shabda_vec_push_a(a, out, SVARA_PH_PLOSIVE_D); return 1; }      # d
-    if (c0 == 0x66) { _shabda_vec_push_a(a, out, SVARA_PH_FRIC_F); return 1; }         # f
-    if (c0 == 0x67) { _shabda_vec_push_a(a, out, SVARA_PH_PLOSIVE_G); return 1; }      # g
-    if (c0 == 0x68) { _shabda_vec_push_a(a, out, SVARA_PH_FRIC_H); return 1; }         # h
-    if (c0 == 0x6A) { _shabda_vec_push_a(a, out, SVARA_PH_APPROX_J); return 1; }       # j
-    if (c0 == 0x6B) { _shabda_vec_push_a(a, out, SVARA_PH_PLOSIVE_K); return 1; }      # k
-    if (c0 == 0x6C) { _shabda_vec_push_a(a, out, SVARA_PH_LATERAL_L); return 1; }      # l
-    if (c0 == 0x6D) { _shabda_vec_push_a(a, out, SVARA_PH_NASAL_M); return 1; }        # m
-    if (c0 == 0x6E) { _shabda_vec_push_a(a, out, SVARA_PH_NASAL_N); return 1; }        # n
-    if (c0 == 0x70) { _shabda_vec_push_a(a, out, SVARA_PH_PLOSIVE_P); return 1; }      # p
-    if (c0 == 0x72) { _shabda_vec_push_a(a, out, SVARA_PH_APPROX_R); return 1; }       # r
-    if (c0 == 0x73) {                                                     # s
-        if (rem > 1) {
-            if (_shabda_is_vowel_char(next) == 1) {
-                _shabda_vec_push_a(a, out, SVARA_PH_FRIC_Z); return 1;   # s before vowel -> /z/
+    # Single consonants.
+    if (c0 == 0x62) {                                                                       # b
+        if (_shabda_de_devoice(chars, pos + 1) == 1) { _shabda_vec_push_a(a, out, SVARA_PH_PLOSIVE_P); return 1; }
+        _shabda_vec_push_a(a, out, SVARA_PH_PLOSIVE_B); return 1;
+    }
+    if (c0 == 0x63) {                                                                       # c: /t͡s/ before e i ä y
+        if (c1 == 0x65 || c1 == 0x69 || c1 == 0xE4 || c1 == 0x79) {
+            _shabda_vec_push_a(a, out, SVARA_PH_AFFR_TS); return 1;
+        }
+        _shabda_vec_push_a(a, out, SVARA_PH_PLOSIVE_K); return 1;
+    }
+    if (c0 == 0x64) {                                                                       # d
+        if (_shabda_de_devoice(chars, pos + 1) == 1) { _shabda_vec_push_a(a, out, SVARA_PH_PLOSIVE_T); return 1; }
+        _shabda_vec_push_a(a, out, SVARA_PH_PLOSIVE_D); return 1;
+    }
+    if (c0 == 0x66) { _shabda_vec_push_a(a, out, SVARA_PH_FRIC_F); return 1; }             # f
+    if (c0 == 0x67) {                                                                       # g
+        if (_shabda_de_ig_final(chars, nuc, pos) == 1) {
+            _shabda_vec_push_a(a, out, SVARA_PH_FRIC_PALATAL_C); return 1;
+        }
+        if (_shabda_de_devoice(chars, pos + 1) == 1) { _shabda_vec_push_a(a, out, SVARA_PH_PLOSIVE_K); return 1; }
+        _shabda_vec_push_a(a, out, SVARA_PH_PLOSIVE_G); return 1;
+    }
+    if (c0 == 0x68) {                                                                       # h: silent after a vowel
+        if (pos == 0 || pos == pfx || _shabda_de_is_vowel(prev) == 0) {
+            _shabda_vec_push_a(a, out, SVARA_PH_FRIC_H);
+        }
+        return 1;
+    }
+    if (c0 == 0x6A) { _shabda_vec_push_a(a, out, SVARA_PH_APPROX_J); return 1; }           # j
+    if (c0 == 0x6B) { _shabda_vec_push_a(a, out, SVARA_PH_PLOSIVE_K); return 1; }          # k
+    if (c0 == 0x6C) { _shabda_vec_push_a(a, out, SVARA_PH_LATERAL_L); return 1; }          # l
+    if (c0 == 0x6D) { _shabda_vec_push_a(a, out, SVARA_PH_NASAL_M); return 1; }            # m
+    if (c0 == 0x6E) {                                                                       # n: /ŋ/ before k
+        if (c1 == 0x6B) { _shabda_vec_push_a(a, out, SVARA_PH_NASAL_NG); return 1; }
+        _shabda_vec_push_a(a, out, SVARA_PH_NASAL_N); return 1;
+    }
+    if (c0 == 0x70) { _shabda_vec_push_a(a, out, SVARA_PH_PLOSIVE_P); return 1; }          # p
+    if (c0 == 0x72) { _shabda_vec_push_a(a, out, SVARA_PH_FRIC_UVULAR_R); return 1; }      # r /ʁ/
+    if (c0 == 0x73) {                                                                       # s
+        if (_shabda_de_is_vowel(c1) == 1) {
+            # /z/ before a vowel, /s/ after an obstruent (Erbse, Rätsel)
+            if (prev == 0x70 || prev == 0x74 || prev == 0x6B || prev == 0x66 || prev == 0x63 || prev == 0x78) {
+                _shabda_vec_push_a(a, out, SVARA_PH_FRIC_S); return 1;
             }
+            if (prev == 0x62 || prev == 0x64 || prev == 0x7A || prev == 0xDF) {
+                _shabda_vec_push_a(a, out, SVARA_PH_FRIC_S); return 1;
+            }
+            if (prev == 0x67 && _shabda_cp_at(chars, pos - 2) != 0x6E) {                    # g, not ng (langsam)
+                _shabda_vec_push_a(a, out, SVARA_PH_FRIC_S); return 1;
+            }
+            _shabda_vec_push_a(a, out, SVARA_PH_FRIC_Z); return 1;
         }
         _shabda_vec_push_a(a, out, SVARA_PH_FRIC_S); return 1;
     }
-    if (c0 == 0xDF) { _shabda_vec_push_a(a, out, SVARA_PH_FRIC_S); return 1; }         # ß
-    if (c0 == 0x74) { _shabda_vec_push_a(a, out, SVARA_PH_PLOSIVE_T); return 1; }      # t
-    if (c0 == 0x76) { _shabda_vec_push_a(a, out, SVARA_PH_FRIC_F); return 1; }         # v = /f/
-    if (c0 == 0x77) { _shabda_vec_push_a(a, out, SVARA_PH_FRIC_V); return 1; }         # w = /v/
-    if (c0 == 0x78) { _shabda_vec_push_a(a, out, SVARA_PH_PLOSIVE_K); return 1; }      # x
-    if (c0 == 0x79) { _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_E); return 1; }        # y /yː/
-    if (c0 == 0x7A) {                                                     # z -> /ts/
-        _shabda_vec_push_a(a, out, SVARA_PH_PLOSIVE_T); _shabda_vec_push_a(a, out, SVARA_PH_FRIC_S); return 1;
+    if (c0 == 0xDF) { _shabda_vec_push_a(a, out, SVARA_PH_FRIC_S); return 1; }            # ß
+    if (c0 == 0x74) { _shabda_vec_push_a(a, out, SVARA_PH_PLOSIVE_T); return 1; }          # t
+    if (c0 == 0x76) {                                                                       # v: /f/, /v/ between vowels
+        if (_shabda_de_is_vowel(prev) == 1 && _shabda_de_is_vowel(c1) == 1) {
+            _shabda_vec_push_a(a, out, SVARA_PH_FRIC_V); return 1;
+        }
+        _shabda_vec_push_a(a, out, SVARA_PH_FRIC_F); return 1;
     }
-    if (c0 == 0x27) { return 1; }                                        # '
-    if (c0 == 0x2D) { return 1; }                                        # -
+    if (c0 == 0x77) { _shabda_vec_push_a(a, out, SVARA_PH_FRIC_V); return 1; }             # w = /v/
+    if (c0 == 0x78) {                                                                       # x /ks/
+        _shabda_vec_push_a(a, out, SVARA_PH_PLOSIVE_K); _shabda_vec_push_a(a, out, SVARA_PH_FRIC_S); return 1;
+    }
+    if (c0 == 0x79) { _shabda_vec_push_a(a, out, SVARA_PH_APPROX_J); return 1; }           # consonantal y
+    if (c0 == 0x7A) { _shabda_vec_push_a(a, out, SVARA_PH_AFFR_TS); return 1; }            # z /t͡s/
+    if (c0 == 0x27) { return 1; }                                                           # '
+    if (c0 == 0x2D) { return 1; }                                                           # -
     return 1;
 }
 
@@ -933,11 +1929,19 @@ fn _shabda_german_rules_a(a, word): i64 {
     if (vec_len(chars) == 0) {
         return vec_new_a(a);
     }
+    var nuc = vec_new_a(a);
+    var nl = vec_new_a(a);
+    _shabda_de_scan_a(a, chars, nuc, nl);
+    var ctx = alloc_via(a, 32);
+    store64(ctx, chars);
+    store64(ctx + 8, nuc);
+    store64(ctx + 16, nl);
+    store64(ctx + 24, _shabda_de_prefix(chars, nuc, nl));
     var phonemes = vec_new_a(a);
     var i = 0;
     var n = vec_len(chars);
     while (i < n) {
-        var consumed = _shabda_german_match_a(a, chars, i, phonemes);
+        var consumed = _shabda_german_match_a(a, ctx, i, phonemes);
         i = i + consumed;
     }
 
@@ -960,116 +1964,330 @@ fn _shabda_german_rules_a(a, word): i64 {
 # ================================================================
 # Hindi G2P rules (Devanagari) — ports hindi_rules(). Devanagari codepoints are
 # load-bearing: independent vowels, matras (combining vowel signs), virama,
-# anusvara/visarga/chandrabindu. Each consonant carries an inherent schwa unless
-# followed by a matra/virama/anusvara/chandrabindu. Word-final schwa DELETION.
+# nukta, anusvara/visarga/chandrabindu. Each consonant carries an inherent schwa
+# unless a matra or virama follows it. Hindi then deletes schwa, word-finally and
+# in VC_CV (Ohala 1983), which Sanskrit does not.
 # The word is decoded WITHOUT ASCII-lowering (Rust uses word.chars() here); the
 # Latin fallback lowercases per-codepoint.
+#
+# Accuracy over the Rust (ADR-0002). The Rust collapsed the retroflex series onto
+# the dental one, gave ह /h/ and उ /ʌ/, and spelled ए /ɛ/ and ऐ /ɑ/. svara has
+# each sound now: ʈ ɖ ɳ ʂ ɽ ɲ ɦ ʊ e ɛ. svara has no aspirated or breathy stop, so
+# an aspirate is its plain stop (one phoneme, as the syllabifier and the stress
+# rules need), and no nasal vowel, so a nasal vowel is the vowel + a nasal
+# consonant: svara nasalizes a vowel only before a nasal consonant.
 # ================================================================
 
-# Should the inherent schwa be suppressed given the following codepoint `next`?
-# Ports push_consonant's suppress set (Hindi). next == -1 means end-of-word.
+# Placeholder for an inherent schwa until Hindi schwa deletion has run. Never
+# leaves _shabda_hindi_rules_a: the last pass writes SVARA_PH_VOWEL_SCHWA.
+var _SHABDA_HINDI_INHERENT = 1001;
+
+# Does the codepoint `next` after a consonant take the place of its inherent
+# schwa? The matras and the virama do. Anusvara and chandrabindu do NOT: कं is
+# /kən/ (they nasalize the inherent vowel), so they are not in the set (the Rust
+# had them, and dropped the vowel of every syllable written with one). next == -1
+# means end-of-word.
 #must_use
 fn _shabda_hindi_suppress(next): i64 {
-    if (next == 0x093E) { return 1; }   # ा aa matra
-    if (next == 0x093F) { return 1; }   # ि i
-    if (next == 0x0940) { return 1; }   # ी ii
-    if (next == 0x0941) { return 1; }   # ु u
-    if (next == 0x0942) { return 1; }   # ू uu
-    if (next == 0x0947) { return 1; }   # े e
-    if (next == 0x0948) { return 1; }   # ै ai
-    if (next == 0x094B) { return 1; }   # ो o
-    if (next == 0x094C) { return 1; }   # ौ au
-    if (next == 0x0943) { return 1; }   # ृ vocalic r
-    if (next == 0x094D) { return 1; }   # ् virama
-    if (next == 0x0902) { return 1; }   # ं anusvara
-    if (next == 0x0901) { return 1; }   # ँ chandrabindu
+    if (next >= 0x093E && next <= 0x0944) { return 1; }   # ा ि ी ु ू ृ ॄ
+    if (next >= 0x0947 && next <= 0x0949) { return 1; }   # े ै ॉ
+    if (next == 0x094B || next == 0x094C) { return 1; }   # ो ौ
+    if (next == 0x094D) { return 1; }                     # ् virama
+    if (next == 0x0962 || next == 0x0963) { return 1; }   # ॢ ॣ vocalic l, ll
     return 0;
 }
 
-# Push a Hindi consonant + inherent schwa unless suppressed. Ports push_consonant.
-fn _shabda_hindi_push_consonant_a(a, out, consonant, next): i64 {
-    _shabda_vec_push_a(a, out, consonant);
-    if (_shabda_hindi_suppress(next) == 0) {
-        _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_SCHWA);
-    }
-    return 0;
-}
-
-# Latin fallback for romanized Hindi. Pushes phoneme(s) for an ASCII letter.
-fn _shabda_hindi_latin_a(a, out, cp): i64 {
-    var lower = _shabda_ascii_lower(cp);
-    if (lower == 0x61) { _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_SCHWA); return 0; }   # a
-    if (lower == 0x65) { _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_OPEN_E); return 0; }  # e
-    if (lower == 0x69) { _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_NEAR_I); return 0; }  # i
-    if (lower == 0x6F) { _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_O); return 0; }       # o
-    if (lower == 0x75) { _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_CUP_V); return 0; }   # u
-    if (lower == 0x6B) { _shabda_vec_push_a(a, out, SVARA_PH_PLOSIVE_K); return 0; }     # k
-    if (lower == 0x67) { _shabda_vec_push_a(a, out, SVARA_PH_PLOSIVE_G); return 0; }     # g
-    if (lower == 0x63) { _shabda_vec_push_a(a, out, SVARA_PH_AFFR_CH); return 0; }       # c
-    if (lower == 0x6A) { _shabda_vec_push_a(a, out, SVARA_PH_AFFR_J); return 0; }        # j
-    if (lower == 0x74) { _shabda_vec_push_a(a, out, SVARA_PH_PLOSIVE_T); return 0; }     # t
-    if (lower == 0x64) { _shabda_vec_push_a(a, out, SVARA_PH_PLOSIVE_D); return 0; }     # d
-    if (lower == 0x6E) { _shabda_vec_push_a(a, out, SVARA_PH_NASAL_N); return 0; }       # n
-    if (lower == 0x70) { _shabda_vec_push_a(a, out, SVARA_PH_PLOSIVE_P); return 0; }     # p
-    if (lower == 0x62) { _shabda_vec_push_a(a, out, SVARA_PH_PLOSIVE_B); return 0; }     # b
-    if (lower == 0x6D) { _shabda_vec_push_a(a, out, SVARA_PH_NASAL_M); return 0; }       # m
-    if (lower == 0x79) { _shabda_vec_push_a(a, out, SVARA_PH_APPROX_J); return 0; }      # y
-    if (lower == 0x72) { _shabda_vec_push_a(a, out, SVARA_PH_TAP_FLAP); return 0; }      # r
-    if (lower == 0x6C) { _shabda_vec_push_a(a, out, SVARA_PH_LATERAL_L); return 0; }     # l
-    if (lower == 0x76) { _shabda_vec_push_a(a, out, SVARA_PH_FRIC_V); return 0; }        # v
-    if (lower == 0x77) { _shabda_vec_push_a(a, out, SVARA_PH_FRIC_V); return 0; }        # w
-    if (lower == 0x73) { _shabda_vec_push_a(a, out, SVARA_PH_FRIC_S); return 0; }        # s
-    if (lower == 0x68) { _shabda_vec_push_a(a, out, SVARA_PH_FRIC_H); return 0; }        # h
-    if (lower == 0x66) { _shabda_vec_push_a(a, out, SVARA_PH_FRIC_F); return 0; }        # f
-    if (lower == 0x7A) { _shabda_vec_push_a(a, out, SVARA_PH_FRIC_Z); return 0; }        # z
-    return 0;
-}
-
-# Handle a single Devanagari consonant codepoint for Hindi. Returns 1 if `ch`
-# was a recognized consonant (and pushed via push_consonant), else 0.
+# The svara phoneme of a Devanagari consonant letter, or SHABDA_PH_NONE. Hindi
+# and Sanskrit share it. Aspirates are their plain stop (svara has no aspirated
+# or breathy stop); व is svara's /v/ for /ʋ/; श is /ʃ/ (Sanskrit /ɕ/, which svara
+# lacks: /ʃ/ is the nearest). The precomposed nukta letters are here too.
 #must_use
-fn _shabda_hindi_consonant_a(a, out, ch, next): i64 {
+fn _shabda_hindi_consonant_ph(cp): i64 {
     # Velar
-    if (ch == 0x0915) { _shabda_hindi_push_consonant_a(a, out, SVARA_PH_PLOSIVE_K, next); return 1; }   # क
-    if (ch == 0x0916) { _shabda_hindi_push_consonant_a(a, out, SVARA_PH_PLOSIVE_K, next); return 1; }   # ख
-    if (ch == 0x0917) { _shabda_hindi_push_consonant_a(a, out, SVARA_PH_PLOSIVE_G, next); return 1; }   # ग
-    if (ch == 0x0918) { _shabda_hindi_push_consonant_a(a, out, SVARA_PH_PLOSIVE_G, next); return 1; }   # घ
-    if (ch == 0x0919) { _shabda_hindi_push_consonant_a(a, out, SVARA_PH_NASAL_NG, next); return 1; }    # ङ
+    if (cp == 0x0915 || cp == 0x0916) { return SVARA_PH_PLOSIVE_K; }       # क ख
+    if (cp == 0x0917 || cp == 0x0918) { return SVARA_PH_PLOSIVE_G; }       # ग घ
+    if (cp == 0x0919) { return SVARA_PH_NASAL_NG; }                        # ङ
     # Palatal
-    if (ch == 0x091A) { _shabda_hindi_push_consonant_a(a, out, SVARA_PH_AFFR_CH, next); return 1; }     # च
-    if (ch == 0x091B) { _shabda_hindi_push_consonant_a(a, out, SVARA_PH_AFFR_CH, next); return 1; }     # छ
-    if (ch == 0x091C) { _shabda_hindi_push_consonant_a(a, out, SVARA_PH_AFFR_J, next); return 1; }      # ज
-    if (ch == 0x091D) { _shabda_hindi_push_consonant_a(a, out, SVARA_PH_AFFR_J, next); return 1; }      # झ
-    if (ch == 0x091E) { _shabda_hindi_push_consonant_a(a, out, SVARA_PH_NASAL_N, next); return 1; }     # ञ
+    if (cp == 0x091A || cp == 0x091B) { return SVARA_PH_AFFR_CH; }         # च छ
+    if (cp == 0x091C || cp == 0x091D) { return SVARA_PH_AFFR_J; }          # ज झ
+    if (cp == 0x091E) { return SVARA_PH_NASAL_PALATAL; }                   # ञ /ɲ/
     # Retroflex
-    if (ch == 0x091F) { _shabda_hindi_push_consonant_a(a, out, SVARA_PH_PLOSIVE_T, next); return 1; }   # ट
-    if (ch == 0x0920) { _shabda_hindi_push_consonant_a(a, out, SVARA_PH_PLOSIVE_T, next); return 1; }   # ठ
-    if (ch == 0x0921) { _shabda_hindi_push_consonant_a(a, out, SVARA_PH_PLOSIVE_D, next); return 1; }   # ड
-    if (ch == 0x0922) { _shabda_hindi_push_consonant_a(a, out, SVARA_PH_PLOSIVE_D, next); return 1; }   # ढ
-    if (ch == 0x0923) { _shabda_hindi_push_consonant_a(a, out, SVARA_PH_NASAL_N, next); return 1; }     # ण
+    if (cp == 0x091F || cp == 0x0920) { return SVARA_PH_PLOSIVE_RETRO_T; } # ट ठ /ʈ/
+    if (cp == 0x0921 || cp == 0x0922) { return SVARA_PH_PLOSIVE_RETRO_D; } # ड ढ /ɖ/
+    if (cp == 0x0923) { return SVARA_PH_NASAL_RETRO; }                     # ण /ɳ/
     # Dental
-    if (ch == 0x0924) { _shabda_hindi_push_consonant_a(a, out, SVARA_PH_PLOSIVE_T, next); return 1; }   # त
-    if (ch == 0x0925) { _shabda_hindi_push_consonant_a(a, out, SVARA_PH_PLOSIVE_T, next); return 1; }   # थ
-    if (ch == 0x0926) { _shabda_hindi_push_consonant_a(a, out, SVARA_PH_PLOSIVE_D, next); return 1; }   # द
-    if (ch == 0x0927) { _shabda_hindi_push_consonant_a(a, out, SVARA_PH_PLOSIVE_D, next); return 1; }   # ध
-    if (ch == 0x0928) { _shabda_hindi_push_consonant_a(a, out, SVARA_PH_NASAL_N, next); return 1; }     # न
+    if (cp == 0x0924 || cp == 0x0925) { return SVARA_PH_PLOSIVE_T; }       # त थ
+    if (cp == 0x0926 || cp == 0x0927) { return SVARA_PH_PLOSIVE_D; }       # द ध
+    if (cp == 0x0928) { return SVARA_PH_NASAL_N; }                         # न
     # Labial
-    if (ch == 0x092A) { _shabda_hindi_push_consonant_a(a, out, SVARA_PH_PLOSIVE_P, next); return 1; }   # प
-    if (ch == 0x092B) { _shabda_hindi_push_consonant_a(a, out, SVARA_PH_PLOSIVE_P, next); return 1; }   # फ
-    if (ch == 0x092C) { _shabda_hindi_push_consonant_a(a, out, SVARA_PH_PLOSIVE_B, next); return 1; }   # ब
-    if (ch == 0x092D) { _shabda_hindi_push_consonant_a(a, out, SVARA_PH_PLOSIVE_B, next); return 1; }   # भ
-    if (ch == 0x092E) { _shabda_hindi_push_consonant_a(a, out, SVARA_PH_NASAL_M, next); return 1; }     # म
+    if (cp == 0x092A || cp == 0x092B) { return SVARA_PH_PLOSIVE_P; }       # प फ
+    if (cp == 0x092C || cp == 0x092D) { return SVARA_PH_PLOSIVE_B; }       # ब भ
+    if (cp == 0x092E) { return SVARA_PH_NASAL_M; }                         # म
     # Semivowels / liquids
-    if (ch == 0x092F) { _shabda_hindi_push_consonant_a(a, out, SVARA_PH_APPROX_J, next); return 1; }    # य
-    if (ch == 0x0930) { _shabda_hindi_push_consonant_a(a, out, SVARA_PH_TAP_FLAP, next); return 1; }    # र
-    if (ch == 0x0932) { _shabda_hindi_push_consonant_a(a, out, SVARA_PH_LATERAL_L, next); return 1; }   # ल
-    if (ch == 0x0935) { _shabda_hindi_push_consonant_a(a, out, SVARA_PH_FRIC_V, next); return 1; }      # व
-    # Sibilants
-    if (ch == 0x0936) { _shabda_hindi_push_consonant_a(a, out, SVARA_PH_FRIC_SH, next); return 1; }     # श
-    if (ch == 0x0937) { _shabda_hindi_push_consonant_a(a, out, SVARA_PH_FRIC_SH, next); return 1; }     # ष
-    if (ch == 0x0938) { _shabda_hindi_push_consonant_a(a, out, SVARA_PH_FRIC_S, next); return 1; }      # स
-    if (ch == 0x0939) { _shabda_hindi_push_consonant_a(a, out, SVARA_PH_FRIC_H, next); return 1; }      # ह
+    if (cp == 0x092F) { return SVARA_PH_APPROX_J; }                        # य
+    if (cp == 0x0930) { return SVARA_PH_TAP_FLAP; }                        # र
+    if (cp == 0x0932 || cp == 0x0933) { return SVARA_PH_LATERAL_L; }       # ल ळ (svara has no /ɭ/)
+    if (cp == 0x0935) { return SVARA_PH_FRIC_V; }                          # व
+    # Sibilants, ह
+    if (cp == 0x0936) { return SVARA_PH_FRIC_SH; }                         # श
+    if (cp == 0x0937) { return SVARA_PH_FRIC_RETRO_S; }                    # ष /ʂ/
+    if (cp == 0x0938) { return SVARA_PH_FRIC_S; }                          # स
+    if (cp == 0x0939) { return SVARA_PH_FRIC_GLOTTAL_H; }                  # ह /ɦ/
+    # Precomposed nukta letters (U+0958..U+095F)
+    if (cp >= 0x0958 && cp <= 0x095F) { return _shabda_hindi_nukta_ph(cp - 0x0958 + 0x1000); }
+    return SHABDA_PH_NONE;
+}
+
+# The phoneme of a consonant written with nukta, or SHABDA_PH_NONE. `base` is the
+# base letter (क + ़), or 0x1000 + the offset of a precomposed letter from U+0958
+# (क़ ख़ ग़ ज़ ड़ ढ़ फ़ य़, in that order).
+#must_use
+fn _shabda_hindi_nukta_ph(base): i64 {
+    if (base == 0x0915 || base == 0x1000) { return SVARA_PH_PLOSIVE_UVULAR_Q; } # क़ /q/
+    if (base == 0x0916 || base == 0x1001) { return SVARA_PH_FRIC_UVULAR_CH; }   # ख़ /x/ (svara: χ)
+    if (base == 0x0917 || base == 0x1002) { return SVARA_PH_FRIC_UVULAR_R; }    # ग़ /ɣ/ (svara: ʁ)
+    if (base == 0x091C || base == 0x1003) { return SVARA_PH_FRIC_Z; }           # ज़ /z/
+    if (base == 0x0921 || base == 0x1004) { return SVARA_PH_FLAP_RETRO; }       # ड़ /ɽ/
+    if (base == 0x0922 || base == 0x1005) { return SVARA_PH_FLAP_RETRO; }       # ढ़ /ɽʱ/
+    if (base == 0x092B || base == 0x1006) { return SVARA_PH_FRIC_F; }           # फ़ /f/
+    if (base == 0x092F || base == 0x1007) { return SVARA_PH_APPROX_J; }         # य़
+    return SHABDA_PH_NONE;
+}
+
+# The nasal an anusvara or chandrabindu is before the letter at chars[j]: the
+# stop's own place (ŋ velar, ɲ palatal, ɳ retroflex, n dental, m labial), else
+# `other`. Before a stop the anusvara is that nasal: लंबा /ləmbaː/, गंगा /ɡəŋɡaː/,
+# ठंडा /ʈʰəɳɖaː/. Elsewhere it nasalizes the vowel, which svara can only do before
+# a nasal consonant, so `other` stands in (Hindi n, Sanskrit m).
+#must_use
+fn _shabda_hindi_nasal_before(chars, j, other): i64 {
+    var cp = _shabda_cp_at(chars, j);
+    if (_shabda_cp_at(chars, j + 1) == 0x093C) {
+        if (cp == 0x091C || cp == 0x092B) { return other; }   # ज़ फ़ are fricatives
+    }
+    if (cp >= 0x0915 && cp <= 0x0919) { return SVARA_PH_NASAL_NG; }
+    if (cp >= 0x0958 && cp <= 0x095A) { return SVARA_PH_NASAL_NG; }
+    if (cp >= 0x091A && cp <= 0x091E) { return SVARA_PH_NASAL_PALATAL; }
+    if (cp >= 0x091F && cp <= 0x0923) { return SVARA_PH_NASAL_RETRO; }
+    if (cp == 0x095C || cp == 0x095D) { return SVARA_PH_NASAL_RETRO; }
+    if (cp >= 0x0924 && cp <= 0x0928) { return SVARA_PH_NASAL_N; }
+    if (cp >= 0x092A && cp <= 0x092E) { return SVARA_PH_NASAL_M; }
+    return other;
+}
+
+# Push the consonant at chars[i] (with a following nukta, and Hindi's ज्ञ /ɡj/)
+# and, unless a matra or virama follows, its inherent vowel `inherent`. Returns
+# the index of the next codepoint to read.
+fn _shabda_hindi_push_consonant_a(a, out, chars, i, c, inherent, hindi): i64 {
+    var ch = vec_get(chars, i);
+    var j = i + 1;
+    if (_shabda_cp_at(chars, j) == 0x093C) {                 # ़ nukta
+        var nk = _shabda_hindi_nukta_ph(ch);
+        if (nk != SHABDA_PH_NONE) { c = nk; }
+        j = j + 1;
+    }
+    # Hindi ज्ञ is /ɡj/ (ज्ञान /ɡjaːn/); Sanskrit keeps /d͡ʑɲ/.
+    if (hindi == 1 && ch == 0x091C && _shabda_cp_at(chars, j) == 0x094D) {
+        if (_shabda_cp_at(chars, j + 1) == 0x091E) {
+            _shabda_vec_push_a(a, out, SVARA_PH_PLOSIVE_G);
+            c = SVARA_PH_APPROX_J;
+            j = j + 2;
+        }
+    }
+    _shabda_vec_push_a(a, out, c);
+    if (_shabda_hindi_suppress(_shabda_cp_at(chars, j)) == 0) {
+        _shabda_vec_push_a(a, out, inherent);
+    }
+    return j;
+}
+
+# Latin fallback for romanized Hindi. Pushes the phoneme(s) for the letter at
+# chars[i] and returns how many codepoints it read. Hindi romanization writes
+# aa ii/ee uu/oo for the long vowels, ai au for ɛː ɔː, and an h after a stop for
+# its aspiration (kh gh ch jh th dh ph bh), which is the plain stop (see the
+# section head); sh is /ʃ/.
+fn _shabda_hindi_latin_a(a, out, chars, i): i64 {
+    var lower = _shabda_ascii_lower(vec_get(chars, i));
+    var next = _shabda_ascii_lower(_shabda_cp_at(chars, i + 1));
+    if (lower == 0x61) {                                                            # a
+        if (next == 0x61) { _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_OPEN_A); return 2; }  # aa
+        if (next == 0x69) { _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_OPEN_E); return 2; }  # ai
+        if (next == 0x75) { _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_OPEN_O); return 2; }  # au
+        _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_SCHWA);
+        return 1;
+    }
+    if (lower == 0x65) {                                                            # e
+        if (next == 0x65) { _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_LONG_I); return 2; }  # ee
+        _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_E);
+        return 1;
+    }
+    if (lower == 0x69) {                                                            # i
+        if (next == 0x69) { _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_LONG_I); return 2; }  # ii
+        _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_NEAR_I);
+        return 1;
+    }
+    if (lower == 0x6F) {                                                            # o
+        if (next == 0x6F) { _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_U); return 2; }       # oo
+        _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_O);
+        return 1;
+    }
+    if (lower == 0x75) {                                                            # u
+        if (next == 0x75) { _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_U); return 2; }       # uu
+        _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_NEAR_U);
+        return 1;
+    }
+    var c = SHABDA_PH_NONE;
+    if (lower == 0x6B) { c = SVARA_PH_PLOSIVE_K; }       # k
+    if (lower == 0x67) { c = SVARA_PH_PLOSIVE_G; }       # g
+    if (lower == 0x63) { c = SVARA_PH_AFFR_CH; }         # c (ch, chh)
+    if (lower == 0x6A) { c = SVARA_PH_AFFR_J; }          # j
+    if (lower == 0x74) { c = SVARA_PH_PLOSIVE_T; }       # t
+    if (lower == 0x64) { c = SVARA_PH_PLOSIVE_D; }       # d
+    if (lower == 0x70) { c = SVARA_PH_PLOSIVE_P; }       # p
+    if (lower == 0x62) { c = SVARA_PH_PLOSIVE_B; }       # b
+    if (c != SHABDA_PH_NONE) {
+        _shabda_vec_push_a(a, out, c);
+        if (next != 0x68) { return 1; }
+        if (lower == 0x63 && _shabda_ascii_lower(_shabda_cp_at(chars, i + 2)) == 0x68) { return 3; }   # chh
+        return 2;                                        # the h of an aspirate
+    }
+    if (lower == 0x73) {                                 # s, sh
+        if (next == 0x68) { _shabda_vec_push_a(a, out, SVARA_PH_FRIC_SH); return 2; }
+        _shabda_vec_push_a(a, out, SVARA_PH_FRIC_S);
+        return 1;
+    }
+    if (lower == 0x6E) { c = SVARA_PH_NASAL_N; }         # n
+    if (lower == 0x6D) { c = SVARA_PH_NASAL_M; }         # m
+    if (lower == 0x79) { c = SVARA_PH_APPROX_J; }        # y
+    if (lower == 0x72) { c = SVARA_PH_TAP_FLAP; }        # r
+    if (lower == 0x6C) { c = SVARA_PH_LATERAL_L; }       # l
+    if (lower == 0x76 || lower == 0x77) { c = SVARA_PH_FRIC_V; }   # v w
+    if (lower == 0x68) { c = SVARA_PH_FRIC_GLOTTAL_H; }  # h /ɦ/
+    if (lower == 0x66) { c = SVARA_PH_FRIC_F; }          # f
+    if (lower == 0x7A) { c = SVARA_PH_FRIC_Z; }          # z
+    if (lower == 0x71) { c = SVARA_PH_PLOSIVE_UVULAR_Q; }   # q
+    if (c != SHABDA_PH_NONE) { _shabda_vec_push_a(a, out, c); }
+    return 1;
+}
+
+# The single vowel phoneme of a Hindi independent vowel or matra, else
+# SHABDA_PH_NONE. Hindi short vowels are lax: इ /ɪ/, उ /ʊ/; ए is /eː/, ऐ /ɛː/,
+# ओ /oː/, औ and the loanword ऑ /ɔː/; आ is /aː/, svara's VOWEL_OPEN_A [ɑ].
+#must_use
+fn _shabda_hindi_vowel_ph(cp): i64 {
+    if (cp == 0x0905) { return SVARA_PH_VOWEL_SCHWA; }                    # अ
+    if (cp == 0x0906 || cp == 0x093E) { return SVARA_PH_VOWEL_OPEN_A; }   # आ ा
+    if (cp == 0x0907 || cp == 0x093F) { return SVARA_PH_VOWEL_NEAR_I; }   # इ ि
+    if (cp == 0x0908 || cp == 0x0940) { return SVARA_PH_VOWEL_LONG_I; }   # ई ी
+    if (cp == 0x0909 || cp == 0x0941) { return SVARA_PH_VOWEL_NEAR_U; }   # उ ु
+    if (cp == 0x090A || cp == 0x0942) { return SVARA_PH_VOWEL_U; }        # ऊ ू
+    if (cp == 0x090F || cp == 0x0947) { return SVARA_PH_VOWEL_E; }        # ए े
+    if (cp == 0x0910 || cp == 0x0948) { return SVARA_PH_VOWEL_OPEN_E; }   # ऐ ै
+    if (cp == 0x0913 || cp == 0x094B) { return SVARA_PH_VOWEL_O; }        # ओ ो
+    if (cp == 0x0914 || cp == 0x094C) { return SVARA_PH_VOWEL_OPEN_O; }   # औ ौ
+    if (cp == 0x0911 || cp == 0x0949) { return SVARA_PH_VOWEL_OPEN_O; }   # ऑ ॉ
+    return SHABDA_PH_NONE;
+}
+
+# Is `p` a vowel (the inherent-schwa placeholder included)?
+#must_use
+fn _shabda_hindi_is_vowel(p): i64 {
+    if (p == _SHABDA_HINDI_INHERENT) { return 1; }
+    var c = svara_phoneme_class(p);
+    if (c == SVARA_CLASS_VOWEL || c == SVARA_CLASS_DIPHTHONG) { return 1; }
     return 0;
+}
+
+#must_use
+fn _shabda_hindi_is_schwa(p): i64 {
+    if (p == _SHABDA_HINDI_INHERENT || p == SVARA_PH_VOWEL_SCHWA) { return 1; }
+    return 0;
+}
+
+# The first index after `k` whose keep flag is set, or -1.
+#must_use
+fn _shabda_hindi_next_kept(keep, n, k): i64 {
+    var j = k + 1;
+    while (j < n) {
+        if (load64(keep + j * 8) == 1) { return j; }
+        j = j + 1;
+    }
+    return 0 - 1;
+}
+
+#must_use
+fn _shabda_hindi_vowel_at(ph, j): i64 {
+    if (j < 0) { return 0; }
+    return _shabda_hindi_is_vowel(vec_get(ph, j));
+}
+
+# Is there a consonant at index j (j == -1 is no phoneme at all)?
+#must_use
+fn _shabda_hindi_consonant_at(ph, j): i64 {
+    if (j < 0) { return 0; }
+    return 1 - _shabda_hindi_is_vowel(vec_get(ph, j));
+}
+
+# Hindi schwa deletion and the schwa's [ɛ] beside ɦ, over the rules' phonemes
+# (inherent schwas still the placeholder). Returns the final vec.
+#   1. A word-final schwa is deleted when an earlier vowel exists (कर /kər/, but
+#      न /nə/).
+#   2. Then, right to left, an inherent schwa is deleted in VC_CV (Ohala 1983):
+#      आदमी /aːdmiː/, मछली /mət͡ʃʰliː/, अपना /əpnaː/. समझना keeps its second
+#      schwa, /səməd͡ʒnaː/: the deletion to its right leaves CC after it.
+#   3. A schwa before ɦ is [ɛ] when ɦ closes its syllable (कहना /kɛɦnaː/, यह /jɛɦ/),
+#      and both schwas of əɦə are (शहर /ʃɛɦɛr/).
+fn _shabda_hindi_schwa_a(a, ph): i64 {
+    var n = vec_len(ph);
+    var keep = alloc_via(a, n * 8 + 8);
+    var k = 0;
+    while (k < n) { store64(keep + k * 8, 1); k = k + 1; }
+
+    if (n > 1 && _shabda_hindi_is_schwa(vec_get(ph, n - 1)) == 1) {
+        k = 0;
+        while (k < n - 1) {
+            if (_shabda_hindi_is_vowel(vec_get(ph, k)) == 1) { store64(keep + (n - 1) * 8, 0); k = n; }
+            k = k + 1;
+        }
+    }
+
+    k = n - 2;
+    while (k >= 2) {
+        if (vec_get(ph, k) == _SHABDA_HINDI_INHERENT && load64(keep + k * 8) == 1) {
+            var n1 = _shabda_hindi_next_kept(keep, n, k);
+            var n2 = 0 - 1;
+            if (n1 >= 0) { n2 = _shabda_hindi_next_kept(keep, n, n1); }
+            if (_shabda_hindi_consonant_at(ph, k - 1) == 1 && _shabda_hindi_vowel_at(ph, k - 2) == 1) {
+                if (_shabda_hindi_consonant_at(ph, n1) == 1 && _shabda_hindi_vowel_at(ph, n2) == 1) {
+                    store64(keep + k * 8, 0);
+                }
+            }
+        }
+        k = k - 1;
+    }
+
+    var out = vec_new_a(a);
+    k = 0;
+    while (k < n) {
+        if (load64(keep + k * 8) == 1) {
+            var p = vec_get(ph, k);
+            if (_shabda_hindi_is_schwa(p) == 1) {
+                p = SVARA_PH_VOWEL_SCHWA;
+                var h = _shabda_hindi_next_kept(keep, n, k);
+                if (h >= 0 && vec_get(ph, h) == SVARA_PH_FRIC_GLOTTAL_H) {
+                    var after = _shabda_hindi_next_kept(keep, n, h);
+                    if (_shabda_hindi_vowel_at(ph, after) == 0) { p = SVARA_PH_VOWEL_OPEN_E; }
+                    elif (_shabda_hindi_is_schwa(vec_get(ph, after)) == 1) {
+                        p = SVARA_PH_VOWEL_OPEN_E;
+                        vec_set(ph, after, SVARA_PH_VOWEL_OPEN_E);
+                    }
+                }
+            }
+            _shabda_vec_push_a(a, out, p);
+        }
+        k = k + 1;
+    }
+    return out;
 }
 
 # Public Hindi engine. Ports hindi_rules().
@@ -1090,167 +2308,173 @@ fn _shabda_hindi_rules_a(a, word): i64 {
     var n = vec_len(chars);
     while (i < n) {
         var ch = vec_get(chars, i);
-        var next = _shabda_cp_at(chars, i + 1);
-
-        # Independent vowels + matras.
-        if (ch == 0x0905) { _shabda_vec_push_a(a, phonemes, SVARA_PH_VOWEL_SCHWA); }
-        elif (ch == 0x0906) { _shabda_vec_push_a(a, phonemes, SVARA_PH_VOWEL_OPEN_A); }
-        elif (ch == 0x093E) { _shabda_vec_push_a(a, phonemes, SVARA_PH_VOWEL_OPEN_A); }
-        elif (ch == 0x0907) { _shabda_vec_push_a(a, phonemes, SVARA_PH_VOWEL_NEAR_I); }
-        elif (ch == 0x093F) { _shabda_vec_push_a(a, phonemes, SVARA_PH_VOWEL_NEAR_I); }
-        elif (ch == 0x0908) { _shabda_vec_push_a(a, phonemes, SVARA_PH_VOWEL_E); }
-        elif (ch == 0x0940) { _shabda_vec_push_a(a, phonemes, SVARA_PH_VOWEL_E); }
-        elif (ch == 0x0909) { _shabda_vec_push_a(a, phonemes, SVARA_PH_VOWEL_CUP_V); }
-        elif (ch == 0x0941) { _shabda_vec_push_a(a, phonemes, SVARA_PH_VOWEL_CUP_V); }
-        elif (ch == 0x090A) { _shabda_vec_push_a(a, phonemes, SVARA_PH_VOWEL_U); }
-        elif (ch == 0x0942) { _shabda_vec_push_a(a, phonemes, SVARA_PH_VOWEL_U); }
-        elif (ch == 0x090F) { _shabda_vec_push_a(a, phonemes, SVARA_PH_VOWEL_OPEN_E); }
-        elif (ch == 0x0947) { _shabda_vec_push_a(a, phonemes, SVARA_PH_VOWEL_OPEN_E); }
-        elif (ch == 0x0910) { _shabda_vec_push_a(a, phonemes, SVARA_PH_VOWEL_OPEN_A); }
-        elif (ch == 0x0948) { _shabda_vec_push_a(a, phonemes, SVARA_PH_VOWEL_OPEN_A); }
-        elif (ch == 0x0913) { _shabda_vec_push_a(a, phonemes, SVARA_PH_VOWEL_O); }
-        elif (ch == 0x094B) { _shabda_vec_push_a(a, phonemes, SVARA_PH_VOWEL_O); }
-        elif (ch == 0x0914) { _shabda_vec_push_a(a, phonemes, SVARA_PH_VOWEL_OPEN_O); }
-        elif (ch == 0x094C) { _shabda_vec_push_a(a, phonemes, SVARA_PH_VOWEL_OPEN_O); }
-        elif (ch == 0x090B) {
-            _shabda_vec_push_a(a, phonemes, SVARA_PH_TAP_FLAP); _shabda_vec_push_a(a, phonemes, SVARA_PH_VOWEL_NEAR_I);
+        var adv = 1;
+        var v = _shabda_hindi_vowel_ph(ch);
+        var c = _shabda_hindi_consonant_ph(ch);
+        if (v != SHABDA_PH_NONE) { _shabda_vec_push_a(a, phonemes, v); }
+        elif (c != SHABDA_PH_NONE) {
+            adv = _shabda_hindi_push_consonant_a(a, phonemes, chars, i, c, _SHABDA_HINDI_INHERENT, 1) - i;
         }
-        elif (ch == 0x0943) {
-            _shabda_vec_push_a(a, phonemes, SVARA_PH_TAP_FLAP); _shabda_vec_push_a(a, phonemes, SVARA_PH_VOWEL_NEAR_I);
+        elif (ch == 0x090B || ch == 0x0943) {                # ऋ ृ /rɪ/ in Hindi
+            _shabda_vec_push_a(a, phonemes, SVARA_PH_TAP_FLAP);
+            _shabda_vec_push_a(a, phonemes, SVARA_PH_VOWEL_NEAR_I);
         }
-        # Nukta / virama — skip (base consonant already handled).
-        elif (ch == 0x093C) { i = i; }
-        elif (ch == 0x094D) { i = i; }
-        # Anusvara / visarga / chandrabindu.
-        elif (ch == 0x0902) { _shabda_vec_push_a(a, phonemes, SVARA_PH_NASAL_N); }
-        elif (ch == 0x0903) { _shabda_vec_push_a(a, phonemes, SVARA_PH_FRIC_H); }
-        elif (ch == 0x0901) { _shabda_vec_push_a(a, phonemes, SVARA_PH_NASAL_N); }
-        else {
-            # Consonants, then Latin fallback, else skip.
-            if (_shabda_hindi_consonant_a(a, phonemes, ch, next) == 0) {
-                if (_shabda_rules_is_ascii_alpha(ch) == 1) {
-                    _shabda_hindi_latin_a(a, phonemes, ch);
-                }
-            }
+        elif (ch == 0x0902 || ch == 0x0901) {                # ं ँ
+            _shabda_vec_push_a(a, phonemes, _shabda_hindi_nasal_before(chars, i + 1, SVARA_PH_NASAL_N));
         }
-
-        i = i + 1;
+        elif (ch == 0x0903) { _shabda_vec_push_a(a, phonemes, SVARA_PH_FRIC_GLOTTAL_H); }   # ः Hindi /ɦ/
+        elif (ch == 0x0950) {                                # ॐ /oːm/
+            _shabda_vec_push_a(a, phonemes, SVARA_PH_VOWEL_O);
+            _shabda_vec_push_a(a, phonemes, SVARA_PH_NASAL_M);
+        }
+        elif (_shabda_rules_is_ascii_alpha(ch) == 1) {
+            adv = _shabda_hindi_latin_a(a, phonemes, chars, i);
+        }
+        # Else (virama, a stray nukta, danda, digits, ...): nothing.
+        i = i + adv;
     }
 
-    # Hindi schwa deletion: remove word-final schwa (only if len > 1).
-    var pn = vec_len(phonemes);
-    if (pn > 1) {
-        if (vec_get(phonemes, pn - 1) == SVARA_PH_VOWEL_SCHWA) {
-            vec_pop(phonemes);
-        }
-    }
-
-    return phonemes;
+    return _shabda_hindi_schwa_a(a, phonemes);
 }
 
 # ================================================================
 # Sanskrit G2P rules (Devanagari) — ports sanskrit_rules(). Same Devanagari
-# codepoints as Hindi, but: NO word-final schwa deletion (schwa PRESERVATION),
-# anusvara -> NasalM (not NasalN), and richer independent-vowel expansions
-# (ai/au -> two phonemes; vocalic rr/l). Suppress set adds vocalic-rr matra
-# (0x0944) and vocalic-l matra (0x0962).
+# consonants as Hindi, but: NO schwa deletion (schwa PRESERVATION), short i u
+# and e o as Sanskrit has them, ai/au the diphthongs /ɐi ɐu/, vocalic r̥ r̥̄ l̥ l̥̄
+# (recited ri rī li lī), ज्ञ /d͡ʑɲ/, visarga /h/ (ह is /ɦ/), and an anusvara that is
+# m except before a stop, where it is the stop's nasal.
 # ================================================================
 
-# Sanskrit suppress set for the inherent schwa. Ports push_sanskrit_consonant.
-#must_use
-fn _shabda_sanskrit_suppress(next): i64 {
-    if (next == 0x093E) { return 1; }   # ा
-    if (next == 0x093F) { return 1; }   # ि
-    if (next == 0x0940) { return 1; }   # ी
-    if (next == 0x0941) { return 1; }   # ु
-    if (next == 0x0942) { return 1; }   # ू
-    if (next == 0x0947) { return 1; }   # े
-    if (next == 0x0948) { return 1; }   # ै
-    if (next == 0x094B) { return 1; }   # ो
-    if (next == 0x094C) { return 1; }   # ौ
-    if (next == 0x0943) { return 1; }   # ृ vocalic r
-    if (next == 0x0944) { return 1; }   # ॄ vocalic rr
-    if (next == 0x0962) { return 1; }   # ॢ vocalic l
-    if (next == 0x094D) { return 1; }   # ् virama
-    if (next == 0x0902) { return 1; }   # ं anusvara
-    if (next == 0x0901) { return 1; }   # ँ chandrabindu
-    return 0;
-}
-
-# Push a Sanskrit consonant + inherent schwa unless suppressed.
-fn _shabda_sanskrit_push_consonant_a(a, out, consonant, next): i64 {
-    _shabda_vec_push_a(a, out, consonant);
-    if (_shabda_sanskrit_suppress(next) == 0) {
-        _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_SCHWA);
+# Push the phoneme(s) of a Sanskrit independent vowel, matra or vocalic liquid.
+# Returns 1 if `cp` was one, else 0.
+fn _shabda_sanskrit_vowel_a(a, out, cp): i64 {
+    var v = SHABDA_PH_NONE;
+    if (cp == 0x0905) { v = SVARA_PH_VOWEL_SCHWA; }                       # अ /ɐ/
+    if (cp == 0x0906 || cp == 0x093E) { v = SVARA_PH_VOWEL_OPEN_A; }      # आ ा
+    if (cp == 0x0907 || cp == 0x093F) { v = SVARA_PH_VOWEL_NEAR_I; }      # इ ि
+    if (cp == 0x0908 || cp == 0x0940) { v = SVARA_PH_VOWEL_LONG_I; }      # ई ी
+    if (cp == 0x0909 || cp == 0x0941) { v = SVARA_PH_VOWEL_NEAR_U; }      # उ ु
+    if (cp == 0x090A || cp == 0x0942) { v = SVARA_PH_VOWEL_U; }           # ऊ ू
+    if (cp == 0x090F || cp == 0x0947) { v = SVARA_PH_VOWEL_E; }           # ए े /eː/
+    if (cp == 0x0910 || cp == 0x0948) { v = SVARA_PH_DIPH_AI; }           # ऐ ै /ɐi/
+    if (cp == 0x0913 || cp == 0x094B) { v = SVARA_PH_VOWEL_O; }           # ओ ो /oː/
+    if (cp == 0x0914 || cp == 0x094C) { v = SVARA_PH_DIPH_AU; }           # औ ौ /ɐu/
+    if (v != SHABDA_PH_NONE) { _shabda_vec_push_a(a, out, v); return 1; }
+    var liquid = SHABDA_PH_NONE;
+    var vowel = SVARA_PH_VOWEL_NEAR_I;
+    if (cp == 0x090B || cp == 0x0943) { liquid = SVARA_PH_TAP_FLAP; }      # ऋ ृ
+    if (cp == 0x0960 || cp == 0x0944) {                                    # ॠ ॄ
+        liquid = SVARA_PH_TAP_FLAP;
+        vowel = SVARA_PH_VOWEL_LONG_I;
     }
-    return 0;
+    if (cp == 0x090C || cp == 0x0962) { liquid = SVARA_PH_LATERAL_L; }     # ऌ ॢ
+    if (cp == 0x0961 || cp == 0x0963) {                                    # ॡ ॣ
+        liquid = SVARA_PH_LATERAL_L;
+        vowel = SVARA_PH_VOWEL_LONG_I;
+    }
+    if (liquid == SHABDA_PH_NONE) { return 0; }
+    _shabda_vec_push_a(a, out, liquid);
+    _shabda_vec_push_a(a, out, vowel);
+    return 1;
 }
 
-# Latin fallback for romanized Sanskrit (IAST-like). Ports the inline arm.
-fn _shabda_sanskrit_latin_a(a, out, cp): i64 {
-    var lower = _shabda_ascii_lower(cp);
-    if (lower == 0x61) { _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_SCHWA); return 0; }   # a
-    if (lower == 0x65) { _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_OPEN_E); return 0; }  # e
-    if (lower == 0x69) { _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_NEAR_I); return 0; }  # i
-    if (lower == 0x6F) { _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_O); return 0; }       # o
-    if (lower == 0x75) { _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_CUP_V); return 0; }   # u
-    if (lower == 0x6B) { _shabda_vec_push_a(a, out, SVARA_PH_PLOSIVE_K); return 0; }     # k
-    if (lower == 0x67) { _shabda_vec_push_a(a, out, SVARA_PH_PLOSIVE_G); return 0; }     # g
-    if (lower == 0x63) { _shabda_vec_push_a(a, out, SVARA_PH_AFFR_CH); return 0; }       # c
-    if (lower == 0x6A) { _shabda_vec_push_a(a, out, SVARA_PH_AFFR_J); return 0; }        # j
-    if (lower == 0x74) { _shabda_vec_push_a(a, out, SVARA_PH_PLOSIVE_T); return 0; }     # t
-    if (lower == 0x64) { _shabda_vec_push_a(a, out, SVARA_PH_PLOSIVE_D); return 0; }     # d
-    if (lower == 0x6E) { _shabda_vec_push_a(a, out, SVARA_PH_NASAL_N); return 0; }       # n
-    if (lower == 0x70) { _shabda_vec_push_a(a, out, SVARA_PH_PLOSIVE_P); return 0; }     # p
-    if (lower == 0x62) { _shabda_vec_push_a(a, out, SVARA_PH_PLOSIVE_B); return 0; }     # b
-    if (lower == 0x6D) { _shabda_vec_push_a(a, out, SVARA_PH_NASAL_M); return 0; }       # m
-    if (lower == 0x79) { _shabda_vec_push_a(a, out, SVARA_PH_APPROX_J); return 0; }      # y
-    if (lower == 0x72) { _shabda_vec_push_a(a, out, SVARA_PH_TAP_FLAP); return 0; }      # r
-    if (lower == 0x6C) { _shabda_vec_push_a(a, out, SVARA_PH_LATERAL_L); return 0; }     # l
-    if (lower == 0x76) { _shabda_vec_push_a(a, out, SVARA_PH_FRIC_V); return 0; }        # v
-    if (lower == 0x77) { _shabda_vec_push_a(a, out, SVARA_PH_FRIC_V); return 0; }        # w
-    if (lower == 0x73) { _shabda_vec_push_a(a, out, SVARA_PH_FRIC_S); return 0; }        # s
-    if (lower == 0x68) { _shabda_vec_push_a(a, out, SVARA_PH_FRIC_H); return 0; }        # h
-    return 0;
-}
-
-# Handle a Devanagari consonant for Sanskrit. Returns 1 if recognized else 0.
+# IAST letter (precomposed) -> phoneme, for the romanized fallback, or
+# SHABDA_PH_NONE. The vocalic liquids are two phonemes and are handled by the
+# caller.
 #must_use
-fn _shabda_sanskrit_consonant_a(a, out, ch, next): i64 {
-    if (ch == 0x0915) { _shabda_sanskrit_push_consonant_a(a, out, SVARA_PH_PLOSIVE_K, next); return 1; }   # क
-    if (ch == 0x0916) { _shabda_sanskrit_push_consonant_a(a, out, SVARA_PH_PLOSIVE_K, next); return 1; }   # ख
-    if (ch == 0x0917) { _shabda_sanskrit_push_consonant_a(a, out, SVARA_PH_PLOSIVE_G, next); return 1; }   # ग
-    if (ch == 0x0918) { _shabda_sanskrit_push_consonant_a(a, out, SVARA_PH_PLOSIVE_G, next); return 1; }   # घ
-    if (ch == 0x0919) { _shabda_sanskrit_push_consonant_a(a, out, SVARA_PH_NASAL_NG, next); return 1; }    # ङ
-    if (ch == 0x091A) { _shabda_sanskrit_push_consonant_a(a, out, SVARA_PH_AFFR_CH, next); return 1; }     # च
-    if (ch == 0x091B) { _shabda_sanskrit_push_consonant_a(a, out, SVARA_PH_AFFR_CH, next); return 1; }     # छ
-    if (ch == 0x091C) { _shabda_sanskrit_push_consonant_a(a, out, SVARA_PH_AFFR_J, next); return 1; }      # ज
-    if (ch == 0x091D) { _shabda_sanskrit_push_consonant_a(a, out, SVARA_PH_AFFR_J, next); return 1; }      # झ
-    if (ch == 0x091E) { _shabda_sanskrit_push_consonant_a(a, out, SVARA_PH_NASAL_N, next); return 1; }     # ञ
-    if (ch == 0x091F) { _shabda_sanskrit_push_consonant_a(a, out, SVARA_PH_PLOSIVE_T, next); return 1; }   # ट
-    if (ch == 0x0920) { _shabda_sanskrit_push_consonant_a(a, out, SVARA_PH_PLOSIVE_T, next); return 1; }   # ठ
-    if (ch == 0x0921) { _shabda_sanskrit_push_consonant_a(a, out, SVARA_PH_PLOSIVE_D, next); return 1; }   # ड
-    if (ch == 0x0922) { _shabda_sanskrit_push_consonant_a(a, out, SVARA_PH_PLOSIVE_D, next); return 1; }   # ढ
-    if (ch == 0x0923) { _shabda_sanskrit_push_consonant_a(a, out, SVARA_PH_NASAL_N, next); return 1; }     # ण
-    if (ch == 0x0924) { _shabda_sanskrit_push_consonant_a(a, out, SVARA_PH_PLOSIVE_T, next); return 1; }   # त
-    if (ch == 0x0925) { _shabda_sanskrit_push_consonant_a(a, out, SVARA_PH_PLOSIVE_T, next); return 1; }   # थ
-    if (ch == 0x0926) { _shabda_sanskrit_push_consonant_a(a, out, SVARA_PH_PLOSIVE_D, next); return 1; }   # द
-    if (ch == 0x0927) { _shabda_sanskrit_push_consonant_a(a, out, SVARA_PH_PLOSIVE_D, next); return 1; }   # ध
-    if (ch == 0x0928) { _shabda_sanskrit_push_consonant_a(a, out, SVARA_PH_NASAL_N, next); return 1; }     # न
-    if (ch == 0x092A) { _shabda_sanskrit_push_consonant_a(a, out, SVARA_PH_PLOSIVE_P, next); return 1; }   # प
-    if (ch == 0x092B) { _shabda_sanskrit_push_consonant_a(a, out, SVARA_PH_PLOSIVE_P, next); return 1; }   # फ
-    if (ch == 0x092C) { _shabda_sanskrit_push_consonant_a(a, out, SVARA_PH_PLOSIVE_B, next); return 1; }   # ब
-    if (ch == 0x092D) { _shabda_sanskrit_push_consonant_a(a, out, SVARA_PH_PLOSIVE_B, next); return 1; }   # भ
-    if (ch == 0x092E) { _shabda_sanskrit_push_consonant_a(a, out, SVARA_PH_NASAL_M, next); return 1; }     # म
-    if (ch == 0x092F) { _shabda_sanskrit_push_consonant_a(a, out, SVARA_PH_APPROX_J, next); return 1; }    # य
-    if (ch == 0x0930) { _shabda_sanskrit_push_consonant_a(a, out, SVARA_PH_TAP_FLAP, next); return 1; }    # र
-    if (ch == 0x0932) { _shabda_sanskrit_push_consonant_a(a, out, SVARA_PH_LATERAL_L, next); return 1; }   # ल
-    if (ch == 0x0935) { _shabda_sanskrit_push_consonant_a(a, out, SVARA_PH_FRIC_V, next); return 1; }      # व
-    if (ch == 0x0936) { _shabda_sanskrit_push_consonant_a(a, out, SVARA_PH_FRIC_SH, next); return 1; }     # श
-    if (ch == 0x0937) { _shabda_sanskrit_push_consonant_a(a, out, SVARA_PH_FRIC_SH, next); return 1; }     # ष
-    if (ch == 0x0938) { _shabda_sanskrit_push_consonant_a(a, out, SVARA_PH_FRIC_S, next); return 1; }      # स
-    if (ch == 0x0939) { _shabda_sanskrit_push_consonant_a(a, out, SVARA_PH_FRIC_H, next); return 1; }      # ह
-    return 0;
+fn _shabda_sanskrit_iast_ph(cp): i64 {
+    if (cp == 0x0101) { return SVARA_PH_VOWEL_OPEN_A; }        # ā
+    if (cp == 0x012B) { return SVARA_PH_VOWEL_LONG_I; }        # ī
+    if (cp == 0x016B) { return SVARA_PH_VOWEL_U; }             # ū
+    if (cp == 0x1E45) { return SVARA_PH_NASAL_NG; }            # ṅ
+    if (cp == 0x00F1) { return SVARA_PH_NASAL_PALATAL; }       # ñ
+    if (cp == 0x1E6D) { return SVARA_PH_PLOSIVE_RETRO_T; }     # ṭ
+    if (cp == 0x1E0D) { return SVARA_PH_PLOSIVE_RETRO_D; }     # ḍ
+    if (cp == 0x1E47) { return SVARA_PH_NASAL_RETRO; }         # ṇ
+    if (cp == 0x015B) { return SVARA_PH_FRIC_SH; }             # ś
+    if (cp == 0x1E63) { return SVARA_PH_FRIC_RETRO_S; }        # ṣ
+    if (cp == 0x1E43 || cp == 0x1E41) { return SVARA_PH_NASAL_M; }   # ṃ ṁ
+    if (cp == 0x1E25) { return SVARA_PH_FRIC_H; }              # ḥ
+    return SHABDA_PH_NONE;
+}
+
+# The nasal IAST ṃ is before the letter `next` (lowercased): the stop's own, as
+# for the Devanagari anusvara, else m.
+#must_use
+fn _shabda_sanskrit_iast_nasal(next): i64 {
+    if (next == 0x6B || next == 0x67 || next == 0x1E45) { return SVARA_PH_NASAL_NG; }         # k g ṅ
+    if (next == 0x63 || next == 0x6A || next == 0x00F1) { return SVARA_PH_NASAL_PALATAL; }    # c j ñ
+    if (next == 0x1E6D || next == 0x1E0D || next == 0x1E47) { return SVARA_PH_NASAL_RETRO; }  # ṭ ḍ ṇ
+    if (next == 0x74 || next == 0x64 || next == 0x6E) { return SVARA_PH_NASAL_N; }            # t d n
+    return SVARA_PH_NASAL_M;
+}
+
+# Latin fallback for romanized Sanskrit, ASCII or IAST. Pushes the phoneme(s) for
+# the letter at chars[i] and returns how many codepoints it read. ai au are the
+# diphthongs, an h after a stop is its aspiration (the plain stop, as for
+# Devanagari), c is /t͡ɕ/, h /ɦ/, ṛ ṝ ḷ the vocalic liquids.
+fn _shabda_sanskrit_latin_a(a, out, chars, i): i64 {
+    var cp = vec_get(chars, i);
+    var lower = _shabda_ascii_lower(cp);
+    var next = _shabda_ascii_lower(_shabda_cp_at(chars, i + 1));
+    var iast = _shabda_sanskrit_iast_ph(cp);
+    if (iast == SVARA_PH_NASAL_M) { iast = _shabda_sanskrit_iast_nasal(next); }   # ṃ, as ं
+    if (iast != SHABDA_PH_NONE) {
+        _shabda_vec_push_a(a, out, iast);
+        if (iast == SVARA_PH_PLOSIVE_RETRO_T || iast == SVARA_PH_PLOSIVE_RETRO_D) {
+            if (next == 0x68) { return 2; }                  # ṭh ḍh
+        }
+        return 1;
+    }
+    if (cp == 0x1E5B || cp == 0x1E5D || cp == 0x1E37 || cp == 0x1E39) {   # ṛ ṝ ḷ ḹ
+        if (cp == 0x1E5B || cp == 0x1E5D) { _shabda_vec_push_a(a, out, SVARA_PH_TAP_FLAP); }
+        else { _shabda_vec_push_a(a, out, SVARA_PH_LATERAL_L); }
+        if (cp == 0x1E5B || cp == 0x1E37) { _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_NEAR_I); }
+        else { _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_LONG_I); }
+        return 1;
+    }
+    if (_shabda_rules_is_ascii_alpha(cp) == 0) { return 1; }
+    if (lower == 0x61) {                                                            # a
+        if (next == 0x69) { _shabda_vec_push_a(a, out, SVARA_PH_DIPH_AI); return 2; }      # ai
+        if (next == 0x75) { _shabda_vec_push_a(a, out, SVARA_PH_DIPH_AU); return 2; }      # au
+        if (next == 0x61) { _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_OPEN_A); return 2; } # aa
+        _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_SCHWA);
+        return 1;
+    }
+    var v = SHABDA_PH_NONE;
+    if (lower == 0x65) { v = SVARA_PH_VOWEL_E; }         # e
+    if (lower == 0x69) { v = SVARA_PH_VOWEL_NEAR_I; }    # i
+    if (lower == 0x6F) { v = SVARA_PH_VOWEL_O; }         # o
+    if (lower == 0x75) { v = SVARA_PH_VOWEL_NEAR_U; }    # u
+    if (v != SHABDA_PH_NONE) { _shabda_vec_push_a(a, out, v); return 1; }
+    var c = SHABDA_PH_NONE;
+    if (lower == 0x6B) { c = SVARA_PH_PLOSIVE_K; }       # k
+    if (lower == 0x67) { c = SVARA_PH_PLOSIVE_G; }       # g
+    if (lower == 0x63) { c = SVARA_PH_AFFR_CH; }         # c
+    if (lower == 0x6A) { c = SVARA_PH_AFFR_J; }          # j
+    if (lower == 0x74) { c = SVARA_PH_PLOSIVE_T; }       # t
+    if (lower == 0x64) { c = SVARA_PH_PLOSIVE_D; }       # d
+    if (lower == 0x70) { c = SVARA_PH_PLOSIVE_P; }       # p
+    if (lower == 0x62) { c = SVARA_PH_PLOSIVE_B; }       # b
+    if (c != SHABDA_PH_NONE) {
+        _shabda_vec_push_a(a, out, c);
+        if (next == 0x68) { return 2; }                  # the h of an aspirate
+        return 1;
+    }
+    if (lower == 0x73) {                                 # s, sh
+        if (next == 0x68) { _shabda_vec_push_a(a, out, SVARA_PH_FRIC_SH); return 2; }
+        _shabda_vec_push_a(a, out, SVARA_PH_FRIC_S);
+        return 1;
+    }
+    if (lower == 0x6E) { c = SVARA_PH_NASAL_N; }         # n
+    if (lower == 0x6D) { c = SVARA_PH_NASAL_M; }         # m
+    if (lower == 0x79) { c = SVARA_PH_APPROX_J; }        # y
+    if (lower == 0x72) { c = SVARA_PH_TAP_FLAP; }        # r
+    if (lower == 0x6C) { c = SVARA_PH_LATERAL_L; }       # l
+    if (lower == 0x76 || lower == 0x77) { c = SVARA_PH_FRIC_V; }   # v w
+    if (lower == 0x68) { c = SVARA_PH_FRIC_GLOTTAL_H; }  # h /ɦ/
+    if (c != SHABDA_PH_NONE) { _shabda_vec_push_a(a, out, c); }
+    return 1;
 }
 
 # Public Sanskrit engine. Ports sanskrit_rules().
@@ -1271,73 +2495,25 @@ fn _shabda_sanskrit_rules_a(a, word): i64 {
     var n = vec_len(chars);
     while (i < n) {
         var ch = vec_get(chars, i);
-        var next = _shabda_cp_at(chars, i + 1);
-
-        # Independent vowels + matras.
-        if (ch == 0x0905) { _shabda_vec_push_a(a, phonemes, SVARA_PH_VOWEL_SCHWA); }
-        elif (ch == 0x0906) { _shabda_vec_push_a(a, phonemes, SVARA_PH_VOWEL_OPEN_A); }
-        elif (ch == 0x093E) { _shabda_vec_push_a(a, phonemes, SVARA_PH_VOWEL_OPEN_A); }
-        elif (ch == 0x0907) { _shabda_vec_push_a(a, phonemes, SVARA_PH_VOWEL_NEAR_I); }
-        elif (ch == 0x093F) { _shabda_vec_push_a(a, phonemes, SVARA_PH_VOWEL_NEAR_I); }
-        elif (ch == 0x0908) { _shabda_vec_push_a(a, phonemes, SVARA_PH_VOWEL_E); }
-        elif (ch == 0x0940) { _shabda_vec_push_a(a, phonemes, SVARA_PH_VOWEL_E); }
-        elif (ch == 0x0909) { _shabda_vec_push_a(a, phonemes, SVARA_PH_VOWEL_CUP_V); }
-        elif (ch == 0x0941) { _shabda_vec_push_a(a, phonemes, SVARA_PH_VOWEL_CUP_V); }
-        elif (ch == 0x090A) { _shabda_vec_push_a(a, phonemes, SVARA_PH_VOWEL_U); }
-        elif (ch == 0x0942) { _shabda_vec_push_a(a, phonemes, SVARA_PH_VOWEL_U); }
-        elif (ch == 0x090B) {
-            _shabda_vec_push_a(a, phonemes, SVARA_PH_TAP_FLAP); _shabda_vec_push_a(a, phonemes, SVARA_PH_VOWEL_NEAR_I);
+        var adv = 1;
+        var c = _shabda_hindi_consonant_ph(ch);
+        if (_shabda_sanskrit_vowel_a(a, phonemes, ch) == 1) { adv = 1; }
+        elif (c != SHABDA_PH_NONE) {
+            adv = _shabda_hindi_push_consonant_a(a, phonemes, chars, i, c, SVARA_PH_VOWEL_SCHWA, 0) - i;
         }
-        elif (ch == 0x0943) {
-            _shabda_vec_push_a(a, phonemes, SVARA_PH_TAP_FLAP); _shabda_vec_push_a(a, phonemes, SVARA_PH_VOWEL_NEAR_I);
+        elif (ch == 0x0902 || ch == 0x0901) {                # ं ँ
+            _shabda_vec_push_a(a, phonemes, _shabda_hindi_nasal_before(chars, i + 1, SVARA_PH_NASAL_M));
         }
-        elif (ch == 0x0960) {
-            _shabda_vec_push_a(a, phonemes, SVARA_PH_TAP_FLAP); _shabda_vec_push_a(a, phonemes, SVARA_PH_VOWEL_E);
+        elif (ch == 0x0903) { _shabda_vec_push_a(a, phonemes, SVARA_PH_FRIC_H); }   # ः visarga /h/
+        elif (ch == 0x0950) {                                # ॐ /oːm/
+            _shabda_vec_push_a(a, phonemes, SVARA_PH_VOWEL_O);
+            _shabda_vec_push_a(a, phonemes, SVARA_PH_NASAL_M);
         }
-        elif (ch == 0x0944) {
-            _shabda_vec_push_a(a, phonemes, SVARA_PH_TAP_FLAP); _shabda_vec_push_a(a, phonemes, SVARA_PH_VOWEL_E);
+        elif (ch >= 0x80 || _shabda_rules_is_ascii_alpha(ch) == 1) {
+            if (ch < 0x0900 || ch > 0x097F) { adv = _shabda_sanskrit_latin_a(a, phonemes, chars, i); }
         }
-        elif (ch == 0x090C) {
-            _shabda_vec_push_a(a, phonemes, SVARA_PH_LATERAL_L); _shabda_vec_push_a(a, phonemes, SVARA_PH_VOWEL_NEAR_I);
-        }
-        elif (ch == 0x0962) {
-            _shabda_vec_push_a(a, phonemes, SVARA_PH_LATERAL_L); _shabda_vec_push_a(a, phonemes, SVARA_PH_VOWEL_NEAR_I);
-        }
-        elif (ch == 0x090F) { _shabda_vec_push_a(a, phonemes, SVARA_PH_VOWEL_OPEN_E); }
-        elif (ch == 0x0947) { _shabda_vec_push_a(a, phonemes, SVARA_PH_VOWEL_OPEN_E); }
-        elif (ch == 0x0910) {
-            _shabda_vec_push_a(a, phonemes, SVARA_PH_VOWEL_OPEN_A);
-            _shabda_vec_push_a(a, phonemes, SVARA_PH_VOWEL_NEAR_I);
-        }
-        elif (ch == 0x0948) {
-            _shabda_vec_push_a(a, phonemes, SVARA_PH_VOWEL_OPEN_A);
-            _shabda_vec_push_a(a, phonemes, SVARA_PH_VOWEL_NEAR_I);
-        }
-        elif (ch == 0x0913) { _shabda_vec_push_a(a, phonemes, SVARA_PH_VOWEL_O); }
-        elif (ch == 0x094B) { _shabda_vec_push_a(a, phonemes, SVARA_PH_VOWEL_O); }
-        elif (ch == 0x0914) {
-            _shabda_vec_push_a(a, phonemes, SVARA_PH_VOWEL_OPEN_A);
-            _shabda_vec_push_a(a, phonemes, SVARA_PH_VOWEL_CUP_V);
-        }
-        elif (ch == 0x094C) {
-            _shabda_vec_push_a(a, phonemes, SVARA_PH_VOWEL_OPEN_A);
-            _shabda_vec_push_a(a, phonemes, SVARA_PH_VOWEL_CUP_V);
-        }
-        # Virama / nukta — skip.
-        elif (ch == 0x094D) { i = i; }
-        elif (ch == 0x093C) { i = i; }
-        # Anusvara -> NasalM (Sanskrit), visarga -> FricH.
-        elif (ch == 0x0902) { _shabda_vec_push_a(a, phonemes, SVARA_PH_NASAL_M); }
-        elif (ch == 0x0903) { _shabda_vec_push_a(a, phonemes, SVARA_PH_FRIC_H); }
-        else {
-            if (_shabda_sanskrit_consonant_a(a, phonemes, ch, next) == 0) {
-                if (_shabda_rules_is_ascii_alpha(ch) == 1) {
-                    _shabda_sanskrit_latin_a(a, phonemes, ch);
-                }
-            }
-        }
-
-        i = i + 1;
+        # Else (virama, avagraha, danda, accents, digits, ...): nothing.
+        i = i + adv;
     }
 
     # Sanskrit: NO schwa deletion (preservation).
@@ -1345,35 +2521,315 @@ fn _shabda_sanskrit_rules_a(a, word): i64 {
 }
 
 # ================================================================
-# Arabic G2P rules — ports arabic_rules(). Abjad: 28 letters (emphatics collapsed
-# to their plain counterparts), hamza/ain -> GlottalStop, harakat (fatha/kasra/
-# damma), tanween -> V+n, shadda -> duplicate previous phoneme, taa marbuta,
-# alef maqsura, + ASCII romanized fallback. Iterates codepoint-by-codepoint with
-# no lookahead (Rust `for &ch in &chars`). Word decoded WITHOUT ASCII-lowering.
+# Arabic G2P rules — ports arabic_rules(). Modern Standard / Classical Arabic from
+# the abjad: 28 letters, the hamza seats, harakat (fatha/kasra/damma), tanwin,
+# shadda, sukun, the dagger alif, taa marbuta, alef maqsura, the definite article,
+# + an ASCII romanized fallback. Word decoded WITHOUT ASCII-lowering.
+#
+# The word is read as clusters, a letter with the marks written on it, so that a
+# shadda doubles the consonant whichever order it and the vowel are stored in, and
+# a vowel sees the letter after it: fatha + ا, kasra + ي, damma + و are one long
+# vowel. Unvocalized text has no short vowels, and the rules cannot supply them;
+# a ي or و between consonants is then read as the long vowel (كبير /kabiːr/).
+#
+# Accuracy over the Rust (ADR-0002): /a/ is svara's VOWEL_A, not the back [ɑ],
+# which is its allophone beside the emphatics and the uvulars only (see
+# _shabda_arabic_backs); ح ع are the pharyngeals ħ ʕ, not h and ʔ; ق is /q/, خ غ
+# the uvular fricatives (MSA /x ɣ/; svara has no velar fricative), not h and a
+# stop; ر is the trill. svara has no pharyngealized consonant: an emphatic is its
+# plain consonant, and the /a/ beside it is backed.
 # ================================================================
 
-# Latin fallback for romanized Arabic. Pushes phoneme(s) for an ASCII letter.
-fn _shabda_arabic_latin_a(a, out, cp): i64 {
-    var lower = _shabda_ascii_lower(cp);
-    if (lower == 0x61) { _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_OPEN_A); return 0; }  # a
-    if (lower == 0x69) { _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_NEAR_I); return 0; }  # i
-    if (lower == 0x75) { _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_CUP_V); return 0; }   # u
-    if (lower == 0x62) { _shabda_vec_push_a(a, out, SVARA_PH_PLOSIVE_B); return 0; }     # b
-    if (lower == 0x74) { _shabda_vec_push_a(a, out, SVARA_PH_PLOSIVE_T); return 0; }     # t
-    if (lower == 0x64) { _shabda_vec_push_a(a, out, SVARA_PH_PLOSIVE_D); return 0; }     # d
-    if (lower == 0x6B) { _shabda_vec_push_a(a, out, SVARA_PH_PLOSIVE_K); return 0; }     # k
-    if (lower == 0x66) { _shabda_vec_push_a(a, out, SVARA_PH_FRIC_F); return 0; }        # f
-    if (lower == 0x73) { _shabda_vec_push_a(a, out, SVARA_PH_FRIC_S); return 0; }        # s
-    if (lower == 0x7A) { _shabda_vec_push_a(a, out, SVARA_PH_FRIC_Z); return 0; }        # z
-    if (lower == 0x68) { _shabda_vec_push_a(a, out, SVARA_PH_FRIC_H); return 0; }        # h
-    if (lower == 0x6C) { _shabda_vec_push_a(a, out, SVARA_PH_LATERAL_L); return 0; }     # l
-    if (lower == 0x6D) { _shabda_vec_push_a(a, out, SVARA_PH_NASAL_M); return 0; }       # m
-    if (lower == 0x6E) { _shabda_vec_push_a(a, out, SVARA_PH_NASAL_N); return 0; }       # n
-    if (lower == 0x72) { _shabda_vec_push_a(a, out, SVARA_PH_TAP_FLAP); return 0; }      # r
-    if (lower == 0x77) { _shabda_vec_push_a(a, out, SVARA_PH_APPROX_W); return 0; }      # w
-    if (lower == 0x79) { _shabda_vec_push_a(a, out, SVARA_PH_APPROX_J); return 0; }      # y
-    if (lower == 0x6A) { _shabda_vec_push_a(a, out, SVARA_PH_AFFR_J); return 0; }        # j
-    if (lower == 0x71) { _shabda_vec_push_a(a, out, SVARA_PH_PLOSIVE_K); return 0; }     # q
+# A cluster packs a letter (or 0 for marks with no letter) and the marks on it:
+# base in bits 0..23, vowel in 24..26 (_SHABDA_AR_* below), shadda bit 28,
+# sukun bit 29, dagger alif bit 30.
+var _SHABDA_AR_A = 1;    # fatha
+var _SHABDA_AR_I = 2;    # kasra
+var _SHABDA_AR_U = 3;    # damma
+var _SHABDA_AR_AN = 4;   # fathatan
+var _SHABDA_AR_IN = 5;   # kasratan
+var _SHABDA_AR_UN = 6;   # dammatan
+
+#must_use
+fn _shabda_arabic_base(cl): i64 { return cl & 0xFFFFFF; }
+#must_use
+fn _shabda_arabic_vowel(cl): i64 { return (cl >> 24) & 7; }
+#must_use
+fn _shabda_arabic_shadda(cl): i64 { return (cl >> 28) & 1; }
+#must_use
+fn _shabda_arabic_sukun(cl): i64 { return (cl >> 29) & 1; }
+#must_use
+fn _shabda_arabic_dagger(cl): i64 { return (cl >> 30) & 1; }
+#must_use
+fn _shabda_arabic_set_vowel(cl, v): i64 { return cl - (_shabda_arabic_vowel(cl) << 24) + (v << 24); }
+
+# The cluster at k, or 0 past either end.
+#must_use
+fn _shabda_arabic_at(cls, k): i64 {
+    if (k < 0 || k >= vec_len(cls)) { return 0; }
+    return vec_get(cls, k);
+}
+
+# Read the codepoints into clusters. A hamza or madda written as a mark on its
+# seat (the decomposed forms) gives the precomposed letter; tatweel and the
+# Quranic annotation marks are dropped.
+#must_use
+fn _shabda_arabic_clusters_a(a, chars): i64 {
+    var cls = vec_new_a(a);
+    var n = vec_len(chars);
+    var i = 0;
+    while (i < n) {
+        var cp = vec_get(chars, i);
+        var m = vec_len(cls);
+        var cur = 0;
+        if (m > 0) { cur = vec_get(cls, m - 1); }
+        var mark = 0;
+        if (cp >= 0x064B && cp <= 0x0650) { mark = 1; }
+        if (cp >= 0x0651 && cp <= 0x0655) { mark = 1; }
+        if (cp == 0x0670) { mark = 1; }
+        if (mark == 1 && m == 0) {
+            _shabda_vec_push_a(a, cls, 0);   # marks before any letter
+            m = 1;
+        }
+        if (cp == 0x0640 || (cp >= 0x06D6 && cp <= 0x06ED) || (cp >= 0x0656 && cp <= 0x065F)) {
+            i = i;                                                   # tatweel, annotations
+        } elif (mark == 1) {
+            var b = _shabda_arabic_base(cur);
+            if (cp == 0x064E) { cur = _shabda_arabic_set_vowel(cur, _SHABDA_AR_A); }
+            if (cp == 0x0650) { cur = _shabda_arabic_set_vowel(cur, _SHABDA_AR_I); }
+            if (cp == 0x064F) { cur = _shabda_arabic_set_vowel(cur, _SHABDA_AR_U); }
+            if (cp == 0x064B) { cur = _shabda_arabic_set_vowel(cur, _SHABDA_AR_AN); }
+            if (cp == 0x064D) { cur = _shabda_arabic_set_vowel(cur, _SHABDA_AR_IN); }
+            if (cp == 0x064C) { cur = _shabda_arabic_set_vowel(cur, _SHABDA_AR_UN); }
+            if (cp == 0x0651) { cur = cur | (1 << 28); }
+            if (cp == 0x0652) { cur = cur | (1 << 29); }
+            if (cp == 0x0670) { cur = cur | (1 << 30); }
+            var nb = b;
+            if (cp == 0x0653 && b == 0x0627) { nb = 0x0622; }                  # ا + ٓ  -> آ
+            if (cp == 0x0654 && b == 0x0627) { nb = 0x0623; }                  # ا + ٔ  -> أ
+            if (cp == 0x0655 && b == 0x0627) { nb = 0x0625; }                  # ا + ٕ  -> إ
+            if (cp == 0x0654 && b == 0x0648) { nb = 0x0624; }                  # و + ٔ  -> ؤ
+            if (cp == 0x0654 && (b == 0x064A || b == 0x0649)) { nb = 0x0626; } # ي + ٔ  -> ئ
+            cur = cur - _shabda_arabic_base(cur) + nb;
+            vec_set(cls, m - 1, cur);
+        } else {
+            _shabda_vec_push_a(a, cls, cp);
+        }
+        i = i + 1;
+    }
+    return cls;
+}
+
+# The svara phoneme of an Arabic consonant letter (the hamza seats included), or
+# SHABDA_PH_NONE for the vowel letters ا و ي ى ة آ and anything else.
+#must_use
+fn _shabda_arabic_consonant_ph(b): i64 {
+    if (b == 0x0628) { return SVARA_PH_PLOSIVE_B; }          # ب
+    if (b == 0x062A) { return SVARA_PH_PLOSIVE_T; }          # ت
+    if (b == 0x062B) { return SVARA_PH_FRIC_TH; }            # ث
+    if (b == 0x062C) { return SVARA_PH_AFFR_J; }             # ج
+    if (b == 0x062D) { return SVARA_PH_FRIC_PHARYNGEAL_H; }  # ح /ħ/
+    if (b == 0x062E) { return SVARA_PH_FRIC_UVULAR_CH; }     # خ /x/ (svara: χ)
+    if (b == 0x062F) { return SVARA_PH_PLOSIVE_D; }          # د
+    if (b == 0x0630) { return SVARA_PH_FRIC_DH; }            # ذ
+    if (b == 0x0631) { return SVARA_PH_TRILL_ALVEOLAR; }     # ر /r/
+    if (b == 0x0632) { return SVARA_PH_FRIC_Z; }             # ز
+    if (b == 0x0633) { return SVARA_PH_FRIC_S; }             # س
+    if (b == 0x0634) { return SVARA_PH_FRIC_SH; }            # ش
+    if (b == 0x0635) { return SVARA_PH_FRIC_S; }             # ص /sˤ/
+    if (b == 0x0636) { return SVARA_PH_PLOSIVE_D; }          # ض /dˤ/
+    if (b == 0x0637) { return SVARA_PH_PLOSIVE_T; }          # ط /tˤ/
+    if (b == 0x0638) { return SVARA_PH_FRIC_DH; }            # ظ /ðˤ/
+    if (b == 0x0639) { return SVARA_PH_FRIC_PHARYNGEAL_A; }  # ع /ʕ/
+    if (b == 0x063A) { return SVARA_PH_FRIC_UVULAR_R; }      # غ /ɣ/ (svara: ʁ)
+    if (b == 0x0641) { return SVARA_PH_FRIC_F; }             # ف
+    if (b == 0x0642) { return SVARA_PH_PLOSIVE_UVULAR_Q; }   # ق /q/
+    if (b == 0x0643) { return SVARA_PH_PLOSIVE_K; }          # ك
+    if (b == 0x0644) { return SVARA_PH_LATERAL_L; }          # ل
+    if (b == 0x0645) { return SVARA_PH_NASAL_M; }            # م
+    if (b == 0x0646) { return SVARA_PH_NASAL_N; }            # ن
+    if (b == 0x0647) { return SVARA_PH_FRIC_H; }             # ه
+    if (b == 0x0621 || b == 0x0623 || b == 0x0625) { return SVARA_PH_GLOTTAL_STOP; }   # ء أ إ
+    if (b == 0x0624 || b == 0x0626) { return SVARA_PH_GLOTTAL_STOP; }                  # ؤ ئ
+    return SHABDA_PH_NONE;
+}
+
+# Does the letter back an /a/ beside it to [ɑ]? The emphatics ص ض ط ظ and the
+# uvulars ق خ غ do (tafkhim: the seven musta'liya letters).
+#must_use
+fn _shabda_arabic_backs(b): i64 {
+    if (b >= 0x0635 && b <= 0x0638) { return 1; }            # ص ض ط ظ
+    if (b == 0x0642 || b == 0x062E || b == 0x063A) { return 1; }   # ق خ غ
+    return 0;
+}
+
+# A sun letter, which the article's ل assimilates to (الشمس /aʃʃams/).
+#must_use
+fn _shabda_arabic_sun(b): i64 {
+    if (b == 0x062A || b == 0x062B || b == 0x062F || b == 0x0630) { return 1; }   # ت ث د ذ
+    if (b >= 0x0631 && b <= 0x0638) { return 1; }                                # ر ز س ش ص ض ط ظ
+    if (b == 0x0644 || b == 0x0646) { return 1; }                                # ل ن
+    return 0;
+}
+
+# A bare alif or alef maqsura (no mark on it), which a fatha or fathatan before it
+# lengthens or supports: one vowel, /aː/ or /an/.
+#must_use
+fn _shabda_arabic_bare_alif(cl): i64 {
+    var b = _shabda_arabic_base(cl);
+    if (b != 0x0627 && b != 0x0649) { return 0; }
+    if (_shabda_arabic_vowel(cl) != 0 || _shabda_arabic_shadda(cl) == 1) { return 0; }
+    return 1;
+}
+
+# A bare و or ي, which a damma or kasra before it makes /uː/ or /iː/.
+#must_use
+fn _shabda_arabic_bare_weak(cl, b): i64 {
+    if (_shabda_arabic_base(cl) != b) { return 0; }
+    if (_shabda_arabic_vowel(cl) != 0 || _shabda_arabic_shadda(cl) == 1) { return 0; }
+    return 1;
+}
+
+# Is cluster k the definite article's ل: ال at the word start, or after a
+# proclitic و ف ب ك, with no vowel on the ل and a noun of two letters or more
+# after it? (So unvocalized بال /baːl/ and والد /waːlid/ are not al-.)
+#must_use
+fn _shabda_arabic_article_lam(cls, k): i64 {
+    var cl = _shabda_arabic_at(cls, k);
+    if (_shabda_arabic_base(cl) != 0x0644 || _shabda_arabic_vowel(cl) != 0) { return 0; }
+    if (_shabda_arabic_shadda(cl) == 1 || k + 2 >= vec_len(cls)) { return 0; }
+    var alif = _shabda_arabic_base(_shabda_arabic_at(cls, k - 1));
+    if (alif != 0x0627 && alif != 0x0671) { return 0; }
+    if (k == 1) { return 1; }
+    if (k == 2) {
+        var p = _shabda_arabic_base(_shabda_arabic_at(cls, 0));
+        if (p == 0x0648 || p == 0x0641 || p == 0x0628 || p == 0x0643) { return 1; }
+    }
+    return 0;
+}
+
+# /a/, backed to [ɑ] (VOWEL_OPEN_A) when the letter it is written on or the next
+# letter backs it.
+#must_use
+fn _shabda_arabic_a(b, next_b): i64 {
+    if (_shabda_arabic_backs(b) == 1 || _shabda_arabic_backs(next_b) == 1) { return SVARA_PH_VOWEL_OPEN_A; }
+    return SVARA_PH_VOWEL_A;
+}
+
+# Push the vowel written on cluster k (base b), lengthened by a mater after it.
+# Returns how many clusters after k it read (0 or 1).
+fn _shabda_arabic_vowel_a(a, out, cls, k, b): i64 {
+    var cl = vec_get(cls, k);
+    var v = _shabda_arabic_vowel(cl);
+    var nx = _shabda_arabic_at(cls, k + 1);
+    var used = 0;
+    if (v == _SHABDA_AR_A || v == _SHABDA_AR_AN) {
+        if (_shabda_arabic_bare_alif(nx) == 1) {
+            used = 1;
+            nx = _shabda_arabic_at(cls, k + 2);
+        }
+        _shabda_vec_push_a(a, out, _shabda_arabic_a(b, _shabda_arabic_base(nx)));
+        if (v == _SHABDA_AR_AN) { _shabda_vec_push_a(a, out, SVARA_PH_NASAL_N); }
+        return used;
+    }
+    if (v == _SHABDA_AR_I) {
+        if (_shabda_arabic_bare_weak(nx, 0x064A) == 1) {
+            _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_LONG_I);
+            return 1;
+        }
+        _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_NEAR_I);
+        return 0;
+    }
+    if (v == _SHABDA_AR_U) {
+        if (_shabda_arabic_bare_weak(nx, 0x0648) == 1) {
+            _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_U);
+            return 1;
+        }
+        _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_NEAR_U);
+        return 0;
+    }
+    if (v == _SHABDA_AR_IN) {
+        _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_NEAR_I);
+        _shabda_vec_push_a(a, out, SVARA_PH_NASAL_N);
+        return 0;
+    }
+    if (v == _SHABDA_AR_UN) {
+        _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_NEAR_U);
+        _shabda_vec_push_a(a, out, SVARA_PH_NASAL_N);
+        return 0;
+    }
+    if (_shabda_arabic_dagger(cl) == 1) {                    # dagger alif alone: /aː/
+        _shabda_vec_push_a(a, out, _shabda_arabic_a(b, _shabda_arabic_base(nx)));
+    }
+    return 0;
+}
+
+# Latin fallback for romanized Arabic, over the clusters' letters. Pushes the
+# phoneme(s) for the letter at cluster k and returns how many clusters it read:
+# the digraphs sh kh gh th dh are ʃ x ɣ θ ð, and aa ii/ee uu/oo the long vowels.
+fn _shabda_arabic_latin_a(a, out, cls, k): i64 {
+    var lower = _shabda_ascii_lower(_shabda_arabic_base(vec_get(cls, k)));
+    var next = _shabda_ascii_lower(_shabda_arabic_base(_shabda_arabic_at(cls, k + 1)));
+    if (next == 0x68) {
+        var dg = SHABDA_PH_NONE;
+        if (lower == 0x73) { dg = SVARA_PH_FRIC_SH; }        # sh
+        if (lower == 0x6B) { dg = SVARA_PH_FRIC_UVULAR_CH; } # kh
+        if (lower == 0x67) { dg = SVARA_PH_FRIC_UVULAR_R; }  # gh
+        if (lower == 0x74) { dg = SVARA_PH_FRIC_TH; }        # th
+        if (lower == 0x64) { dg = SVARA_PH_FRIC_DH; }        # dh
+        if (dg != SHABDA_PH_NONE) { _shabda_vec_push_a(a, out, dg); return 2; }
+    }
+    if (lower == 0x61) {                                     # a, aa
+        _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_A);
+        if (next == 0x61) { return 2; }
+        return 1;
+    }
+    if (lower == 0x69 || (lower == 0x65 && next == 0x65)) {  # i, ii, ee
+        if (next == lower) { _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_LONG_I); return 2; }
+        _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_NEAR_I);
+        return 1;
+    }
+    if (lower == 0x75 || (lower == 0x6F && next == 0x6F)) {  # u, uu, oo
+        if (next == lower) { _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_U); return 2; }
+        _shabda_vec_push_a(a, out, SVARA_PH_VOWEL_NEAR_U);
+        return 1;
+    }
+    var c = SHABDA_PH_NONE;
+    if (lower == 0x62) { c = SVARA_PH_PLOSIVE_B; }           # b
+    if (lower == 0x74) { c = SVARA_PH_PLOSIVE_T; }           # t
+    if (lower == 0x64) { c = SVARA_PH_PLOSIVE_D; }           # d
+    if (lower == 0x6B) { c = SVARA_PH_PLOSIVE_K; }           # k
+    if (lower == 0x66) { c = SVARA_PH_FRIC_F; }              # f
+    if (lower == 0x73) { c = SVARA_PH_FRIC_S; }              # s
+    if (lower == 0x7A) { c = SVARA_PH_FRIC_Z; }              # z
+    if (lower == 0x68) { c = SVARA_PH_FRIC_H; }              # h
+    if (lower == 0x6C) { c = SVARA_PH_LATERAL_L; }           # l
+    if (lower == 0x6D) { c = SVARA_PH_NASAL_M; }             # m
+    if (lower == 0x6E) { c = SVARA_PH_NASAL_N; }             # n
+    if (lower == 0x72) { c = SVARA_PH_TRILL_ALVEOLAR; }      # r
+    if (lower == 0x77) { c = SVARA_PH_APPROX_W; }            # w
+    if (lower == 0x79) { c = SVARA_PH_APPROX_J; }            # y
+    if (lower == 0x6A) { c = SVARA_PH_AFFR_J; }              # j
+    if (lower == 0x71) { c = SVARA_PH_PLOSIVE_UVULAR_Q; }    # q
+    if (c != SHABDA_PH_NONE) { _shabda_vec_push_a(a, out, c); }
+    return 1;
+}
+
+# Is the last phoneme pushed a consonant (and is there one)?
+#must_use
+fn _shabda_arabic_after_consonant(out): i64 {
+    var n = vec_len(out);
+    if (n == 0) { return 0; }
+    var c = svara_phoneme_class(vec_get(out, n - 1));
+    if (c == SVARA_CLASS_VOWEL || c == SVARA_CLASS_DIPHTHONG) { return 0; }
+    return 1;
+}
+
+# Is the letter a consonant for the unvocalized ي / و rule (not a vowel letter)?
+#must_use
+fn _shabda_arabic_is_consonant_letter(b): i64 {
+    if (_shabda_arabic_consonant_ph(b) != SHABDA_PH_NONE) { return 1; }
+    if (b == 0x0629) { return 1; }                           # ة ends a syllable as /a/ or /at/
     return 0;
 }
 
@@ -1390,87 +2846,112 @@ fn _shabda_arabic_rules_a(a, word): i64 {
     if (vec_len(chars) == 0) {
         return vec_new_a(a);
     }
+    var cls = _shabda_arabic_clusters_a(a, chars);
     var phonemes = vec_new_a(a);
-    var i = 0;
-    var n = vec_len(chars);
-    while (i < n) {
-        var ch = vec_get(chars, i);
-
-        # Consonants.
-        if (ch == 0x0628) { _shabda_vec_push_a(a, phonemes, SVARA_PH_PLOSIVE_B); }       # ب
-        elif (ch == 0x062A) { _shabda_vec_push_a(a, phonemes, SVARA_PH_PLOSIVE_T); }     # ت
-        elif (ch == 0x062B) { _shabda_vec_push_a(a, phonemes, SVARA_PH_FRIC_TH); }       # ث
-        elif (ch == 0x062C) { _shabda_vec_push_a(a, phonemes, SVARA_PH_AFFR_J); }        # ج
-        elif (ch == 0x062D) { _shabda_vec_push_a(a, phonemes, SVARA_PH_FRIC_H); }        # ح /ħ/
-        elif (ch == 0x062E) { _shabda_vec_push_a(a, phonemes, SVARA_PH_FRIC_H); }        # خ /x/
-        elif (ch == 0x062F) { _shabda_vec_push_a(a, phonemes, SVARA_PH_PLOSIVE_D); }     # د
-        elif (ch == 0x0630) { _shabda_vec_push_a(a, phonemes, SVARA_PH_FRIC_DH); }       # ذ
-        elif (ch == 0x0631) { _shabda_vec_push_a(a, phonemes, SVARA_PH_TAP_FLAP); }      # ر
-        elif (ch == 0x0632) { _shabda_vec_push_a(a, phonemes, SVARA_PH_FRIC_Z); }        # ز
-        elif (ch == 0x0633) { _shabda_vec_push_a(a, phonemes, SVARA_PH_FRIC_S); }        # س
-        elif (ch == 0x0634) { _shabda_vec_push_a(a, phonemes, SVARA_PH_FRIC_SH); }       # ش
-        elif (ch == 0x0635) { _shabda_vec_push_a(a, phonemes, SVARA_PH_FRIC_S); }        # ص emphatic /s/
-        elif (ch == 0x0636) { _shabda_vec_push_a(a, phonemes, SVARA_PH_PLOSIVE_D); }     # ض emphatic /d/
-        elif (ch == 0x0637) { _shabda_vec_push_a(a, phonemes, SVARA_PH_PLOSIVE_T); }     # ط emphatic /t/
-        elif (ch == 0x0638) { _shabda_vec_push_a(a, phonemes, SVARA_PH_FRIC_DH); }       # ظ emphatic /ð/
-        elif (ch == 0x0639) { _shabda_vec_push_a(a, phonemes, SVARA_PH_GLOTTAL_STOP); }  # ع /ʕ/ -> glottal
-        elif (ch == 0x063A) { _shabda_vec_push_a(a, phonemes, SVARA_PH_PLOSIVE_G); }     # غ /ɣ/
-        elif (ch == 0x0641) { _shabda_vec_push_a(a, phonemes, SVARA_PH_FRIC_F); }        # ف
-        elif (ch == 0x0642) { _shabda_vec_push_a(a, phonemes, SVARA_PH_PLOSIVE_K); }     # ق /q/
-        elif (ch == 0x0643) { _shabda_vec_push_a(a, phonemes, SVARA_PH_PLOSIVE_K); }     # ك
-        elif (ch == 0x0644) { _shabda_vec_push_a(a, phonemes, SVARA_PH_LATERAL_L); }     # ل
-        elif (ch == 0x0645) { _shabda_vec_push_a(a, phonemes, SVARA_PH_NASAL_M); }       # م
-        elif (ch == 0x0646) { _shabda_vec_push_a(a, phonemes, SVARA_PH_NASAL_N); }       # ن
-        elif (ch == 0x0647) { _shabda_vec_push_a(a, phonemes, SVARA_PH_FRIC_H); }        # ه
-        elif (ch == 0x0648) { _shabda_vec_push_a(a, phonemes, SVARA_PH_APPROX_W); }      # و
-        elif (ch == 0x064A) { _shabda_vec_push_a(a, phonemes, SVARA_PH_APPROX_J); }      # ي
-        # Hamza (glottal stop): ء أ إ ؤ ئ.
-        elif (ch == 0x0621) { _shabda_vec_push_a(a, phonemes, SVARA_PH_GLOTTAL_STOP); }
-        elif (ch == 0x0623) { _shabda_vec_push_a(a, phonemes, SVARA_PH_GLOTTAL_STOP); }
-        elif (ch == 0x0625) { _shabda_vec_push_a(a, phonemes, SVARA_PH_GLOTTAL_STOP); }
-        elif (ch == 0x0624) { _shabda_vec_push_a(a, phonemes, SVARA_PH_GLOTTAL_STOP); }
-        elif (ch == 0x0626) { _shabda_vec_push_a(a, phonemes, SVARA_PH_GLOTTAL_STOP); }
-        # Alef (long /aː/).
-        elif (ch == 0x0627) { _shabda_vec_push_a(a, phonemes, SVARA_PH_VOWEL_OPEN_A); }  # ا
-        elif (ch == 0x0622) {                                               # آ
+    var m = vec_len(cls);
+    var gem = 0;            # the article's ل assimilated: double the next consonant
+    var k = 0;
+    while (k < m) {
+        var cl = vec_get(cls, k);
+        var b = _shabda_arabic_base(cl);
+        var v = _shabda_arabic_vowel(cl);
+        var nb = _shabda_arabic_base(_shabda_arabic_at(cls, k + 1));
+        var adv = 1;
+        var c = _shabda_arabic_consonant_ph(b);
+        if (b == 0) {
+            adv = adv + _shabda_arabic_vowel_a(a, phonemes, cls, k, 0);   # marks with no letter
+        } elif (b < 0x80) {
+            if (_shabda_rules_is_ascii_alpha(b) == 1) { adv = _shabda_arabic_latin_a(a, phonemes, cls, k); }
+        } elif (b == 0x0644 && _shabda_arabic_article_lam(cls, k) == 1) {
+            if (_shabda_arabic_sun(nb) == 1) {
+                if (_shabda_arabic_shadda(_shabda_arabic_at(cls, k + 1)) == 0) { gem = 1; }
+            } else {
+                _shabda_vec_push_a(a, phonemes, SVARA_PH_LATERAL_L);
+            }
+        } elif (c != SHABDA_PH_NONE) {
+            _shabda_vec_push_a(a, phonemes, c);
+            if (_shabda_arabic_shadda(cl) == 1 || gem == 1) { _shabda_vec_push_a(a, phonemes, c); }
+            gem = 0;
+            if (v == 0 && _shabda_arabic_sukun(cl) == 0 && _shabda_arabic_dagger(cl) == 0) {
+                # An unvocalized hamza seat implies its vowel: إ /ʔi/, a word-initial أ /ʔa/.
+                if (b == 0x0625) { _shabda_vec_push_a(a, phonemes, SVARA_PH_VOWEL_NEAR_I); }
+                if (b == 0x0623 && k == 0) { _shabda_vec_push_a(a, phonemes, _shabda_arabic_a(b, nb)); }
+            }
+            adv = adv + _shabda_arabic_vowel_a(a, phonemes, cls, k, b);
+        } elif (b == 0x0648 || b == 0x064A) {                # و ي
+            var semi = SVARA_PH_APPROX_J;
+            var longv = SVARA_PH_VOWEL_LONG_I;
+            if (b == 0x0648) {
+                semi = SVARA_PH_APPROX_W;
+                longv = SVARA_PH_VOWEL_U;
+            }
+            var consonant = 1;
+            if (v == 0 && _shabda_arabic_shadda(cl) == 0 && _shabda_arabic_sukun(cl) == 0 && k > 0) {
+                # Unvocalized: between a consonant and a consonant (or the word end) it is
+                # the long vowel. A vocalized mater was read with the vowel before it.
+                var prev = _shabda_arabic_at(cls, k - 1);
+                if (_shabda_arabic_vowel(prev) == 0 && _shabda_arabic_sukun(prev) == 0) {
+                    if (_shabda_arabic_after_consonant(phonemes) == 1) {
+                        if (k + 1 >= m || _shabda_arabic_is_consonant_letter(nb) == 1) { consonant = 0; }
+                    }
+                }
+            }
+            if (consonant == 0) {
+                _shabda_vec_push_a(a, phonemes, longv);
+            } else {
+                _shabda_vec_push_a(a, phonemes, semi);
+                if (_shabda_arabic_shadda(cl) == 1 || gem == 1) { _shabda_vec_push_a(a, phonemes, semi); }
+                gem = 0;
+                adv = adv + _shabda_arabic_vowel_a(a, phonemes, cls, k, b);
+            }
+        } elif (b == 0x0627 || b == 0x0671) {                # ا ٱ
+            if (v != 0) {
+                adv = adv + _shabda_arabic_vowel_a(a, phonemes, cls, k, b);   # a vowelled or tanwin alif
+            } elif (k == 0) {
+                # Hamzat al-wasl: /a/ in the article, else /i/ (ابن /ibn/, اثنان /iθnaːn/).
+                if (nb == 0x0644) { _shabda_vec_push_a(a, phonemes, SVARA_PH_VOWEL_A); }
+                else { _shabda_vec_push_a(a, phonemes, SVARA_PH_VOWEL_NEAR_I); }
+            } elif (_shabda_arabic_article_lam(cls, k + 1) == 1 && k == 1) {
+                # و ف ب ك + ال: the alif is elided, and the proclitic's own vowel is
+                # unwritten when it is not marked.
+                if (_shabda_arabic_vowel(vec_get(cls, 0)) == 0) {
+                    if (_shabda_arabic_base(vec_get(cls, 0)) == 0x0628) {
+                        _shabda_vec_push_a(a, phonemes, SVARA_PH_VOWEL_NEAR_I);
+                    } else {
+                        _shabda_vec_push_a(a, phonemes, SVARA_PH_VOWEL_A);
+                    }
+                }
+            } elif (_shabda_arabic_vowel(_shabda_arabic_at(cls, k - 1)) == _SHABDA_AR_AN) {
+                adv = 1;                                    # the alif after tanwin al-fath
+            } elif (k == m - 1 && _shabda_arabic_base(_shabda_arabic_at(cls, k - 1)) == 0x0648) {
+                adv = 1;                                    # the silent alif of -ūā (قالوا)
+            } else {
+                var pb = _shabda_arabic_base(_shabda_arabic_at(cls, k - 1));
+                _shabda_vec_push_a(a, phonemes, _shabda_arabic_a(pb, nb));
+            }
+        } elif (b == 0x0622) {                               # آ /ʔaː/
             _shabda_vec_push_a(a, phonemes, SVARA_PH_GLOTTAL_STOP);
-            _shabda_vec_push_a(a, phonemes, SVARA_PH_VOWEL_OPEN_A);
-        }
-        # Taa marbuta.
-        elif (ch == 0x0629) { _shabda_vec_push_a(a, phonemes, SVARA_PH_VOWEL_OPEN_A); }  # ة
-        # Short vowel diacritics.
-        elif (ch == 0x064E) { _shabda_vec_push_a(a, phonemes, SVARA_PH_VOWEL_OPEN_A); }  # fatha /a/
-        elif (ch == 0x0650) { _shabda_vec_push_a(a, phonemes, SVARA_PH_VOWEL_NEAR_I); }  # kasra /i/
-        elif (ch == 0x064F) { _shabda_vec_push_a(a, phonemes, SVARA_PH_VOWEL_CUP_V); }   # damma /u/
-        # Tanween (nunation) -> V + n.
-        elif (ch == 0x064B) {
-            _shabda_vec_push_a(a, phonemes, SVARA_PH_VOWEL_OPEN_A); _shabda_vec_push_a(a, phonemes, SVARA_PH_NASAL_N);
-        }
-        elif (ch == 0x064D) {
-            _shabda_vec_push_a(a, phonemes, SVARA_PH_VOWEL_NEAR_I); _shabda_vec_push_a(a, phonemes, SVARA_PH_NASAL_N);
-        }
-        elif (ch == 0x064C) {
-            _shabda_vec_push_a(a, phonemes, SVARA_PH_VOWEL_CUP_V); _shabda_vec_push_a(a, phonemes, SVARA_PH_NASAL_N);
-        }
-        # Sukun (no vowel) — skip.
-        elif (ch == 0x0652) { i = i; }
-        # Shadda (gemination) — repeat the previous phoneme.
-        elif (ch == 0x0651) {
-            var pn = vec_len(phonemes);
-            if (pn > 0) {
-                _shabda_vec_push_a(a, phonemes, vec_get(phonemes, pn - 1));
+            _shabda_vec_push_a(a, phonemes, _shabda_arabic_a(b, nb));
+        } elif (b == 0x0649) {                               # ى /aː/
+            var pb2 = _shabda_arabic_base(_shabda_arabic_at(cls, k - 1));
+            _shabda_vec_push_a(a, phonemes, _shabda_arabic_a(pb2, 0));
+        } elif (b == 0x0629) {                               # ة
+            if (v != 0) {
+                _shabda_vec_push_a(a, phonemes, SVARA_PH_PLOSIVE_T);
+                adv = adv + _shabda_arabic_vowel_a(a, phonemes, cls, k, b);
+            } else {
+                # Pausal /a/, which the fatha or alif before it may already have given.
+                var pn = vec_len(phonemes);
+                var last = SHABDA_PH_NONE;
+                if (pn > 0) { last = vec_get(phonemes, pn - 1); }
+                if (last != SVARA_PH_VOWEL_A && last != SVARA_PH_VOWEL_OPEN_A) {
+                    var pb3 = _shabda_arabic_base(_shabda_arabic_at(cls, k - 1));
+                    _shabda_vec_push_a(a, phonemes, _shabda_arabic_a(pb3, 0));
+                }
             }
         }
-        # Alef maqsura.
-        elif (ch == 0x0649) { _shabda_vec_push_a(a, phonemes, SVARA_PH_VOWEL_OPEN_A); }  # ى
-        else {
-            # Latin fallback for romanized Arabic, else skip.
-            if (_shabda_rules_is_ascii_alpha(ch) == 1) {
-                _shabda_arabic_latin_a(a, phonemes, ch);
-            }
-        }
-
-        i = i + 1;
+        # Else (an unknown letter): nothing.
+        k = k + adv;
     }
 
     return phonemes;

@@ -98,7 +98,7 @@ var played = shabda_english_rules("played");
 assert_eq(_last(played), SVARA_PH_PLOSIVE_D, "played ends d");
 
 var unhappy = shabda_english_rules("unhappy");
-assert_eq(vec_get(unhappy, 0), SVARA_PH_VOWEL_CUP_V, "unhappy[0] = CupV");
+assert_eq(vec_get(unhappy, 0), SVARA_PH_VOWEL_SCHWA, "unhappy[0] = schwa (CMUdict AH0)");
 assert_eq(vec_get(unhappy, 1), SVARA_PH_NASAL_N, "unhappy[1] = n");
 
 # =============================================================================
@@ -108,20 +108,20 @@ test_group("spanish");
 var hola = shabda_spanish_rules("hola");
 assert_eq(vec_get(hola, 0), SVARA_PH_VOWEL_O, "hola[0] = O");
 assert_eq(vec_get(hola, 1), SVARA_PH_LATERAL_L, "hola[1] = L");
-assert_eq(vec_get(hola, 2), SVARA_PH_VOWEL_OPEN_A, "hola[2] = OpenA");
+assert_eq(vec_get(hola, 2), SVARA_PH_VOWEL_A, "hola[2] = /a/ (was OpenA, English ɑ)");
 
 var chico = shabda_spanish_rules("chico");
 assert_eq(vec_get(chico, 0), SVARA_PH_AFFR_CH, "chico[0] = ch");
 
 var llamar = shabda_spanish_rules("llamar");
-assert_eq(vec_get(llamar, 0), SVARA_PH_APPROX_J, "llamar[0] = j");
+assert_eq(vec_get(llamar, 0), SVARA_PH_FRIC_PALATAL_J, "llamar[0] = /ʝ/ (ll, yeísmo; was /j/)");
 
 var perro = shabda_spanish_rules("perro");
-assert_eq(_has(perro, SVARA_PH_APPROX_R), 1, "perro has R (rr)");
+assert_eq(_has(perro, SVARA_PH_TRILL_ALVEOLAR), 1, "perro has the trill (rr)");
 
 var que = shabda_spanish_rules("que");
 assert_eq(vec_get(que, 0), SVARA_PH_PLOSIVE_K, "que[0] = k");
-assert_eq(vec_get(que, 1), SVARA_PH_VOWEL_OPEN_E, "que[1] = OpenE");
+assert_eq(vec_get(que, 1), SVARA_PH_VOWEL_E, "que[1] = /e/ (was OpenE, English ɛ)");
 
 var guitarra = shabda_spanish_rules("guitarra");
 assert_eq(vec_get(guitarra, 0), SVARA_PH_PLOSIVE_G, "guitarra[0] = g");
@@ -130,7 +130,84 @@ var sp_empty = shabda_spanish_rules("");
 assert_eq(vec_len(sp_empty), 0, "spanish empty");
 
 var nino = shabda_spanish_rules("niño");
-assert_eq(_has(nino, SVARA_PH_NASAL_NG), 1, "niño has NG");
+assert_eq(_has(nino, SVARA_PH_NASAL_PALATAL), 1, "niño has /ɲ/ (was NG)");
+
+# 1 if `v` is exactly the first `n` of p0..p7.
+fn _esq(v, n, p0, p1, p2, p3, p4, p5, p6, p7): i64 {
+    if (vec_len(v) != n) { return 0; }
+    var want = vec_new();
+    vec_push(want, p0); vec_push(want, p1); vec_push(want, p2); vec_push(want, p3);
+    vec_push(want, p4); vec_push(want, p5); vec_push(want, p6); vec_push(want, p7);
+    var i = 0;
+    while (i < n) {
+        if (vec_get(v, i) != vec_get(want, i)) { return 0; }
+        i = i + 1;
+    }
+    return 1;
+}
+var _va = SVARA_PH_VOWEL_A;
+var _ve = SVARA_PH_VOWEL_E;
+var _vi = SVARA_PH_VOWEL_I;
+var _vo = SVARA_PH_VOWEL_O;
+var _vu = SVARA_PH_VOWEL_U;
+var _gj = SVARA_PH_APPROX_J;
+var _gw = SVARA_PH_APPROX_W;
+
+test_group("accuracy: Spanish /a e i o u/, not English stand-ins");
+# The Rust spelled a e i u with svara's English ɑ ɛ ɪ ʌ, ñ /ŋ/, ll and consonantal y /j/,
+# the jota /h/, and an unaccented i / u beside a vowel as a full vowel (ADR-0002).
+assert_eq(_esq(shabda_spanish_rules("casa"), 4, SVARA_PH_PLOSIVE_K, _va, SVARA_PH_FRIC_S, _va, 0, 0, 0, 0), 1,
+  "casa = k a s a");
+assert_eq(_esq(shabda_spanish_rules("tú"), 2, SVARA_PH_PLOSIVE_T, _vu, 0, 0, 0, 0, 0, 0), 1, "tú = t u");
+assert_eq(_esq(shabda_spanish_rules("sí"), 2, SVARA_PH_FRIC_S, _vi, 0, 0, 0, 0, 0, 0), 1, "sí = s i");
+assert_eq(_esq(shabda_spanish_rules("pequeño"), 6, SVARA_PH_PLOSIVE_P, _ve, SVARA_PH_PLOSIVE_K, _ve,
+    SVARA_PH_NASAL_PALATAL, _vo, 0, 0), 1, "pequeño = p e k e ɲ o");
+fn _es_clean(word): i64 {
+    var v = shabda_spanish_rules(word);
+    if (_has(v, SVARA_PH_VOWEL_OPEN_A) == 1 || _has(v, SVARA_PH_VOWEL_OPEN_E) == 1) { return 0; }
+    if (_has(v, SVARA_PH_VOWEL_NEAR_I) == 1 || _has(v, SVARA_PH_VOWEL_CUP_V) == 1) { return 0; }
+    if (_has(v, SVARA_PH_NASAL_NG) == 1 || _has(v, SVARA_PH_FRIC_H) == 1 || _has(v, SVARA_PH_APPROX_R) == 1) {
+        return 0;
+    }
+    return 1;
+}
+assert_eq(_es_clean("murciélago"), 1, "murciélago: no stand-in");
+assert_eq(_es_clean("universidad"), 1, "universidad: no stand-in");
+assert_eq(_es_clean("cumpleaños"), 1, "cumpleaños: no stand-in");
+assert_eq(_es_clean("jirafa"), 1, "jirafa: no stand-in");
+
+test_group("accuracy: Spanish glides /j w/ and hiatus");
+assert_eq(_esq(shabda_spanish_rules("quién"), 4, SVARA_PH_PLOSIVE_K, _gj, _ve, SVARA_PH_NASAL_N, 0, 0, 0, 0), 1,
+  "quién = k j e n");
+assert_eq(_esq(shabda_spanish_rules("fuego"), 5, SVARA_PH_FRIC_F, _gw, _ve, SVARA_PH_PLOSIVE_G, _vo, 0, 0, 0), 1,
+  "fuego = f w e g o");
+assert_eq(_esq(shabda_spanish_rules("aire"), 4, _va, _gj, SVARA_PH_TAP_FLAP, _ve, 0, 0, 0, 0), 1, "aire = a j ɾ e");
+assert_eq(_esq(shabda_spanish_rules("auto"), 4, _va, _gw, SVARA_PH_PLOSIVE_T, _vo, 0, 0, 0, 0), 1, "auto = a w t o");
+# iu / ui: the second vowel is the nucleus
+assert_eq(_esq(shabda_spanish_rules("ciudad"), 6, SVARA_PH_FRIC_TH, _gj, _vu, SVARA_PH_PLOSIVE_D, _va,
+    SVARA_PH_PLOSIVE_D, 0, 0), 1, "ciudad = θ j u d a d");
+assert_eq(_esq(shabda_spanish_rules("cuidado"), 7, SVARA_PH_PLOSIVE_K, _gw, _vi, SVARA_PH_PLOSIVE_D, _va,
+    SVARA_PH_PLOSIVE_D, _vo, 0), 1, "cuidado = k w i d a d o");
+# a written accent marks a full vowel: hiatus
+assert_eq(_esq(shabda_spanish_rules("día"), 3, SVARA_PH_PLOSIVE_D, _vi, _va, 0, 0, 0, 0, 0), 1, "día = d i a");
+assert_eq(_esq(shabda_spanish_rules("baúl"), 4, SVARA_PH_PLOSIVE_B, _va, _vu, SVARA_PH_LATERAL_L, 0, 0, 0, 0), 1,
+  "baúl = b a u l");
+
+test_group("accuracy: Spanish gu gü, y ll ñ, the jota, x");
+assert_eq(_esq(shabda_spanish_rules("guía"), 3, SVARA_PH_PLOSIVE_G, _vi, _va, 0, 0, 0, 0, 0), 1, "guía: silent u");
+assert_eq(_esq(shabda_spanish_rules("agua"), 4, _va, SVARA_PH_PLOSIVE_G, _gw, _va, 0, 0, 0, 0), 1, "agua = a g w a");
+assert_eq(_esq(shabda_spanish_rules("pingüino"), 8, SVARA_PH_PLOSIVE_P, _vi, SVARA_PH_NASAL_N, SVARA_PH_PLOSIVE_G,
+    _gw, _vi, SVARA_PH_NASAL_N, _vo), 1, "pingüino: gü = g w");
+assert_eq(_esq(shabda_spanish_rules("yo"), 2, SVARA_PH_FRIC_PALATAL_J, _vo, 0, 0, 0, 0, 0, 0), 1, "yo = ʝ o");
+assert_eq(_esq(shabda_spanish_rules("calle"), 4, SVARA_PH_PLOSIVE_K, _va, SVARA_PH_FRIC_PALATAL_J, _ve,
+    0, 0, 0, 0), 1, "calle = k a ʝ e (yeísmo)");
+assert_eq(_esq(shabda_spanish_rules("hoy"), 2, _vo, _gj, 0, 0, 0, 0, 0, 0), 1, "hoy = o j");
+assert_eq(_esq(shabda_spanish_rules("muy"), 3, SVARA_PH_NASAL_M, _vu, _gj, 0, 0, 0, 0, 0), 1, "muy = m u j");
+assert_eq(_esq(shabda_spanish_rules("y"), 1, _vi, 0, 0, 0, 0, 0, 0, 0), 1, "y = i");
+assert_eq(vec_get(shabda_spanish_rules("gélido"), 0), SVARA_PH_FRIC_UVULAR_CH, "gé: the jota (accented e)");
+assert_eq(vec_get(shabda_spanish_rules("decía"), 2), SVARA_PH_FRIC_TH, "cí: /θ/ (accented i)");
+assert_eq(_esq(shabda_spanish_rules("xilófono"), 8, SVARA_PH_FRIC_S, _vi, SVARA_PH_LATERAL_L, _vo, SVARA_PH_FRIC_F,
+    _vo, SVARA_PH_NASAL_N, _vo), 1, "x- = /s/ word-initially");
 
 # =============================================================================
 # German
@@ -144,23 +221,23 @@ var schule = shabda_german_rules("schule");
 assert_eq(vec_get(schule, 0), SVARA_PH_FRIC_SH, "schule[0] = sh");
 
 var ich = shabda_german_rules("ich");
-assert_eq(_has(ich, SVARA_PH_FRIC_SH), 1, "ich has sh (ich-Laut)");
+assert_eq(_has(ich, SVARA_PH_FRIC_PALATAL_C), 1, "ich has the ich-Laut /ç/ (was sh)");
 
 var ein = shabda_german_rules("ein");
 assert_eq(_has(ein, SVARA_PH_DIPH_AI), 1, "ein has AI");
 
 var die = shabda_german_rules("die");
-assert_eq(_has(die, SVARA_PH_VOWEL_E), 1, "die has E (long i)");
+assert_eq(_has(die, SVARA_PH_VOWEL_LONG_I), 1, "die has /iː/ (ie)");
 
 var hund = shabda_german_rules("hund");
 assert_eq(_last(hund), SVARA_PH_PLOSIVE_T, "hund ends t (devoiced d)");
 
 var uber = shabda_german_rules("über");
-assert_eq(vec_get(uber, 0), SVARA_PH_VOWEL_E, "über[0] = E (ü)");
+assert_eq(vec_get(uber, 0), SVARA_PH_VOWEL_Y, "über[0] = /y/ (ü)");
 
 var zeit = shabda_german_rules("zeit");
-assert_eq(vec_get(zeit, 0), SVARA_PH_PLOSIVE_T, "zeit[0] = t (ts)");
-assert_eq(vec_get(zeit, 1), SVARA_PH_FRIC_S, "zeit[1] = s (ts)");
+assert_eq(vec_get(zeit, 0), SVARA_PH_AFFR_TS, "zeit[0] = /t͡s/ (was t, s)");
+assert_eq(vec_get(zeit, 1), SVARA_PH_DIPH_AI, "zeit[1] = ei");
 
 var de_empty = shabda_german_rules("");
 assert_eq(vec_len(de_empty), 0, "german empty");
@@ -221,7 +298,7 @@ assert_eq(vec_get(bism, 0), SVARA_PH_PLOSIVE_B, "bism[0] = b");
 
 var kitab = shabda_arabic_rules("كتاب");
 assert_eq(vec_get(kitab, 0), SVARA_PH_PLOSIVE_K, "kitab[0] = k");
-assert_eq(_has(kitab, SVARA_PH_VOWEL_OPEN_A), 1, "kitab has OpenA (alef)");
+assert_eq(_has(kitab, SVARA_PH_VOWEL_A), 1, "kitab has /a/ (alef)");
 
 var shams = shabda_arabic_rules("شمس");
 assert_eq(vec_get(shams, 0), SVARA_PH_FRIC_SH, "shams[0] = sh");
@@ -234,31 +311,204 @@ var ar_empty = shabda_arabic_rules("");
 assert_eq(vec_len(ar_empty), 0, "arabic empty");
 
 # =============================================================================
+# Hindi, Sanskrit and Arabic: the accurate phoneme where the Rust used a stand-in
+# (ADR-0002). Whole sequences, written as svara's IPA, one symbol per phoneme.
+# =============================================================================
+fn _hsa_ph(t): i64 {
+    if (streq(t, "ə") == 1) { return SVARA_PH_VOWEL_SCHWA; }
+    if (streq(t, "a") == 1) { return SVARA_PH_VOWEL_A; }
+    if (streq(t, "ɑ") == 1) { return SVARA_PH_VOWEL_OPEN_A; }
+    if (streq(t, "ɪ") == 1) { return SVARA_PH_VOWEL_NEAR_I; }
+    if (streq(t, "iː") == 1) { return SVARA_PH_VOWEL_LONG_I; }
+    if (streq(t, "ʊ") == 1) { return SVARA_PH_VOWEL_NEAR_U; }
+    if (streq(t, "u") == 1) { return SVARA_PH_VOWEL_U; }
+    if (streq(t, "e") == 1) { return SVARA_PH_VOWEL_E; }
+    if (streq(t, "ɛ") == 1) { return SVARA_PH_VOWEL_OPEN_E; }
+    if (streq(t, "o") == 1) { return SVARA_PH_VOWEL_O; }
+    if (streq(t, "ɔ") == 1) { return SVARA_PH_VOWEL_OPEN_O; }
+    if (streq(t, "aɪ") == 1) { return SVARA_PH_DIPH_AI; }
+    if (streq(t, "aʊ") == 1) { return SVARA_PH_DIPH_AU; }
+    if (streq(t, "p") == 1) { return SVARA_PH_PLOSIVE_P; }
+    if (streq(t, "b") == 1) { return SVARA_PH_PLOSIVE_B; }
+    if (streq(t, "t") == 1) { return SVARA_PH_PLOSIVE_T; }
+    if (streq(t, "d") == 1) { return SVARA_PH_PLOSIVE_D; }
+    if (streq(t, "ʈ") == 1) { return SVARA_PH_PLOSIVE_RETRO_T; }
+    if (streq(t, "ɖ") == 1) { return SVARA_PH_PLOSIVE_RETRO_D; }
+    if (streq(t, "k") == 1) { return SVARA_PH_PLOSIVE_K; }
+    if (streq(t, "g") == 1) { return SVARA_PH_PLOSIVE_G; }
+    if (streq(t, "q") == 1) { return SVARA_PH_PLOSIVE_UVULAR_Q; }
+    if (streq(t, "ʔ") == 1) { return SVARA_PH_GLOTTAL_STOP; }
+    if (streq(t, "f") == 1) { return SVARA_PH_FRIC_F; }
+    if (streq(t, "v") == 1) { return SVARA_PH_FRIC_V; }
+    if (streq(t, "s") == 1) { return SVARA_PH_FRIC_S; }
+    if (streq(t, "z") == 1) { return SVARA_PH_FRIC_Z; }
+    if (streq(t, "ʃ") == 1) { return SVARA_PH_FRIC_SH; }
+    if (streq(t, "ʂ") == 1) { return SVARA_PH_FRIC_RETRO_S; }
+    if (streq(t, "h") == 1) { return SVARA_PH_FRIC_H; }
+    if (streq(t, "ɦ") == 1) { return SVARA_PH_FRIC_GLOTTAL_H; }
+    if (streq(t, "ħ") == 1) { return SVARA_PH_FRIC_PHARYNGEAL_H; }
+    if (streq(t, "ʕ") == 1) { return SVARA_PH_FRIC_PHARYNGEAL_A; }
+    if (streq(t, "χ") == 1) { return SVARA_PH_FRIC_UVULAR_CH; }
+    if (streq(t, "ʁ") == 1) { return SVARA_PH_FRIC_UVULAR_R; }
+    if (streq(t, "m") == 1) { return SVARA_PH_NASAL_M; }
+    if (streq(t, "n") == 1) { return SVARA_PH_NASAL_N; }
+    if (streq(t, "ŋ") == 1) { return SVARA_PH_NASAL_NG; }
+    if (streq(t, "ɲ") == 1) { return SVARA_PH_NASAL_PALATAL; }
+    if (streq(t, "ɳ") == 1) { return SVARA_PH_NASAL_RETRO; }
+    if (streq(t, "tʃ") == 1) { return SVARA_PH_AFFR_CH; }
+    if (streq(t, "dʒ") == 1) { return SVARA_PH_AFFR_J; }
+    if (streq(t, "j") == 1) { return SVARA_PH_APPROX_J; }
+    if (streq(t, "w") == 1) { return SVARA_PH_APPROX_W; }
+    if (streq(t, "l") == 1) { return SVARA_PH_LATERAL_L; }
+    if (streq(t, "ɾ") == 1) { return SVARA_PH_TAP_FLAP; }
+    if (streq(t, "r") == 1) { return SVARA_PH_TRILL_ALVEOLAR; }
+    if (streq(t, "ɽ") == 1) { return SVARA_PH_FLAP_RETRO; }
+    return 0 - 1;
+}
+# Is `v` exactly the space-separated phonemes of `spec`?
+fn _hsa_is(v, spec): i64 {
+    var tok = alloc(16);
+    var n = strlen(spec);
+    var i = 0;
+    var k = 0;
+    while (i <= n) {
+        var j = i;
+        while (j < n && load8(spec + j) != 32) { j = j + 1; }
+        memcpy(tok, spec + i, j - i);
+        store8(tok + j - i, 0);
+        if (k >= vec_len(v)) { return 0; }
+        if (vec_get(v, k) != _hsa_ph(tok)) { return 0; }
+        k = k + 1;
+        i = j + 1;
+    }
+    if (k != vec_len(v)) { return 0; }
+    return 1;
+}
+fn _hi(word, spec): i64 { return _hsa_is(shabda_hindi_rules(word), spec); }
+fn _sa(word, spec): i64 { return _hsa_is(shabda_sanskrit_rules(word), spec); }
+fn _ar(word, spec): i64 { return _hsa_is(shabda_arabic_rules(word), spec); }
+
+test_group("hindi: retroflexes, ɦ, ʊ, e, ɛ, ɔ");
+assert_eq(_hi("ठंडा", "ʈ ə ɳ ɖ ɑ"), 1, "ठंडा: retroflexes; an aspirate is its plain stop");
+assert_eq(_hi("पढ़ना", "p ə ɽ n ɑ"), 1, "पढ़ना (ढ + nukta): the flap");
+var hsa_pdh = "\xE0\xA4\xAA\xE0\xA5\x9D\xE0\xA4\xA8\xE0\xA4\xBE";   # प ढ़ (U+095D) न ा
+assert_eq(_hi(hsa_pdh, "p ə ɽ n ɑ"), 1, "पढ़ना (precomposed ढ़)");
+assert_eq(_hi("भाषा", "b ɑ ʂ ɑ"), 1, "भाषा: ष /ʂ/");
+assert_eq(_hi("बहुत", "b ə ɦ ʊ t"), 1, "बहुत: ह /ɦ/, उ /ʊ/");
+assert_eq(_hi("एक", "e k"), 1, "एक: ए /eː/");
+assert_eq(_hi("पैसा", "p ɛ s ɑ"), 1, "पैसा: ऐ /ɛː/");
+assert_eq(_hi("और", "ɔ ɾ"), 1, "और: औ /ɔː/");
+assert_eq(_hi("डॉक्टर", "ɖ ɔ k ʈ ə ɾ"), 1, "डॉक्टर: the ॉ matra");
+assert_eq(_hi("कृष्ण", "k ɾ ɪ ʂ ɳ"), 1, "कृष्ण: ृ /rɪ/, ण /ɳ/");
+assert_eq(_hi("ज्ञान", "g j ɑ n"), 1, "ज्ञान: Hindi ज्ञ is /ɡj/");
+assert_eq(_hi("ज़मीन", "z ə m iː n"), 1, "ज़मीन: ज़ /z/");
+assert_eq(_hi("क़लम", "q ə l ə m"), 1, "क़लम: क़ /q/");
+assert_eq(_hi("ॐ", "o m"), 1, "ॐ");
+assert_eq(_hi("एक", "ɛ k"), 0, "(the helper rejects a wrong phoneme)");
+assert_eq(_hi("एक", "e"), 0, "(and a short spec)");
+
+test_group("hindi: anusvara takes the next stop's place, and keeps the vowel");
+assert_eq(_hi("लंबा", "l ə m b ɑ"), 1, "लंबा: m before a labial (the Rust: l n b ɑ)");
+assert_eq(_hi("गंगा", "g ə ŋ g ɑ"), 1, "गंगा: ŋ before a velar");
+assert_eq(_hi("पंजाब", "p ə ɲ dʒ ɑ b"), 1, "पंजाब: ɲ before a palatal");
+assert_eq(_hi("ठंडक", "ʈ ə ɳ ɖ ə k"), 1, "ठंडक: ɳ before a retroflex");
+assert_eq(_hi("हिंदी", "ɦ ɪ n d iː"), 1, "हिंदी: n before a dental");
+# svara has no nasal vowel: it is the vowel + n, and svara nasalizes a vowel before a nasal.
+assert_eq(_hi("मैं", "m ɛ n"), 1, "मैं: the nasal vowel is ɛː + n");
+assert_eq(_hi("हूँ", "ɦ u n"), 1, "हूँ: chandrabindu as anusvara");
+
+test_group("hindi: schwa deletion");
+assert_eq(_hi("आदमी", "ɑ d m iː"), 1, "आदमी: VC_CV");
+assert_eq(_hi("मछली", "m ə tʃ l iː"), 1, "मछली: VC_CV");
+assert_eq(_hi("समझना", "s ə m ə dʒ n ɑ"), 1, "समझना: right to left, the second schwa stays");
+assert_eq(_hi("कलम", "k ə l ə m"), 1, "कलम: not before a word-final consonant");
+assert_eq(_hi("न", "n ə"), 1, "न: a lone syllable keeps its schwa");
+assert_eq(_hi("कहना", "k ɛ ɦ n ɑ"), 1, "कहना: ə is [ɛ] before a syllable-closing ɦ");
+assert_eq(_hi("शहर", "ʃ ɛ ɦ ɛ ɾ"), 1, "शहर: əɦə is [ɛɦɛ]");
+assert_eq(_hi("यह", "j ɛ ɦ"), 1, "यह");
+assert_eq(_hi("कहा", "k ə ɦ ɑ"), 1, "कहा: ə stays before ɦ + vowel");
+assert_eq(_hi("aadmi", "ɑ d m ɪ"), 1, "romanized aadmi: aa is /aː/");
+assert_eq(_hi("bahut", "b ə ɦ ʊ t"), 1, "romanized bahut");
+assert_eq(_hi("khel", "k e l"), 1, "romanized kh: the plain stop, no h");
+
+test_group("sanskrit: vowels, visarga, ह, anusvara");
+assert_eq(_sa("देवः", "d e v ə h"), 1, "देवः: ए /eː/, visarga /h/");
+assert_eq(_sa("अहम्", "ə ɦ ə m"), 1, "अहम्: ह /ɦ/");
+assert_eq(_sa("गुरुः", "g ʊ ɾ ʊ h"), 1, "गुरुः: short u");
+assert_eq(_sa("गौरी", "g aʊ ɾ iː"), 1, "गौरी: औ the diphthong");
+assert_eq(_sa("ज्ञानम्", "dʒ ɲ ɑ n ə m"), 1, "ज्ञानम्: Sanskrit ज्ञ keeps ɲ");
+assert_eq(_sa("संगीतम्", "s ə ŋ g iː t ə m"), 1, "संगीतम्: ŋ before g; the ɐ stays");
+assert_eq(_sa("संसारः", "s ə m s ɑ ɾ ə h"), 1, "संसारः: m before a sibilant");
+assert_eq(_sa("कण्ठः", "k ə ɳ ʈ ə h"), 1, "कण्ठः");
+assert_eq(_sa("राम", "ɾ ɑ m ə"), 1, "राम: Sanskrit keeps the final ɐ");
+assert_eq(_sa("ॐ", "o m"), 1, "ॐ");
+assert_eq(_sa("kṛṣṇa", "k ɾ ɪ ʂ ɳ ə"), 1, "IAST kṛṣṇa (the Rust dropped ṛ ṣ ṇ)");
+assert_eq(_sa("dharmaḥ", "d ə ɾ m ə h"), 1, "IAST dharmaḥ: dh the plain stop, ḥ the visarga");
+assert_eq(_sa("saṃgītam", "s ə ŋ g iː t ə m"), 1, "IAST ṃ takes the next stop's place, as ं");
+
+test_group("arabic: vowels and matres");
+assert_eq(_ar("كَتَبَ", "k a t a b a"), 1, "كَتَبَ: fatha is /a/ (was OpenA)");
+assert_eq(_ar("كِتَابٌ", "k ɪ t a b ʊ n"), 1, "كِتَابٌ: fatha + alif is one /aː/");
+assert_eq(_ar("كَبِيرٌ", "k a b iː r ʊ n"), 1, "كَبِيرٌ: kasra + ي is /iː/, ر the trill");
+assert_eq(_ar("نُورٌ", "n u r ʊ n"), 1, "نُورٌ: damma + و is /uː/");
+assert_eq(_ar("بَيْتٌ", "b a j t ʊ n"), 1, "بَيْتٌ: fatha + ي is a j");
+assert_eq(_ar("كبير", "k b iː r"), 1, "unvocalized كبير: ي between consonants is /iː/");
+assert_eq(_ar("في", "f iː"), 1, "unvocalized في: a final ي is /iː/");
+assert_eq(_ar("شُكْرًا", "ʃ ʊ k r a n"), 1, "شُكْرًا: the alif after tanwin al-fath is silent");
+assert_eq(_ar("مَدْرَسَة", "m a d r a s a"), 1, "مَدْرَسَة: pausal taa marbuta, one /a/");
+assert_eq(_ar("حَيَاةٌ", "ħ a j a t ʊ n"), 1, "حَيَاةٌ: ح /ħ/; taa marbuta + tanwin");
+assert_eq(_ar("إنسان", "ʔ ɪ n s a n"), 1, "إنسان: إ is ʔi");
+assert_eq(_ar("اسْمٌ", "ɪ s m ʊ n"), 1, "اسْمٌ: a word-initial bare alif is the wasl i");
+
+test_group("arabic: consonants, shadda, the article");
+assert_eq(_ar("عَيْنٌ", "ʕ a j n ʊ n"), 1, "عَيْنٌ: ع /ʕ/");
+assert_eq(_ar("خُبْزٌ", "χ ʊ b z ʊ n"), 1, "خُبْزٌ: خ the uvular fricative");
+assert_eq(_ar("غَرْب", "ʁ ɑ r b"), 1, "غَرْب: غ the voiced one");
+# The emphatics and uvulars back the /a/ beside them to [ɑ]: svara has no
+# pharyngealized consonant, and the vowel carries the contrast.
+assert_eq(_ar("قَلَمٌ", "q ɑ l a m ʊ n"), 1, "قَلَمٌ: ق /q/, and q ɑ");
+assert_eq(_ar("طَالِبٌ", "t ɑ l ɪ b ʊ n"), 1, "طَالِبٌ: tˤ ɑː");
+assert_eq(_ar("حُبٌّ", "ħ ʊ b b ʊ n"), 1, "حُبٌّ: shadda doubles the consonant");
+assert_eq(_ar("\xD8\xA8\xD9\x91\xD9\x8E", "b b a"), 1, "بَّ: shadda, then fatha");
+assert_eq(_ar("\xD8\xA8\xD9\x8E\xD9\x91", "b b a"), 1, "بَّ: fatha, then shadda (the Rust doubled the a)");
+assert_eq(_ar("الشَّمْسُ", "a ʃ ʃ a m s ʊ"), 1, "الشَّمْسُ: the article's l takes the sun letter");
+assert_eq(_ar("الشمس", "a ʃ ʃ m s"), 1, "الشمس: unvocalized, the sun letter doubled");
+assert_eq(_ar("القمر", "a l q m r"), 1, "القمر: a moon letter keeps the l");
+assert_eq(_ar("والد", "w a l d"), 1, "unvocalized والد is not wa- + al- + d");
+assert_eq(_ar("وَالشَّمْسُ", "w a ʃ ʃ a m s ʊ"), 1, "wa + the article: the alif elided");
+assert_eq(_ar("shukran", "ʃ ʊ k r a n"), 1, "romanized shukran: sh, the trill");
+assert_eq(_ar("khalid", "χ a l ɪ d"), 1, "romanized kh is خ");
+
+# =============================================================================
 # Adversarial parity tests (full sequences / discriminating edge cases the
 # baseline tests do not lock down). Verified by hand against rust-old/src/rules.rs.
 # =============================================================================
 test_group("adversarial: english full sequences");
-# nation -> N, VowelAsh, Sh, Schwa, N  (tion 4-letter pattern)
+# nation -> N, EI, Sh, Schwa, N: CMUdict N EY1 SH AH0 N (3.1.3; the Rust gave /æ/)
 var nation2 = shabda_english_rules("nation");
 assert_eq(vec_len(nation2), 5, "nation len 5");
 assert_eq(vec_get(nation2, 0), SVARA_PH_NASAL_N, "nation[0]=N");
-assert_eq(vec_get(nation2, 1), SVARA_PH_VOWEL_ASH, "nation[1]=Ash");
+assert_eq(vec_get(nation2, 1), SVARA_PH_DIPH_EI, "nation[1]=EI");
 assert_eq(vec_get(nation2, 2), SVARA_PH_FRIC_SH, "nation[2]=Sh");
 assert_eq(vec_get(nation2, 3), SVARA_PH_VOWEL_SCHWA, "nation[3]=Schwa");
 assert_eq(vec_get(nation2, 4), SVARA_PH_NASAL_N, "nation[4]=N");
 
-# walked -> W, Ash, L, K, T  (-ed after voiceless /k/ = /t/)
+# walked -> W, AO, K, T: CMUdict W AO1 K T, the l silent in "alk" (3.1.3; the Rust gave
+# W Ash L K T); -ed after voiceless /k/ is /t/
 var walked2 = shabda_english_rules("walked");
-assert_eq(vec_len(walked2), 5, "walked len 5");
+assert_eq(vec_len(walked2), 4, "walked len 4");
 assert_eq(vec_get(walked2, 0), SVARA_PH_APPROX_W, "walked[0]=W");
-assert_eq(vec_get(walked2, 3), SVARA_PH_PLOSIVE_K, "walked[3]=K");
-assert_eq(vec_get(walked2, 4), SVARA_PH_PLOSIVE_T, "walked[4]=T");
+assert_eq(vec_get(walked2, 1), SVARA_PH_VOWEL_OPEN_O, "walked[1]=AO");
+assert_eq(vec_get(walked2, 2), SVARA_PH_PLOSIVE_K, "walked[2]=K");
+assert_eq(vec_get(walked2, 3), SVARA_PH_PLOSIVE_T, "walked[3]=T");
 
-# magic-e where consonant is not in the single_consonant table: axe -> [EI]
-# (magic_e_vowel('a')=DiphthongEI, single_consonant('x') = empty)
+# axe -> Ash, K, S: CMUdict AE1 K S; x closes the syllable, so it is no magic-e (3.1.3;
+# the Rust dropped the x and gave a lone EI)
 var axe = shabda_english_rules("axe");
-assert_eq(vec_len(axe), 1, "axe len 1");
-assert_eq(vec_get(axe, 0), SVARA_PH_DIPH_EI, "axe[0]=EI");
+assert_eq(vec_len(axe), 3, "axe len 3");
+assert_eq(vec_get(axe, 0), SVARA_PH_VOWEL_ASH, "axe[0]=Ash");
+assert_eq(vec_get(axe, 1), SVARA_PH_PLOSIVE_K, "axe[1]=K");
+assert_eq(vec_get(axe, 2), SVARA_PH_FRIC_S, "axe[2]=S");
 
 # -ed NOT stripped from short 3-letter word "bed" (len<4): b,VowelOpenE,d
 var bed = shabda_english_rules("bed");
@@ -266,33 +516,31 @@ assert_eq(vec_len(bed), 3, "bed len 3 (ed not stripped)");
 assert_eq(vec_get(bed, 0), SVARA_PH_PLOSIVE_B, "bed[0]=B");
 assert_eq(vec_get(bed, 2), SVARA_PH_PLOSIVE_D, "bed[2]=D (no id suffix)");
 
-# ough 4-letter pattern: through -> Th,R,DiphOU
+# through -> Th, R, U: CMUdict TH R UW1 (3.1.3; the Rust gave /oʊ/ for every "ough")
 var through = shabda_english_rules("through");
-assert_eq(_has(through, SVARA_PH_DIPH_OU), 1, "through has OU (ough)");
+assert_eq(vec_len(through), 3, "through len 3");
 assert_eq(vec_get(through, 0), SVARA_PH_FRIC_TH, "through[0]=Th (thr)");
+assert_eq(vec_get(through, 2), SVARA_PH_VOWEL_U, "through[2]=U");
 
 test_group("adversarial: german double consonant + z");
-# essen: e,ss,e,n -> OpenE, S(single), OpenE, N  (ss collapses to one /s/)
+# essen: e,ss,e,n -> OpenE, S(single), Schwa, N  (ss collapses to one /s/, -en is /ən/)
 var essen = shabda_german_rules("essen");
 assert_eq(vec_len(essen), 4, "essen len 4 (ss->one s)");
 assert_eq(vec_get(essen, 1), SVARA_PH_FRIC_S, "essen[1]=S");
-# zz falls through z no-op arm to single 'z' twice -> t,s,t,s
+assert_eq(vec_get(essen, 2), SVARA_PH_VOWEL_SCHWA, "essen[2]=Schwa (was OpenE)");
+# zz is one /t͡s/ (Pizza, Skizze); the Rust spelled each z t,s
 var zz = shabda_german_rules("zz");
-assert_eq(vec_len(zz), 4, "zz len 4 (t,s,t,s)");
-assert_eq(vec_get(zz, 0), SVARA_PH_PLOSIVE_T, "zz[0]=T");
-assert_eq(vec_get(zz, 1), SVARA_PH_FRIC_S, "zz[1]=S");
-assert_eq(vec_get(zz, 2), SVARA_PH_PLOSIVE_T, "zz[2]=T");
-assert_eq(vec_get(zz, 3), SVARA_PH_FRIC_S, "zz[3]=S");
+assert_eq(vec_len(zz), 1, "zz len 1 (was t,s,t,s)");
+assert_eq(vec_get(zz, 0), SVARA_PH_AFFR_TS, "zz[0]=/t͡s/");
 
 test_group("adversarial: hindi vs sanskrit divergence");
-# Hindi ऐ -> single OpenA; Sanskrit ऐ -> OpenA + NearI (two phonemes)
+# Hindi ऐ -> the monophthong /ɛː/; Sanskrit ऐ -> the diphthong /ɐi/ (one phoneme each)
 var hi_ai = shabda_hindi_rules("ऐ");
 assert_eq(vec_len(hi_ai), 1, "hindi ai len 1");
-assert_eq(vec_get(hi_ai, 0), SVARA_PH_VOWEL_OPEN_A, "hindi ai = OpenA");
+assert_eq(vec_get(hi_ai, 0), SVARA_PH_VOWEL_OPEN_E, "hindi ai = /ɛː/ (was OpenA)");
 var sa_ai = shabda_sanskrit_rules("ऐ");
-assert_eq(vec_len(sa_ai), 2, "sanskrit ai len 2");
-assert_eq(vec_get(sa_ai, 0), SVARA_PH_VOWEL_OPEN_A, "sanskrit ai[0]=OpenA");
-assert_eq(vec_get(sa_ai, 1), SVARA_PH_VOWEL_NEAR_I, "sanskrit ai[1]=NearI");
+assert_eq(vec_len(sa_ai), 1, "sanskrit ai len 1 (was OpenA + NearI)");
+assert_eq(vec_get(sa_ai, 0), SVARA_PH_DIPH_AI, "sanskrit ai = the diphthong");
 # Hindi कर -> schwa deletion: K, schwa, R (len 3); Sanskrit len 4 (already tested)
 var hi_kara = shabda_hindi_rules("कर");
 assert_eq(vec_len(hi_kara), 3, "hindi kara len 3 (final schwa deleted)");
@@ -311,19 +559,19 @@ var ar_shad = shabda_arabic_rules("بّ");
 assert_eq(vec_len(ar_shad), 2, "shadda len 2");
 assert_eq(vec_get(ar_shad, 0), SVARA_PH_PLOSIVE_B, "shadda[0]=B");
 assert_eq(vec_get(ar_shad, 1), SVARA_PH_PLOSIVE_B, "shadda[1]=B (duplicated)");
-# tanween fathatan -> OpenA + N
+# tanween fathatan -> /a/ + N
 var ar_tan = shabda_arabic_rules("بً");
 assert_eq(vec_len(ar_tan), 3, "tanween len 3");
-assert_eq(vec_get(ar_tan, 1), SVARA_PH_VOWEL_OPEN_A, "tanween[1]=OpenA");
+assert_eq(vec_get(ar_tan, 1), SVARA_PH_VOWEL_A, "tanween[1]=/a/ (was OpenA)");
 assert_eq(vec_get(ar_tan, 2), SVARA_PH_NASAL_N, "tanween[2]=N");
-# madda آ -> GlottalStop + OpenA
+# madda آ -> GlottalStop + /a/
 var ar_madda = shabda_arabic_rules("آ");
 assert_eq(vec_len(ar_madda), 2, "madda len 2");
 assert_eq(vec_get(ar_madda, 0), SVARA_PH_GLOTTAL_STOP, "madda[0]=glottal");
-assert_eq(vec_get(ar_madda, 1), SVARA_PH_VOWEL_OPEN_A, "madda[1]=OpenA");
-# ain ع -> glottal stop
+assert_eq(vec_get(ar_madda, 1), SVARA_PH_VOWEL_A, "madda[1]=/a/ (was OpenA)");
+# ain ع -> the pharyngeal /ʕ/ (the Rust gave the glottal stop)
 var ar_ain = shabda_arabic_rules("ع");
-assert_eq(vec_get(ar_ain, 0), SVARA_PH_GLOTTAL_STOP, "ain -> glottal");
+assert_eq(vec_get(ar_ain, 0), SVARA_PH_FRIC_PHARYNGEAL_A, "ain -> /ʕ/");
 
 test_group("adversarial: spanish edge cases");
 # x -> ks
@@ -336,12 +584,12 @@ assert_eq(vec_get(sp_z, 0), SVARA_PH_FRIC_TH, "spanish z[0]=Th");
 # c before e -> /θ/
 var sp_ce = shabda_spanish_rules("cena");
 assert_eq(vec_get(sp_ce, 0), SVARA_PH_FRIC_TH, "spanish ce[0]=Th");
-# j -> /x/ (FricH)
+# j -> the jota /x/, svara's uvular χ (was FricH, a glottal /h/)
 var sp_j = shabda_spanish_rules("jamon");
-assert_eq(vec_get(sp_j, 0), SVARA_PH_FRIC_H, "spanish j[0]=H");
-# g before e -> FricH
+assert_eq(vec_get(sp_j, 0), SVARA_PH_FRIC_UVULAR_CH, "spanish j[0]=the jota");
+# g before e -> the jota
 var sp_ge = shabda_spanish_rules("gente");
-assert_eq(vec_get(sp_ge, 0), SVARA_PH_FRIC_H, "spanish ge[0]=H");
+assert_eq(vec_get(sp_ge, 0), SVARA_PH_FRIC_UVULAR_CH, "spanish ge[0]=the jota");
 
 # ================================================================
 # 3.0.3 regression
@@ -365,6 +613,128 @@ assert_eq(vec_get(trunc3, 2), 0xA4, "the orphaned continuation decodes as itself
 var trunc4 = _shabda_word_chars("\xF0\x9F\x98");  # 4-byte lead, two continuations
 assert_eq(vec_len(trunc4), 2, "a dangling 4-byte lead + the pair behind it = 2 code points");
 assert_eq(vec_get(trunc4, 0), 0xF0, "the dangling 4-byte lead decodes as itself");
+
+# ================================================================
+# 3.1.2: the rules give the accurate phoneme where the Rust used a stand-in
+# ================================================================
+test_group("3.1.2: /iː/ is VOWEL_LONG_I, never VOWEL_E");
+# The Rust spelled every /iː/ VOWEL_E, svara's /e/: svara said "see" as "say", and a
+# word from the dictionary (ARPABET IY, shabdakosh 3.1.3) disagreed with the same
+# spelling through the rules.
+fn _no_e(v): i64 {
+    if (_has(v, SVARA_PH_VOWEL_E) == 1) { return 0; }
+    return 1;
+}
+var r_see = shabda_english_rules("zeeb");
+assert_eq(_has(r_see, SVARA_PH_VOWEL_LONG_I), 1, "ee -> /iː/");
+assert_eq(_no_e(r_see), 1, "and no /e/");
+var r_sea = shabda_english_rules("zeal");
+assert_eq(_has(r_sea, SVARA_PH_VOWEL_LONG_I), 1, "ea -> /iː/");
+var r_gene = shabda_english_rules("gene");
+assert_eq(vec_get(r_gene, 1), SVARA_PH_VOWEL_LONG_I, "magic-e e -> /iː/");
+var r_happy = shabda_english_rules("happy");
+assert_eq(_last(r_happy), SVARA_PH_VOWEL_LONG_I, "word-final y -> the happY vowel, as CMUdict's IY0");
+# re- is /rɪ/, CMUdict's vowel for 83 of the 130 re- words in data/cmudict-5k.txt (3.1.3)
+var r_re = shabda_english_rules("return");
+assert_eq(vec_get(r_re, 1), SVARA_PH_VOWEL_NEAR_I, "re- prefix -> r /ɪ/");
+var r_rw = shabda_english_rules("rewrite");
+assert_eq(vec_get(r_rw, 1), SVARA_PH_VOWEL_NEAR_I, "re- before a cluster -> r /ɪ/");
+var r_pre = shabda_english_rules("pretext");
+assert_eq(vec_get(r_pre, 2), SVARA_PH_VOWEL_LONG_I, "pre- prefix -> p r /iː/");
+var r_hi = shabda_hindi_rules("\xE0\xA4\xA8\xE0\xA5\x80");
+assert_eq(_has(r_hi, SVARA_PH_VOWEL_LONG_I), 1, "Hindi नी: the ī matra -> /iː/");
+var r_hi2 = shabda_hindi_rules("\xE0\xA4\x88");
+assert_eq(_has(r_hi2, SVARA_PH_VOWEL_LONG_I), 1, "Hindi ई -> /iː/");
+var r_sa = shabda_sanskrit_rules("\xE0\xA4\x97\xE0\xA5\x80\xE0\xA4\xA4\xE0\xA4\xBE");
+assert_eq(_has(r_sa, SVARA_PH_VOWEL_LONG_I), 1, "Sanskrit गीता -> /iː/");
+var r_sa2 = shabda_sanskrit_rules("\xE0\xA5\xA0");
+assert_eq(vec_get(r_sa2, 1), SVARA_PH_VOWEL_LONG_I, "Sanskrit ॠ -> tap + /iː/");
+assert_eq(_no_e(shabda_german_rules("liebe")), 1, "German ie -> no /e/");
+
+test_group("3.1.2: German ü and y are /y/");
+assert_eq(vec_get(shabda_german_rules("typ"), 1), SVARA_PH_VOWEL_Y, "typ[1] = /y/");
+assert_eq(_no_e(shabda_german_rules("müde")), 1, "müde has no /e/ for ü");
+
+var _ur = SVARA_PH_FRIC_UVULAR_R;
+var _sw = SVARA_PH_VOWEL_SCHWA;
+test_group("accuracy: German length, schwa, ö, au, r");
+# The Rust spelled a /ɑ/, every e /ɛ/, every o and u long, ö /ɛ/, r English /ɹ/, and had no
+# au; svara has the German phonemes (ADR-0002).
+assert_eq(_esq(shabda_german_rules("sonne"), 4, SVARA_PH_FRIC_Z, SVARA_PH_VOWEL_OPEN_O, SVARA_PH_NASAL_N, _sw,
+    0, 0, 0, 0), 1, "sonne = z ɔ n ə");
+assert_eq(_esq(shabda_german_rules("leben"), 5, SVARA_PH_LATERAL_L, _ve, SVARA_PH_PLOSIVE_B, _sw, SVARA_PH_NASAL_N,
+    0, 0, 0), 1, "leben = l eː b ə n");
+assert_eq(_esq(shabda_german_rules("bett"), 3, SVARA_PH_PLOSIVE_B, SVARA_PH_VOWEL_OPEN_E, SVARA_PH_PLOSIVE_T,
+    0, 0, 0, 0, 0), 1, "bett = b ɛ t");
+assert_eq(_esq(shabda_german_rules("vogel"), 5, SVARA_PH_FRIC_F, _vo, SVARA_PH_PLOSIVE_G, _sw, SVARA_PH_LATERAL_L,
+    0, 0, 0), 1, "vogel = f oː g ə l");
+assert_eq(_esq(shabda_german_rules("wasser"), 5, SVARA_PH_FRIC_V, _va, SVARA_PH_FRIC_S, _sw, _ur, 0, 0, 0), 1,
+  "wasser = v a s ə ʁ");
+assert_eq(_esq(shabda_german_rules("hut"), 3, SVARA_PH_FRIC_H, _vu, SVARA_PH_PLOSIVE_T, 0, 0, 0, 0, 0), 1,
+  "hut = h uː t");
+assert_eq(vec_get(hund, 1), SVARA_PH_VOWEL_NEAR_U, "hund = h ʊ n t");
+assert_eq(_esq(shabda_german_rules("schön"), 3, SVARA_PH_FRIC_SH, SVARA_PH_VOWEL_FRONT_ROUND_O, SVARA_PH_NASAL_N,
+    0, 0, 0, 0, 0), 1, "schön = ʃ øː n");
+assert_eq(vec_get(shabda_german_rules("können"), 1), SVARA_PH_VOWEL_OPEN_FRONT_ROUND_O, "können: /œ/");
+assert_eq(vec_get(shabda_german_rules("mit"), 1), SVARA_PH_VOWEL_NEAR_I, "mit: short function word");
+assert_eq(_esq(shabda_german_rules("wir"), 3, SVARA_PH_FRIC_V, SVARA_PH_VOWEL_LONG_I, _ur, 0, 0, 0, 0, 0), 1,
+  "wir = v iː ʁ");
+assert_eq(_esq(shabda_german_rules("gesagt"), 6, SVARA_PH_PLOSIVE_G, _sw, SVARA_PH_FRIC_Z, _va, SVARA_PH_PLOSIVE_K,
+    SVARA_PH_PLOSIVE_T, 0, 0), 1, "gesagt = g ə z a k t");
+assert_eq(_esq(shabda_german_rules("lehrerin"), 7, SVARA_PH_LATERAL_L, _ve, _ur, _sw, _ur, SVARA_PH_VOWEL_NEAR_I,
+    SVARA_PH_NASAL_N, 0), 1, "lehrerin = l eː ʁ ə ʁ ɪ n");
+assert_eq(_esq(shabda_german_rules("sehen"), 4, SVARA_PH_FRIC_Z, _ve, _sw, SVARA_PH_NASAL_N, 0, 0, 0, 0), 1,
+  "sehen: h after a vowel is silent");
+assert_eq(_esq(shabda_german_rules("frau"), 3, SVARA_PH_FRIC_F, _ur, SVARA_PH_DIPH_AU, 0, 0, 0, 0, 0), 1,
+  "frau = f ʁ au");
+assert_eq(_has(shabda_german_rules("rot"), SVARA_PH_APPROX_R), 0, "rot: no English /ɹ/");
+
+test_group("accuracy: German ch, z, pf, ng, x, tsch, sp / st, devoicing");
+assert_eq(_esq(shabda_german_rules("buch"), 3, SVARA_PH_PLOSIVE_B, _vu, SVARA_PH_FRIC_UVULAR_CH, 0, 0, 0, 0, 0), 1,
+  "buch: the ach-Laut");
+assert_eq(vec_get(shabda_german_rules("nacht"), 2), SVARA_PH_FRIC_UVULAR_CH, "nacht: the ach-Laut");
+assert_eq(_esq(shabda_german_rules("euch"), 2, SVARA_PH_DIPH_OI, SVARA_PH_FRIC_PALATAL_C, 0, 0, 0, 0, 0, 0), 1,
+  "euch: the ich-Laut");
+assert_eq(_esq(shabda_german_rules("könig"), 5, SVARA_PH_PLOSIVE_K, SVARA_PH_VOWEL_FRONT_ROUND_O, SVARA_PH_NASAL_N,
+    SVARA_PH_VOWEL_NEAR_I, SVARA_PH_FRIC_PALATAL_C, 0, 0, 0), 1, "könig: -ig = ɪç");
+assert_eq(vec_get(shabda_german_rules("chor"), 0), SVARA_PH_PLOSIVE_K, "chor: ch- = /k/ before o");
+assert_eq(_esq(shabda_german_rules("katze"), 4, SVARA_PH_PLOSIVE_K, _va, SVARA_PH_AFFR_TS, _sw, 0, 0, 0, 0), 1,
+  "katze = k a t͡s ə");
+assert_eq(_esq(shabda_german_rules("kopf"), 3, SVARA_PH_PLOSIVE_K, SVARA_PH_VOWEL_OPEN_O, SVARA_PH_AFFR_PF,
+    0, 0, 0, 0, 0), 1, "kopf = k ɔ p͡f");
+assert_eq(_esq(shabda_german_rules("lang"), 3, SVARA_PH_LATERAL_L, _va, SVARA_PH_NASAL_NG, 0, 0, 0, 0, 0), 1,
+  "lang = l a ŋ");
+assert_eq(vec_get(shabda_german_rules("danke"), 2), SVARA_PH_NASAL_NG, "danke: n before k = /ŋ/");
+assert_eq(_esq(shabda_german_rules("sechs"), 4, SVARA_PH_FRIC_Z, SVARA_PH_VOWEL_OPEN_E, SVARA_PH_PLOSIVE_K,
+    SVARA_PH_FRIC_S, 0, 0, 0, 0), 1, "sechs: chs = ks");
+assert_eq(_esq(shabda_german_rules("hexe"), 5, SVARA_PH_FRIC_H, SVARA_PH_VOWEL_OPEN_E, SVARA_PH_PLOSIVE_K,
+    SVARA_PH_FRIC_S, _sw, 0, 0, 0), 1, "hexe: x = ks (was k)");
+assert_eq(_last(shabda_german_rules("deutsch")), SVARA_PH_AFFR_CH, "deutsch: tsch = t͡ʃ");
+assert_eq(_esq(shabda_german_rules("fenster"), 7, SVARA_PH_FRIC_F, SVARA_PH_VOWEL_OPEN_E, SVARA_PH_NASAL_N,
+    SVARA_PH_FRIC_S, SVARA_PH_PLOSIVE_T, _sw, _ur, 0), 1, "fenster: st inside a word is s t");
+assert_eq(_esq(shabda_german_rules("verstehen"), 8, SVARA_PH_FRIC_F, SVARA_PH_VOWEL_OPEN_E, _ur, SVARA_PH_FRIC_SH,
+    SVARA_PH_PLOSIVE_T, _ve, _sw, SVARA_PH_NASAL_N), 1, "verstehen: st after the prefix is ʃt");
+assert_eq(_esq(shabda_german_rules("gibt"), 4, SVARA_PH_PLOSIVE_G, SVARA_PH_VOWEL_LONG_I, SVARA_PH_PLOSIVE_P,
+    SVARA_PH_PLOSIVE_T, 0, 0, 0, 0), 1, "gibt: b devoiced before t, the i long");
+assert_eq(vec_get(shabda_german_rules("möglich"), 2), SVARA_PH_PLOSIVE_K, "möglich: g devoiced before -lich");
+assert_eq(vec_get(shabda_german_rules("november"), 2), SVARA_PH_FRIC_V, "november: v between vowels is /v/");
+assert_eq(vec_get(shabda_german_rules("erbse"), 3), SVARA_PH_FRIC_S, "erbse: s after an obstruent is /s/");
+
+test_group("3.1.2: the Spanish trill and tap");
+# The Rust gave rr svara's English approximant /ɹ/ and every single r the tap. Spanish
+# trills rr, a word-initial r, and an r after n, l or s; svara has the trill.
+var es_pero = shabda_spanish_rules("pero");
+assert_eq(_has(es_pero, SVARA_PH_TAP_FLAP), 1, "pero: the tap");
+assert_eq(_has(es_pero, SVARA_PH_TRILL_ALVEOLAR), 0, "pero: no trill");
+assert_eq(_has(perro, SVARA_PH_APPROX_R), 0, "perro: no English /ɹ/");
+assert_eq(_has(perro, SVARA_PH_TAP_FLAP), 0, "perro: no tap");
+assert_eq(vec_get(shabda_spanish_rules("rojo"), 0), SVARA_PH_TRILL_ALVEOLAR, "rojo: word-initial trill");
+var es_honra = shabda_spanish_rules("honra");
+assert_eq(_has(es_honra, SVARA_PH_TRILL_ALVEOLAR), 1, "honra: trill after n");
+assert_eq(_has(shabda_spanish_rules("alrededor"), SVARA_PH_TRILL_ALVEOLAR), 1, "alrededor: trill after l");
+assert_eq(_has(shabda_spanish_rules("israel"), SVARA_PH_TRILL_ALVEOLAR), 1, "israel: trill after s");
+var es_caro = shabda_spanish_rules("caro");
+assert_eq(_has(es_caro, SVARA_PH_TRILL_ALVEOLAR), 0, "caro: the tap between vowels");
 
 var rc = assert_summary();
 syscall(SYS_EXIT, rc);

@@ -46,7 +46,7 @@ text-to-speech. Consumers pull `dist/shabda.cyr` (the distlib bundle).
 
 ## Scaffolding
 
-Project was scaffolded with `cyrius port`. Original Rust at `rust-old/` is the reference oracle — do not modify it; cross-check the port against it.
+Project was scaffolded with `cyrius port`. Original Rust at `rust-old/` is the capability reference — do not modify it. It lists what the port must be able to do; it is not the judge of whether a result is right (see Key Principles).
 
 ## Quick Start
 
@@ -61,8 +61,8 @@ cyrius distlib                           # regenerate dist/shabda.cyr
 
 ## Key Principles (durable)
 
-- **Cross-check against `rust-old/`** — the port's correctness bar is "matches what Rust did". Diverge only with an ADR.
-- **Correctness over cleverness** — if the Cyrius behavior diverges silently from Rust, the bugs win.
+- **Accuracy is the oracle; `rust-old/` is the capability list.** The port must do everything `rust-old/` does, but a result is right when it is accurate — the linguistics (IPA as defined, the language's phonology, ARPABET), the relevant specification, the documented contract — not when it matches what the Rust did. Where the Rust is wrong, be accurate and list the output change in the CHANGELOG. Do not bring over broken Rust. See [ADR-0002](docs/adr/0002-accuracy-over-rust-parity.md).
+- **Correctness over cleverness** — never change output silently: every consumer-visible output change goes in the CHANGELOG.
 - **Dictionary-first, rules as fallback** — accuracy over speed.
 - Test after every change, not after the feature is "done"; ONE change at a time — never bundle unrelated changes.
 - Build with `cyrius build`, not raw `cat file | cc5` — the manifest auto-resolves deps.
@@ -78,6 +78,7 @@ cyrius distlib                           # regenerate dist/shabda.cyr
 - Phoneme output compatible with svara's `PhonemeEvent` — a conversion result is a vec of svara `PhonemeEvent` handles built from `SVARA_PH_*` ordinals.
 - **No feature flags** — CYRIUS has none, so varna validation / detection and every other capability are always compiled into the one bundle (the Rust `std`/`varna`/`json`/`logging`/`full` gates collapse).
 - **Never skip benchmarks** before claiming a performance change.
+- **Measure accuracy before claiming it.** Score a rule, stress or text change against gold pronunciations: the 10,617 CMUdict words of shabdakosh's `data/cmudict-5k.txt` (tune on one half, report the other), and varna's Swadesh lists for the other languages. Keep a change only when no gold word gets worse without a stated reason. `docs/development/state.md` (Tests) gives the method.
 - **A conversion allocates only through its Allocator.** Every fn `shabda_convert_with_a` reaches takes the Allocator `a` first and allocates through it (`alloc_via`, `vec_new_a`, `_shabda_vec_push_a`, `_shabda_str_cstr_a`, …), never through `alloc`, `vec_new`, `vec_push` or a stdlib call that copies onto the default heap (`str_cstr`, `str_lower_cstr`). The non-`_a` public form is a one-line wrapper over `default_alloc()`. A table built once and shared, such as the heteronym rules or a varna inventory, is built in `shabda_g2p_new`, never on first use, so it never lands in a caller's arena. Arena memory is not zeroed after a reset, so never read a field of a fresh allocation before writing it. `tests/allocator.tcyr`, `tests/engine.tcyr` and `cyrius fuzz` check all of this.
 
 ## Module Structure
@@ -98,7 +99,7 @@ Nine modules under `src/` (leaf-first include order in `src/main.cyr` / `[lib].m
 
 - **Do not commit or push** — the user handles all git operations
 - **Never use `gh` CLI** — use `curl` to the GitHub API if needed
-- Do not modify `rust-old/` — it's the parity oracle
+- Do not modify `rust-old/` — it's the capability reference
 - Do not skip tests before claiming changes work
 - Do not modify `lib/` files (vendored stdlib / dep symlinks)
 - Do not hardcode toolchain versions in CI YAML — `cyrius = "X.Y.Z"` in `cyrius.cyml` is the source of truth

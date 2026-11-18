@@ -1,5 +1,245 @@
 # Changelog
 
+## [3.1.3] — 2026-11-17
+
+Accuracy release: the sweep [ADR-0002](docs/adr/0002-accuracy-over-rust-parity.md) calls for, over every
+module, with accuracy as the oracle and `rust-old/` as the list of capabilities. No dependency or toolchain
+change (the 3.1.2 pins). No function is removed and no signature changes. Four are added:
+`shabda_assign_stress_english`, `shabda_syllabify_for`, `shabda_ssml_prosody_percent` and
+`shabda_ssml_node_rate_percent`, with the constants `SHABDA_EMPH_NONE` and `SHABDA_RATE_PERCENT`; an SSML
+Prosody node grows from 24 to 32 bytes. Output changes in every language, deliberately; consumers that pin
+phonemes, stress or SSML timings should read *Changed*. **1,342 assertions / 11 suites** (879 in 3.1.2).
+`cyrius fuzz`, `--poison` and `--bounds` pass, and `cyrius audit` exits 0.
+
+### How it was measured
+
+Each change was checked against gold pronunciations, and kept only where it was right on the gold and no
+gold word got worse:
+
+| Gold | 3.1.2 | 3.1.3 |
+|---|---:|---:|
+| English rules, exact words: the held-out half of `data/cmudict-5k.txt` (5,308 words) | 13.7% | 46.4% |
+| English rules, phoneme error rate, same half | 31.3% | 13.9% |
+| English primary stress, polysyllabic content words through the engine (8,702, CMUdict's digits) | 70.9% | 87.9% |
+| Spanish rules, exact words, varna's Swadesh list (25) | 16% | 72% |
+| German, same | 28% | 80% |
+| Hindi, same | 40% | 88% |
+| Arabic, same | 0% | 28% |
+
+- **The Swadesh lists are the independent check** for the other languages, and they are small and narrow:
+  their remaining Spanish and German misses are allophones (ð β ɣ) and symbols shabdakosh's IPA parser
+  drops (x ɣ ɐ ʏ), not rule errors.
+- **Larger lists were used to tune the rules** and are not independent: 360 Spanish and 410 German words
+  with eSpeak NG 1.52.0 pronunciations and 27 documented corrections, plus 216 / 336 held-out words scored
+  once at the end (213 / 325 exact); 139 Hindi, 67 Sanskrit and 86 Arabic words transcribed from Ohala
+  (1983) for Hindi, classical values for Sanskrit, and Watson (2002) / Ryding (2005) for Arabic.
+- **Through the engine**, over the 10,855-input conversion differential: 2,015 of the 10,617 dictionary
+  words change, 2,009 of them in stress only and 6 because a heteronym's isolated reading moved (see
+  *Heteronyms*). Every sentence, SSML and other-language input with a word the rules spell changes.
+
+### Changed — English letter-to-sound rules (src/rules.cyr)
+
+The English rules are the fallback for every word the dictionary does not have, in every language
+(an unknown language tag falls back to them too). Through 3.1.2 they were the Rust's: one phoneme
+per letter, a few 2- to 4-letter patterns with no context, a prefix list and an -ed step. Put through
+them, **13.5%** of the 10,617 words of shabdakosh's `data/cmudict-5k.txt` came out exactly as CMUdict
+spells them, with a phoneme error rate of 31.5%: an r after every r-coloured vowel, a full vowel in
+every unstressed syllable, /oʊ/ for every short o, doubled consonants pronounced twice.
+
+- **A context-sensitive rule engine** replaces them. A rule is LEFT [MATCH] RIGHT -> phonemes, with
+  NRL's context classes (vowels, consonants, voiced consonants, front vowels, suffixes, sibilants).
+  The rule set is NRL Report 7948 (Elovitz, Johnson, McHugh and Shore, 1976; a US Government work,
+  public domain), written as ARPABET and mapped to svara exactly as shabdakosh maps CMUdict
+  (`tests/engine.tcyr` checks all 44 symbols).
+- **Additions, each measured on CMUdict**: a doubled consonant is one sound; the unstressed suffixes
+  -ity, -ment, -ance / -ence, -ancy / -ency, -ant / -ent, -ible, -ture, -tive / -sive; re- is /rɪ/
+  (CMUdict's vowel for 83 of 130 re- words); "ear" / "ere" before a vowel or at the end are /ɪr/;
+  tch, dg, dj; a silent t in -stle / -sten; a silent b in -mb and -bt; initial gn, ps, pn; a before x
+  is /æ/; "alm" is /ɑm/; the y digraphs (ay, ey, oy) before the rules that would take y as a
+  consonant ("played" was P L EY IH D).
+- **Vowel reduction.** Letter rules cannot see stress, so a pass after them predicts the primary
+  stress (stress-taking and stress-shifting suffixes, unstressed prefixes in two-syllable words, else
+  the Latin heavy-penult rule), keeps a secondary two syllables before it, and reduces AA, AE, AH,
+  AO and EH elsewhere to schwa, a medial /ɪ/ after a full vowel too, and an unstressed schwa + r +
+  vowel to CMUdict's ER0.
+- **-ed voicing** after a silent e follows the sound before it, as the Rust's engine did: /t/ after a
+  voiceless consonant, /d/ otherwise.
+- **Measured** on the 10,617 words, split into two halves (even and odd positions in the list); the
+  rules were tuned on the first and the second was only measured:
+
+  | | exact words, tuning half | exact words, held-out half | phoneme error rate (held out) |
+  |---|---:|---:|---:|
+  | 3.1.2 | 13.3% | 13.7% | 31.3% |
+  | NRL rules alone | 33.6% | 34.5% | 17.4% |
+  | 3.1.3 | 46.5% | 46.4% | 13.9% |
+
+  The remaining errors are mostly stress guesses (a stressed vowel reduced, or the reverse).
+- **No dictionary word's phonemes change**: only words that reach the rules do.
+- **Cost**: a word through the English rules takes 17–22 µs, against 3.6–4.9 µs through 3.1.2's,
+  over the same 10,617 words in three alternated runs. The rule table is built once per process, in
+  `shabda_g2p_new` (on the default heap, like the heteronym rules), so a conversion through
+  `shabda_convert_a` still keeps nothing on the default heap.
+- **Tests**: `tests/rules.tcyr` assertions that pinned the Rust's output now pin CMUdict's: "nation"
+  is N EY SH AH0 N (was /æ/), "walked" W AO K T (the l is silent), "unhappy" starts with schwa,
+  "axe" is AE K S (the Rust dropped the x), "through" is TH R UW (was /oʊ/), re- is /rɪ/.
+
+### Changed — Spanish and German rules
+
+- **Spanish vowels are /a e i o u/** (`VOWEL_A/E/I/O/U`). They were English stand-ins, `OPEN_A`, `OPEN_E`,
+  `CUP_V`, so casa was k ɑ s ɑ and every u was synthesized as [ɛ] (svara gives `CUP_V` `OPEN_E`'s formants).
+- **Spanish glides**: an unaccented i or u next to a vowel is /j w/ (quién k j e n, fuego f w e g o, aire,
+  auto, ciudad); a written accent marks hiatus (día, baúl); ü is /w/.
+- **Spanish consonants**: ñ is `NASAL_PALATAL`; ll and consonantal y are `FRIC_PALATAL_J` /ʝ/ (yeísmo);
+  y after a vowel is /j/ and the word y /i/; c, g and gu before é / í are no longer ignored; initial x is /s/;
+  the jota is `FRIC_UVULAR_CH` (χ), the Castilian realization and closer to [x] than the [h] it was (svara
+  has no velar /x/; the rules already use distinción θ).
+- **German vowel length and quality**: a nucleus pass gives long and short vowels by German's spelling rules
+  (long before h, ß, a vowel, the end or one consonant + vowel; short before double consonants and
+  clusters), with the pairs iː/ɪ, eː/ɛ, oː/ɔ, uː/ʊ and øː/œ (svara's front rounded vowels); every e was ɛ,
+  every o and u long, a was ɑ, ö was ɛ.
+- **German schwa**: e in be- / ge- and in final -e -en -el -er -em -es -et -est -ern -eln -ens -ert -elt
+  -end is /ə/ (Sonne z ɔ n ə, was z o n ɛ).
+- **German r is `FRIC_UVULAR_R` /ʁ/**, not the English approximant the table relabeled ʁ.
+- **German ch**: ç after front vowels and consonants and in -ig; the ach-Laut after a o u au is χ; chs is
+  ks; initial ch before a o u l r is k. It was ʃ everywhere.
+- **German affricates and clusters**: z, tz, zz are `AFFR_TS`, pf `AFFR_PF`, tsch `AFFR_CH`; ng and n before k
+  are /ŋ/; x is k s; au is `DIPH_AU` (Frau, Baum were u); c before e i ä y is t͡s; sp / st are ʃp / ʃt only
+  at the start of a word or stem (Fenster was fɛnʃtɛɹ); h after a vowel is silent; b d g devoice before an
+  obstruent and before -lich -ling -los -nis; s is /z/ before a vowel unless an obstruent precedes it.
+- **The Spanish and German IPA tables** map the accurate phonemes to varna's symbols and the retired
+  stand-ins to their own IPA, so validation reports a stand-in that reaches it; German diphthongs map to
+  nothing, as varna's German has none.
+
+### Changed — Hindi, Sanskrit and Arabic rules
+
+- **Anusvara and chandrabindu** keep the vowel before them (they suppressed it: लंबा was l n b ɑ) and take
+  the place of a following stop (ŋ ɲ ɳ n m); elsewhere they are n in Hindi and m in Sanskrit, the closest
+  svara can say to a nasal vowel.
+- **Hindi schwa deletion** is Ohala's: the medial VC_CV rule after the final one (आदमी ɑ d m iː, मछली
+  m ə tʃ l iː); a lone syllable keeps its schwa; ə is [ɛ] before a ɦ that closes its syllable (कहना, यह).
+- **ह is `FRIC_GLOTTAL_H` /ɦ/** in both languages; Hindi visarga is ɦ, Sanskrit's stays [h].
+- **Retroflexes and nukta**: ट ठ ड ढ ण ष are the retroflex phonemes, ञ is ɲ; the nukta letters ड़ ढ़
+  क़ ख़ ग़ ज़ फ़ are ɽ ɽ q χ ʁ z f, decomposed or precomposed, and a nukta no longer adds a schwa
+  (बड़ा was b ə d ə ɑ); Hindi ज्ञ is /ɡj/.
+- **Vowels**: उ / ु is ʊ (was ʌ, synthesized as [ɛ]); ए / े is e; Hindi ऐ is ɛː; Sanskrit ऐ / औ are one
+  diphthong each; ॉ is ɔ; ॐ and ळ are voiced (they gave nothing).
+- **IAST and romanized input**: the precomposed IAST letters are read (kṛṣṇa gave k ə); romanized Hindi,
+  Sanskrit and Arabic read their digraphs (aa ii ee uu oo ai au, kh gh ch jh th dh ph bh, sh, Arabic sh kh
+  gh th dh).
+- **Arabic vowels**: /a/ is `VOWEL_A`, backed to [ɑ] beside an emphatic or uvular, the main acoustic cue of
+  emphasis svara can give (one function, `_shabda_arabic_a`, decides it); a long vowel is one phoneme
+  (كِتَاب was k ɪ t ɑ ɑ b); damma is ʊ; unvocalized ي / و between consonants or at the end are /iː uː/.
+- **Arabic consonants**: ح is ħ, ع is ʕ (was a glottal stop), ق is q, خ is χ, غ is ʁ (was the stop g), ر is
+  the trill; shadda doubles the consonant in either mark order (بَّ was b a a).
+- **The article and spelling**: a sun letter takes the article's l (الشمس a ʃ ʃ m s), also after و ف ب ك;
+  a word-initial bare alif is wasl /i/ unless before l; the alif after tanwin al-fath is silent; ة is a or t;
+  hamza seats imply their vowel.
+- **IPA tables**: Hindi `OPEN_A` is ɑː and `OPEN_E` ɛː (they were ɛː and e); the new phonemes map to varna's
+  symbols; Sanskrit `NASAL_N` is n̪, which clears the false n flags; Arabic `PLOSIVE_G` is ɡ (was ɣ). Hindi
+  and Sanskrit validation now reports varna's real gaps instead of hiding them: Hindi has no /aː/ (varna's
+  own Swadesh writes ɑː), ɽ, z, q, x, ɣ; Sanskrit no h.
+
+### Changed — stress, syllables, text, heteronyms and SSML
+
+- **English stress**: `shabda_assign_stress_english` (the engine uses it for English) applies four standard
+  English rules (Chomsky and Halle 1968, Kiparsky 1982, Fudge 1984): /ə/ never takes stress; stress-neutral
+  suffixes (-ly -ness -less -ful -ing -er -ted / -ded) are set aside when both the spelling and the phonemes
+  show them; pre-stressing suffixes (-ic, -ical, -ity, -ify, -ion, -ian, -ial, -ious, -ient, -eous) stress
+  the syllable before them and the French ones (-ee -eer -ese -ette -esque -ique -oon -aire) themselves; a
+  disyllable whose first syllable is an unstressed prefix with /ɪ/ is stressed on the root. Primary stress
+  is right on 87.9% of polysyllabic content words (70.9%); 1,618 words fixed, 141 regressed. shabdakosh
+  keeps no stress digits, so dictionary stress needs an upstream capability (see *Not fixed*).
+- **Sonority and onsets**: sonority comes from svara's class for all 100 phonemes, with taps, flaps,
+  trills and ʁ ranked as liquids; through 3.1.2 everything outside the 1.x set had the stops' 1, so otro
+  split ot.ɾo. Legal onsets are per language (`shabda_syllabify_for`, used by the engine): English uses
+  a table of the onsets English allows, as shabdakosh's syllabifier does (atlas æt.lə, singer sɪŋ.ɚ),
+  Spanish obstruent + l / ɾ without tl / dl (otro o.tɾo, honra hon.ra), Arabic a single consonant
+  (madrasa mad.ra.sa), the others the sonority rule. German Abreise is a.bʁaɪ.zə.
+- **Diacritics are stripped for English only**: the foreign-loan path ran in every language, so über reached
+  the German rules as uber and niño as nino.
+- **Combining marks stay in the word**: `shabda_normalize` deleted every non-alphabetic mark, the virama,
+  nukta, sukun, maddah and superscript alef included, so every Sanskrit conjunct gained a vowel through a
+  conversion (धर्मः said dəɾəməh). A mark (Mn / Mc / Me) after a letter now stays.
+- **Numbers** read as an English reader says them: 1st first, 21st twenty first, $3.50 three dollars and fifty
+  cents, $5 million five million dollars, 50% fifty percent, 3:05 three oh five, 1999 nineteen ninety nine
+  in a date context, 1990s nineteen nineties, 007 zero zero seven, 10-20 ten to twenty, COVID-19 covid
+  nineteen (was covid negative nineteen), 5km five km.
+- **Boundaries and abbreviations**: ? and ! give a sentence pause, a run of boundaries is one pause (... was
+  0.9 s), & is "and"; St. and Dr. after a capitalized word are street and drive; the sentence period is kept
+  after a non-title abbreviation ("etc. Then") but not after e.g. and i.e., which are new; dotted
+  initialisms are spelled.
+- **Acronyms**: the read-as-word test follows English letter phonotactics (IBM, ATM, ESPN, CIA and USA were
+  read as words), a spelled acronym is one token ("f-b-i"), and the English engine says spelled and lone
+  letters by their names from a CMUdict letter table: FBI is /ɛf biː aɪ/, it was /f b aɪ/.
+- **Heteronyms**: seven rules picked the other sense in every context, because their variant indices
+  assumed an order the dictionary does not have (read = [riːd, rɛd], tear = [tɛr, tɪr], bow = [baʊ, boʊ],
+  record / refuse / produce = [verb, noun]): "I will read" said /rɛd/. The indices now match the rules'
+  documented intent. lead is /liːd/ by default as well as after its verb triggers: the verb and the nouns
+  for a position and a leash are /liːd/, and only a following word, which the window cannot see, marks
+  the metal. "a" and "the" no longer trigger minute and bass, nor "a" bow. `tests/heteronym.tcyr` checks
+  every rule's two picks against the dictionary. In isolation, read is now /rɛd/, tear /tɪr/, bow /boʊ/
+  and record, refuse and produce the nouns.
+- **SSML 1.1 and XML 1.0**: an XML declaration, comments and a DOCTYPE are skipped (a document starting
+  with `<?xml?>` said one word) and CDATA is text; an unknown element keeps all its children
+  (`<p><s>One.</s><s>Two.</s></p>` dropped "Two."); entities and character references are decoded ("AT&amp;T"
+  said "amp"); white space around = is allowed and attribute names match whole; a bare `<break/>` and an
+  unknown strength are medium, 400 ms (was 300); real-number times parse ("1.5ms" failed the document);
+  `<emphasis level="none">` exists and "moderate" now gives primary stress without lengthening;
+  `<prosody rate="N%">` scales the default rate.
+
+### Not fixed
+
+Each is listed in the roadmap's *Accuracy sweep* item.
+
+- **Dictionary stress.** shabdakosh's packed data keeps no stress digits, so English stress is predicted
+  even for dictionary words. shabdakosh would need a per-pronunciation stress vector (CMUdict's 0 / 1 / 2,
+  IPA ˈ ˌ) and an accessor such as `shbdk_pronunciation_stress(p)`.
+- **varna's inventory gaps**, which validation now reports: English /ɜ aɪ aʊ ɔɪ/; Hindi /aː ɽ z q x ɣ/;
+  Sanskrit h.
+- **Stress outside English** still follows the Latin rule: Spanish needs its orthographic rule, German stem
+  stress with unstressed prefixes. **Number and abbreviation expansion is English in every language.**
+- **Unvocalized Arabic** has no short vowels or shadda to read; diphthongs in unvocalized monosyllables
+  (بيت يوم) are misread as long vowels. Aspiration and breathy voice have no svara phoneme.
+- **German lexical exceptions** (Mond, vielleicht, final-stress loans, compounds such as Beispiel) and Spanish
+  x as the jota (México); English 2-letter acronyms and AT&T; `<phoneme>`, `<sub>` and `<say-as>`;
+  intonation is computed and discarded; the pause durations (0.15 s comma, 0.30 s period, 0.04 s between
+  words) have no source and are unchanged.
+
+### Tests
+
+- 1,342 assertions in 11 suites (879): engine 309, rules 294, validate 235, normalize 120, ssml 97,
+  syllable 96, prosody 72, heteronym 48, shabda 37, error 25, allocator 9.
+- Assertions that pinned an inaccurate result were rewritten to the accurate one, each named in its
+  section above.
+- **`cyrius fuzz`** now converts every case through all six engines (each against `shabda_convert_a`) and
+  feeds the raw bytes to all six rule sets, with a corpus of native-script inputs carrying virama, nukta,
+  anusvara, visarga, IAST, harakat, shadda in both orders, sukun, the article and ta marbuta.
+- **The allocator rule holds**: across the 10,808 convert inputs `shabda_convert_with_a` keeps nothing on the
+  default heap and its arena holds exactly what the default-heap form kept; the new English rule table,
+  like the heteronym table, is built once in `shabda_g2p_new`.
+
+### Benchmarks
+
+`tests/shabda.bcyr`, x86_64. Medians of **8** alternated runs of 3.1.2 and 3.1.3 in one session.
+
+| Benchmark | 3.1.2 | 3.1.3 | Δ |
+|-----------|-------|-------|---|
+| g2p_hello_world | 15.75 µs | 17.05 µs | +8.3% |
+| g2p_sentence | 62.88 µs | 71.50 µs | +13.7% |
+| g2p_sentence_arena | 59.56 µs | 67.90 µs | +14.0% |
+| speak_hello | 3.56 ms | 3.74 ms | +4.9% |
+| speak_sentence | 11.05 ms | 11.04 ms | noise |
+| dict_english_construction | 7.96 ms | 7.96 ms | noise |
+| dict_lookup_hit | 148 ns | 143 ns | noise |
+| dict_lookup_miss | 162 ns | 150 ns | noise |
+
+- **Converting dictionary words costs 8–14% more**, and the ranges do not overlap. These sentences use no
+  letter-to-sound rules, so the time is in the new stress rules, per-language syllabification and the
+  larger normalization pass; which of them was not profiled. shabda's bar is accuracy over speed.
+- **A word through the English rules** costs 17–22 µs, from 3.6–4.9 (see *English letter-to-sound rules*);
+  German rules about 1.1 µs a word, from 0.4; Spanish about 7% more. No bench row covers the rules, so
+  these come from separate timing programs over the 10,617-word list.
+
 ## [3.1.2] — 2026-11-17
 
 Dependency release, plus the allocator-taking conversion hoosh asked for. `shabdakosh` 3.1.1 ->
@@ -12,9 +252,11 @@ from scratch. Every vendored bundle is byte-identical to its tag's `dist/`, ever
 6.7.18 snapshot, `cyrius deps --verify` passes 61 of 61, and `cyrius deps --locked` is clean.
 
 No function is removed and no signature changes. Two are added: `shabda_convert_a` and
-`shabda_convert_with_a`. Conversion output changes for one ARPABET vowel, inherited from shabdakosh
-(see *Changed*). **840 assertions / 11 suites** (727 / 10 in 3.1.1). `cyrius fuzz` passes plain,
-`--poison` and `--bounds`, and `cyrius audit` exits 0.
+`shabda_convert_with_a`. Output changes in two ways (see *Changed*): ARPABET `IY` is /iː/, inherited
+from shabdakosh, and the letter-to-sound rules and IPA tables drop three of the Rust's stand-ins,
+under a new rule: `rust-old/` is the list of capabilities and accuracy is the oracle
+([ADR-0002](docs/adr/0002-accuracy-over-rust-parity.md)). **879 assertions / 11 suites** (727 / 10
+in 3.1.1). `cyrius fuzz` passes plain, `--poison` and `--bounds`, and `cyrius audit` exits 0.
 
 ### Added — allocator-taking conversion ([issue](docs/development/issues/archived/2026-11-11-conversion-allocates-on-the-default-heap.md), hoosh)
 
@@ -85,21 +327,47 @@ No function is removed and no signature changes. Two are added: `shabda_convert_
   differential over 10,855 inputs (the 10,617 words of shabdakosh's `data/cmudict-5k.txt`, 39
   sentences under default, emphasis, 200 wpm, timing-profile and streaming options, 8 SSML documents
   and 35 inputs in the other five languages) was built under 3.1.1 and 3.1.2. 2,389 rows differ, and in
-  every one the only change is phoneme 1 -> 14: durations and stress are bit-identical. That is 2,322
-  of the 10,617 words, and every other row is byte-identical.
-- **The letter-to-sound rules still give /e/ for those spellings**, as `rust-old/` does: English
-  "ee" / "ea", German "ie", Hindi ई / ी. So a word in the dictionary and one that is not can now give
-  different vowels for the same spelling. This release does not change the rules.
+  every one the only change is phoneme 1 -> 14: durations and stress are bit-identical. That is 2,306
+  of the 10,617 words; the other 83 rows are sentences. Every other row is byte-identical.
 
-### Changed — validation, inherited from varna 2.6.0
+### Changed — accuracy over Rust parity ([ADR-0002](docs/adr/0002-accuracy-over-rust-parity.md))
 
-- **varna's Spanish inventory now spells the tap `ɾ` and the trill `r`.** It spelled them `r` and `rr`,
-  which is orthography, not IPA. shabda's Spanish IPA table (`shabda_spanish_phoneme_to_ipa`) keeps the
-  oracle's `r` / `rr`, which `tests/validate.tcyr` pins. So the public `shabda_validate_phonemes_for(…,
-  SHABDA_LANG_SPANISH)` now flags every trill as missing from the inventory and reads the tap as the
-  trill. Over the 10,617 words' Spanish rule output, 157 gain an `rr` flag and nothing else changes. A
-  conversion discards validation results, so its output does not change. English, German, Hindi,
-  Arabic and Sanskrit validation, and English phonotactics, are identical to 3.1.1 over the same words.
+Through 3.1.1 the bar was "matches what the Rust did". It is now accuracy, with `rust-old/` as the list
+of capabilities the port must have. After the deps above, the Rust-faithful rules disagreed with the
+dictionary on /iː/, and the Rust-faithful Spanish table flagged every trill once varna spelled it as IPA
+does. So this release retires the stand-ins behind both:
+
+- **/iː/ is `SVARA_PH_VOWEL_LONG_I`, not `VOWEL_E` (svara's /e/)**, wherever the rules spell it: English
+  "ee", "ea", a magic-e "e", word-final "y" (CMUdict's `IY0`) and the "re-" / "pre-" prefixes; German
+  "ie"; Hindi and Sanskrit ई / ी; Sanskrit ॠ / ॄ (tap + /iː/). The Rust spelled them all `VowelE`,
+  although svara 1.0 already had `VowelLongI`. A dictionary word and an unknown word with the same
+  spelling now get the same vowel.
+- **German ü and y are `SVARA_PH_VOWEL_Y`** (/y/), not `VOWEL_E`. svara 1.0 had no /y/; svara has it now.
+- **Spanish trills with `SVARA_PH_TRILL_ALVEOLAR`**: rr, a word-initial r, and an r after n, l or s
+  (perro, rojo, honra, alrededor, Israel). The Rust gave rr svara's English approximant /ɹ/ and every
+  single r the tap; svara 1.0 had no trill. Every other r is still the tap (pero, caro).
+- **The IPA tables follow.** `VOWEL_E` is `e` in the English, German, Hindi and Sanskrit tables, where it
+  was `iː`; `VOWEL_LONG_I` is `iː` in each; German `VOWEL_Y` is `yː`. The Spanish tap is `ɾ` and the
+  trill `r`, IPA's and varna 2.6.0's spelling (the Rust had `r` / `rr`), and `APPROX_R` is `ɹ`. So each
+  of these phonemes is found in varna's inventory for the language. Through 3.1.2's deps alone, the old
+  table had flagged 157 of the 10,617 words' Spanish rule output for `rr`.
+- **Measured**, each list word put through each language's rules before and after:
+  - English: 2,094 of the 10,617 words change, all `VOWEL_E` -> `VOWEL_LONG_I`;
+  - German: 1,855, `VOWEL_E` -> `VOWEL_Y` (ü, y) or `VOWEL_LONG_I` (ie);
+  - Spanish: 428, the tap or `APPROX_R` -> the trill.
+
+  No word changes length, nothing else moves, and validation gains no flag in any language and loses
+  the 157 Spanish `rr` ones. Hindi and Sanskrit native-script words are covered by new tests, since the
+  list is Latin script. A conversion through the dictionary does not change. Across the 10,855-input
+  conversion differential 18 rows change, all sentences or other-language inputs with a word the rules
+  spell, and only the trill's duration differs, svara's own for that phoneme.
+- **Tests that pinned the Rust's strings now pin the accurate ones.** `tests/rules.tcyr` (+23) and
+  `tests/validate.tcyr` (+16) add the cases above, including that every aligned phoneme is in varna's
+  inventory and that English still reports /e/ as not its own.
+- **CLAUDE.md** states the new bar, and the roadmap's *Accuracy sweep* item lists the stand-ins found
+  while doing this and not yet fixed: English `th`, German ö and r, Hindi ए and the retroflex and
+  aspirated stops, Arabic ي and the pharyngeals, Sanskrit's `n` against varna's `n̪`, and the
+  syllabifier's sonority for the tap and the phonemes svara added later.
 
 ### Changed
 

@@ -112,12 +112,36 @@ fn fuzz_main(data, len) {
     sink = shabda_ssml_parse(s);
     var g = shabda_g2p_new(SHABDA_LANG_ENGLISH);
     var slot = alloc(8);
+    _shabda_fuzz_convert(g, s, slot);
+    sink = shabda_convert_ssml(g, s, slot);
+    # 3.1.3: every language's engine and letter-to-sound rules, on the raw bytes too (the
+    # rules see what normalize would have filtered out).
+    if (_FZ_ENGINES == 0) {
+        _FZ_ENGINES = alloc(5 * 8);
+        var k = 0;
+        while (k < 5) { store64(_FZ_ENGINES + k * 8, shabda_g2p_new(k + 1)); k = k + 1; }
+    }
+    var j = 0;
+    while (j < 5) { _shabda_fuzz_convert(load64(_FZ_ENGINES + j * 8), s, slot); j = j + 1; }
+    sink = shabda_english_rules(s);
+    sink = shabda_spanish_rules(s);
+    sink = shabda_german_rules(s);
+    sink = shabda_hindi_rules(s);
+    sink = shabda_arabic_rules(s);
+    sink = shabda_sanskrit_rules(s);
+    return 0;
+}
+
+# The non-English engines (SHABDA_LANG_* 1..5), built on the first case and kept.
+var _FZ_ENGINES = 0;
+
+# shabda_convert on engine `g`, then the convert_a property against it.
+fn _shabda_fuzz_convert(g, s, slot): i64 {
     store64(slot, 0);
     var err0 = shabda_convert(g, s, slot);
     var want = 0;
     if (err0 == 0) { want = _shabda_fuzz_ev_hash(load64(slot)); }
     _shabda_fuzz_check_a(g, s, err0, want);
-    sink = shabda_convert_ssml(g, s, slot);
     return 0;
 }
 
@@ -197,6 +221,17 @@ fn _corpus(): i64 {
     _fz_rep("9", 400, "");
     _fz_rep("*", 500, "");
 
+    # 3.1.3: native scripts with the marks the Indic and Arabic rules read: virama
+    # conjuncts, nukta (decomposed and precomposed), anusvara, visarga, IAST, Arabic
+    # harakat, shadda in both orders, sukun, tanwin, the article, ta marbuta.
+    _fz("\xE0\xA4\xA7\xE0\xA4\xB0\xE0\xA5\x8D\xE0\xA4\xAE\xE0\xA4\x83");
+    _fz("\xE0\xA4\xAC\xE0\xA4\xA1\xE0\xA4\xBC\xE0\xA4\xBE \xE0\xA5\x9C");
+    _fz("\xE0\xA4\xB2\xE0\xA4\x82\xE0\xA4\xAC\xE0\xA4\xBE \xE0\xA4\x81\xE0\xA4\x82");
+    _fz("\xE0\xA5\x8D\xE0\xA5\x8D\xE0\xA4\xBC");
+    _fz("k\xE1\xB9\x9B\xE1\xB9\xA3\xE1\xB9\x87a \xC4\x81\xE1\xB8\xA5");
+    _fz("\xD8\xA8\xD9\x8E\xD9\x91 \xD8\xA8\xD9\x91\xD9\x8E \xD9\x92\xD9\x8B\xD9\x91");
+    _fz("\xD8\xA7\xD9\x84\xD8\xB4\xD9\x85\xD8\xB3 \xD9\x88\xD8\xA7\xD9\x84 \xD8\xA9");
+    _fz("\xC3\xB1\xC3\xBC\xC3\xA9 g\xC3\xBCe chs tsch \xC3\x9F\xC3\xA4u");
     # Numbers, at and past the i64 boundary.
     _fz("9223372036854775807");
     _fz("9223372036854775808");

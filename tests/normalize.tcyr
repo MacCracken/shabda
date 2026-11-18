@@ -8,7 +8,8 @@ alloc_init();
 
 # ================================================================
 test_group("normalize basic + punctuation + spaces");
-assert_streq(shabda_normalize("Hello World!"), "hello world", "normalize basic");
+# '!' ends a sentence as '.' does (it was dropped through 3.1.2).
+assert_streq(shabda_normalize("Hello World!"), "hello world .pause", "normalize basic");
 assert_streq(shabda_normalize("it's a test."), "it's a test .pause", "normalize period");
 assert_streq(shabda_normalize("too   many   spaces"), "too many spaces", "normalize multi-space");
 
@@ -43,7 +44,7 @@ assert_streq(shabda_expand_numbers("9223372036854775807"), str_cstr(str_builder_
 
 # ================================================================
 test_group("normalize with numbers + pauses");
-assert_streq(shabda_normalize("I have 42 cats!"), "i have forty two cats", "normalize with numbers");
+assert_streq(shabda_normalize("I have 42 cats!"), "i have forty two cats .pause", "normalize with numbers");
 # comma pause: result contains ",pause"
 assert_eq(strstr(shabda_normalize("hello, world"), SHABDA_COMMA_PAUSE) >= 0, 1, "comma pause present");
 assert_eq(strstr(shabda_normalize("first. second"), SHABDA_PERIOD_PAUSE) >= 0, 1, "period pause present");
@@ -57,10 +58,12 @@ assert_eq(strstr(shabda_normalize("Dr. Smith is here"), "doctor") >= 0, 1, "abbr
 
 # ================================================================
 test_group("acronyms");
-assert_streq(shabda_expand_acronyms("FBI"), "f b i", "acronym spell out");
+# One token, letters joined by hyphens, which the English engine says by the letters'
+# names (through 3.1.2 "f b i", three tokens said /f b aɪ/).
+assert_streq(shabda_expand_acronyms("FBI"), "f-b-i", "acronym spell out");
 assert_streq(shabda_expand_acronyms("NASA"), "nasa", "acronym pronounceable");
 assert_streq(shabda_expand_acronyms("I am OK"), "I am OK", "acronym short not matched");
-assert_streq(shabda_expand_acronyms("the FBI and NASA"), "the f b i and nasa", "acronym in sentence");
+assert_streq(shabda_expand_acronyms("the FBI and NASA"), "the f-b-i and nasa", "acronym in sentence");
 
 # ================================================================
 test_group("foreign words + diacritics");
@@ -148,6 +151,91 @@ assert_eq(strlen(_shabda_sb_cstr(sb)), 15, "and stays NUL-terminated");
 _shabda_sb_push_cstr_a(sb_ar, sb, "more than fits");
 assert_eq(load64(canary), 0x5A5A5A5A5A5A5A5A, "push_cstr leaves it alone too");
 assert_eq(_shabda_sb_len(sb), 15, "push_cstr adds nothing it has no room for");
+
+# ================================================================
+# accuracy: what an English reader says
+# ================================================================
+test_group("accuracy: ordinals");
+assert_streq(shabda_expand_numbers("1st 2nd 3rd 4th"), "first second third fourth", "1st..4th (was onest twond ...)");
+assert_streq(shabda_expand_numbers("21st 12th 20th 100th"), "twenty first twelfth twentieth one hundredth", "compound");
+assert_streq(shabda_expand_numbers("1,000th"), "one thousandth", "grouped");
+assert_streq(shabda_expand_numbers("5k"), "five k", "not a suffix: a separate word");
+
+test_group("accuracy: currency and percent");
+assert_streq(shabda_expand_numbers("$3.50"), "three dollars and fifty cents", "$3.50");
+assert_streq(shabda_expand_numbers("$1"), "one dollar", "$1 singular");
+assert_streq(shabda_expand_numbers("$0.99"), "ninety nine cents", "$0.99");
+assert_streq(shabda_expand_numbers("$1.01"), "one dollar and one cent", "$1.01");
+assert_streq(shabda_expand_numbers("$2.5"), "two dollars and fifty cents", "$2.5");
+assert_streq(shabda_expand_numbers("$5 million"), "five million dollars", "$5 million");
+assert_streq(shabda_expand_numbers("£3 €20.10"), "three pounds twenty euros and ten cents", "pounds, euros");
+assert_streq(shabda_expand_numbers("50%"), "fifty percent", "50% (was fifty)");
+assert_streq(shabda_expand_numbers("2.5%"), "two point five percent", "2.5%");
+
+test_group("accuracy: clock times, years, digit strings");
+assert_streq(shabda_expand_numbers("3:30"), "three thirty", "3:30");
+assert_streq(shabda_expand_numbers("3:05"), "three oh five", "3:05 (was three five)");
+assert_streq(shabda_expand_numbers("10:00"), "ten", "10:00");
+assert_streq(shabda_expand_numbers("in 1999"), "in nineteen ninety nine", "a year after 'in'");
+assert_streq(shabda_expand_numbers("May 1905"), "May nineteen oh five", "after a month");
+assert_streq(shabda_expand_numbers("since 1900"), "since nineteen hundred", "x00");
+assert_streq(shabda_expand_numbers("the 1990s"), "the nineteen nineties", "a decade");
+assert_streq(shabda_expand_numbers("the 80s"), "the eighties", "a short decade");
+assert_streq(shabda_expand_numbers("1500 BC"), "fifteen hundred BC", "before an era");
+assert_streq(shabda_expand_numbers("1234"), "one thousand two hundred thirty four", "no date context: a quantity");
+assert_streq(shabda_expand_numbers("007"), "zero zero seven", "a leading zero: digit by digit (was seven)");
+
+test_group("accuracy: minus signs, ranges, hyphens");
+assert_streq(shabda_expand_numbers("10-20"), "ten to twenty", "a range (was ten negative twenty)");
+assert_streq(shabda_expand_numbers("from 1990\xE2\x80\x9399"), "from nineteen ninety to ninety nine",
+  "an en-dash range");
+assert_streq(shabda_expand_numbers("COVID-19"), "COVID nineteen", "a word-number hyphen (was negative)");
+assert_streq(shabda_expand_numbers("it is -5"), "it is negative five", "a minus sign");
+assert_streq(shabda_expand_numbers("5km"), "five km", "a unit glued on is its own word (was fivekm)");
+
+test_group("accuracy: sentence and phrase pauses");
+assert_streq(shabda_normalize("Really? Yes."), "really .pause yes .pause", "'?' ends a sentence");
+assert_streq(shabda_normalize("Wait... what?!"), "wait .pause what .pause", "an ellipsis, ?! : one pause each");
+assert_streq(shabda_normalize("one, . two"), "one .pause two", "a comma then a period: the period");
+assert_streq(shabda_normalize("salt & pepper"), "salt and pepper", "'&' is and");
+
+test_group("accuracy: abbreviations in context");
+assert_streq(shabda_normalize("Main St. near St. Paul"), "main street near saint paul", "St.: street, then saint");
+assert_streq(shabda_normalize("Elm Dr. is near Dr. Smith"), "elm drive is near doctor smith",
+  "Dr.: drive, then doctor");
+assert_streq(shabda_normalize("pears, etc. Then"), "pears ,pause et cetera .pause then", "etc. ends the sentence");
+assert_streq(shabda_normalize("etc. and so"), "et cetera and so", "etc. mid-sentence");
+assert_streq(shabda_normalize("Mr. Smith"), "mister smith", "a title's period ends nothing");
+assert_streq(shabda_normalize("e.g. this, i.e. that"), "for example this ,pause that is that",
+  "e.g. i.e.");
+assert_streq(shabda_normalize("the U.S. is big"), "the u-s is big", "a dotted initialism is spelled");
+assert_streq(shabda_normalize("at 5 p.m. Then"), "at five p-m .pause then", "p.m. ending a sentence");
+
+test_group("accuracy: acronyms read as words or spelled");
+# Through 3.1.2 any acronym starting with a vowel, or a consonant + vowel, was a word.
+assert_streq(shabda_expand_acronyms("NASA NATO SCUBA LASER AIDS OPEC IKEA NAFTA AIM"),
+  "nasa nato scuba laser aids opec ikea nafta aim", "words");
+assert_streq(shabda_expand_acronyms("IBM ATM ESPN USB FAQ NIH HIV"), "i-b-m a-t-m e-s-p-n u-s-b f-a-q n-i-h h-i-v",
+  "an impossible English coda: spelled");
+assert_streq(shabda_expand_acronyms("CIA CEO IOU NAACP"), "c-i-a c-e-o i-o-u n-a-a-c-p", "vowels in hiatus: spelled");
+assert_streq(shabda_expand_acronyms("USA UFO ICU"), "u-s-a u-f-o i-c-u", "three letters from a lone vowel: spelled");
+
+test_group("accuracy: combining marks that follow a letter stay in the word");
+# Through 3.1.2 normalize kept only Alphabetic code points, which the virama, nukta,
+# sukun, maddah and superscript alef are not: धर्मः became धरमः.
+assert_streq(shabda_normalize("धर्मः"), "धर्मः", "Sanskrit: the virama stays");
+assert_streq(shabda_normalize("बड़ा"), "बड़ा", "Hindi: ड + nukta stays");
+assert_streq(shabda_normalize("مَدْرَسَة"), "مَدْرَسَة", "Arabic: sukun stays");
+assert_streq(shabda_normalize("قُرْآن"), "قُرْآن", "Arabic: maddah stays");
+assert_streq(shabda_normalize("هٰذا"), "هٰذا", "Arabic: superscript alef stays");
+assert_streq(shabda_normalize("e\xCC\x81t\xC3\xA9"), "e\xCC\x81t\xC3\xA9", "a Latin combining acute stays");
+assert_streq(shabda_normalize("a \xE0\xA5\x8D b"), "a b", "a mark with no letter before it is dropped");
+
+test_group("3.1.3: e.g. and i.e. end no sentence");
+assert_streq(shabda_normalize("Rock, e.g. Elvis."), "rock ,pause for example elvis .pause", "e.g. before a name");
+assert_streq(shabda_normalize("One, i.e. Two."), "one ,pause that is two .pause", "i.e. before a capital");
+assert_streq(shabda_normalize("Pens, paper, etc. Then go."), "pens ,pause paper ,pause et cetera .pause then go .pause",
+  "etc. before a capital still ends the sentence");
 
 var rc = assert_summary();
 syscall(SYS_EXIT, rc);

@@ -46,8 +46,27 @@ bundle built + consumer-verified. See [`state.md`](state.md) for the per-module 
 
 - **Security audit** — an adversarial audit of the untrusted-input paths (normalize, SSML parser,
   rules) on the shabdakosh model has not yet run for shabda; track before the next release.
-- **Parity audit** — a systematic function-level parity pass over the 9 modules against `rust-old/`
-  (the shabdakosh port surfaced low-severity divergences this way).
+- **Accuracy sweep** — done in 3.1.3 over all 9 modules, with `rust-old/` as the list of capabilities
+  and accuracy as the oracle ([ADR-0002](../adr/0002-accuracy-over-rust-parity.md)); the 3.1.3
+  CHANGELOG entry gives each change and its measurement. Left open, each checked on the 3.1.3 tree:
+  - **Dictionary stress** (upstream, shabdakosh): its packed data keeps no stress digits, so English
+    stress is predicted even for dictionary words (87.9% of polysyllables right). It needs a
+    per-pronunciation stress vector from CMUdict's 0 / 1 / 2 and IPA ˈ ˌ, and an accessor such as
+    `shbdk_pronunciation_stress(p)`.
+  - **varna's inventory gaps** (upstream, varna), which validation reports: English /ɜ aɪ aʊ ɔɪ/,
+    Hindi /aː ɽ z q x ɣ/, Sanskrit h.
+  - **An allocator-taking constructor in svara and lookup in shabdakosh**, so shabda can drop its
+    `_shabda_event_new_a` and `_shabda_dict_entry_a` copies (upstream).
+  - **Stress outside English**: Spanish's orthographic rule (an accent wins; else a word ending in a
+    vowel, n or s stresses the penult, others the last), German stem stress with unstressed prefixes.
+  - **Number and abbreviation reading in the other languages** (it is English everywhere).
+  - **English rules**: 46.4% of held-out CMUdict words exact; most remaining errors are stress guesses
+    in the reduction pass. A word costs 17–22 µs through the rules.
+  - **Unvocalized Arabic** (short vowels, shadda, diphthongs in monosyllables such as بيت).
+  - **German lexical exceptions** (Mond, vielleicht, final-stress loans, compounds), Spanish x as the
+    jota (México), English 2-letter acronyms and AT&T, inflections missing from the dictionary.
+  - **SSML**: `<phoneme>`, `<sub>`, `<say-as>`, `<p>` / `<s>` breaks; intonation is computed and
+    discarded; the pause durations (0.15 / 0.30 / 0.04 s) have no source.
 
 ---
 

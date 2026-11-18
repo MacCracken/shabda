@@ -5,8 +5,12 @@
 # hard dep of the Cyrius port, mirroring shabdakosh's always-on inventory).
 #
 # Verifies that phoneme output from the G2P rules is valid for a target
-# language's phoneme inventory as defined by varna. Every IPA string below MUST
-# match the Rust oracle byte-for-byte — downstream tests assert exact strings.
+# language's phoneme inventory as defined by varna. Each IPA string below is the
+# symbol varna's inventory uses for the sound the rules mean by that phoneme, so an
+# accurate phoneme validates and an inaccurate one is reported. Accuracy decides,
+# not the Rust (ADR-0002): 3.1.2 retired the Rust's VOWEL_E stand-in for /iː/ (now
+# VOWEL_LONG_I) and /yː/ (now VOWEL_Y), so VOWEL_E is /e/ in every table, and spells
+# the Spanish tap ɾ and trill r, as IPA and varna 2.6.0 do (it was r / rr).
 #
 # DEP POSITION: svara + varna. The entry file (tests/validate.tcyr / main.cyr)
 # includes lib/svara.cyr (SVARA_PH_* ordinals + SVARA_CLASS_* + phoneme class
@@ -34,7 +38,7 @@
 fn shabda_phoneme_to_ipa(phoneme): cstring {
     # Vowels
     if (phoneme == SVARA_PH_VOWEL_A)       { return "ɑː"; }
-    if (phoneme == SVARA_PH_VOWEL_E)       { return "iː"; }
+    if (phoneme == SVARA_PH_VOWEL_E)       { return "e"; }    # not an English phoneme
     if (phoneme == SVARA_PH_VOWEL_I)       { return "ɪ"; }
     if (phoneme == SVARA_PH_VOWEL_O)       { return "oʊ"; }
     if (phoneme == SVARA_PH_VOWEL_U)       { return "uː"; }
@@ -93,15 +97,23 @@ fn shabda_phoneme_to_ipa(phoneme): cstring {
     return 0;
 }
 
-# Spanish (was `spanish_phoneme_to_ipa`).
+# Spanish (was `spanish_phoneme_to_ipa`). The symbols of varna's Castilian inventory
+# (Martínez-Celdrán et al. 2003). The Rust's English stand-ins for the vowels, ñ and the
+# jota are retired (ADR-0002); each now maps to its own IPA, which Spanish lacks, so a
+# stand-in that reaches validation is reported.
 #must_use
 fn shabda_spanish_phoneme_to_ipa(phoneme): cstring {
     # Spanish vowels (5 pure vowels)
-    if (phoneme == SVARA_PH_VOWEL_OPEN_A)  { return "a"; }
-    if (phoneme == SVARA_PH_VOWEL_OPEN_E)  { return "e"; }
-    if (phoneme == SVARA_PH_VOWEL_NEAR_I)  { return "i"; }
+    if (phoneme == SVARA_PH_VOWEL_A)       { return "a"; }
+    if (phoneme == SVARA_PH_VOWEL_E)       { return "e"; }
+    if (phoneme == SVARA_PH_VOWEL_I)       { return "i"; }
     if (phoneme == SVARA_PH_VOWEL_O)       { return "o"; }
-    if (phoneme == SVARA_PH_VOWEL_CUP_V)   { return "u"; }
+    if (phoneme == SVARA_PH_VOWEL_U)       { return "u"; }
+    # Not Spanish vowels (the Rust's stand-ins for a e i u)
+    if (phoneme == SVARA_PH_VOWEL_OPEN_A)  { return "ɑ"; }
+    if (phoneme == SVARA_PH_VOWEL_OPEN_E)  { return "ɛ"; }
+    if (phoneme == SVARA_PH_VOWEL_NEAR_I)  { return "ɪ"; }
+    if (phoneme == SVARA_PH_VOWEL_CUP_V)   { return "ʌ"; }
     # Plosives
     if (phoneme == SVARA_PH_PLOSIVE_P)     { return "p"; }
     if (phoneme == SVARA_PH_PLOSIVE_B)     { return "b"; }
@@ -113,37 +125,58 @@ fn shabda_spanish_phoneme_to_ipa(phoneme): cstring {
     if (phoneme == SVARA_PH_FRIC_F)        { return "f"; }
     if (phoneme == SVARA_PH_FRIC_TH)       { return "θ"; }
     if (phoneme == SVARA_PH_FRIC_S)        { return "s"; }
-    if (phoneme == SVARA_PH_FRIC_H)        { return "x"; }   # Spanish /x/ (jota)
+    # The jota /x/: svara has no velar fricative, the rules use its uvular χ
+    if (phoneme == SVARA_PH_FRIC_UVULAR_CH) { return "x"; }
+    if (phoneme == SVARA_PH_FRIC_H)        { return "h"; }   # not a Castilian phoneme
     # Nasals
     if (phoneme == SVARA_PH_NASAL_M)       { return "m"; }
     if (phoneme == SVARA_PH_NASAL_N)       { return "n"; }
-    if (phoneme == SVARA_PH_NASAL_NG)      { return "ɲ"; }   # ñ -> palatal nasal
+    if (phoneme == SVARA_PH_NASAL_PALATAL) { return "ɲ"; }   # ñ
+    if (phoneme == SVARA_PH_NASAL_NG)      { return "ŋ"; }   # an allophone of /n/, not a phoneme
     # Liquids & approximants
     if (phoneme == SVARA_PH_LATERAL_L)     { return "l"; }
-    if (phoneme == SVARA_PH_TAP_FLAP)      { return "r"; }   # Spanish tap
-    if (phoneme == SVARA_PH_APPROX_R)      { return "rr"; }  # Spanish trill
+    if (phoneme == SVARA_PH_LATERAL_PALATAL) { return "ʎ"; }
+    if (phoneme == SVARA_PH_TAP_FLAP)      { return "ɾ"; }   # Spanish tap (pero)
+    if (phoneme == SVARA_PH_TRILL_ALVEOLAR) { return "r"; }  # Spanish trill (perro, rojo)
+    if (phoneme == SVARA_PH_APPROX_R)      { return "ɹ"; }   # not a Spanish phoneme
     if (phoneme == SVARA_PH_APPROX_J)      { return "j"; }
     if (phoneme == SVARA_PH_APPROX_W)      { return "w"; }
-    # Affricate
+    # Affricates: /ʝ/ (ll, consonantal y) is the phoneme varna writes ɟ͡ʝ
     if (phoneme == SVARA_PH_AFFR_CH)       { return "t͡ʃ"; }
+    if (phoneme == SVARA_PH_FRIC_PALATAL_J) { return "ɟ͡ʝ"; }
     # No IPA in Spanish
     if (phoneme == SVARA_PH_SILENCE)       { return 0; }
     return 0;
 }
 
-# German (was `german_phoneme_to_ipa`).
+# German (was `german_phoneme_to_ipa`). The symbols of varna's German inventory. A tense
+# vowel is the long phoneme (eː oː uː øː iː yː), its lax partner the short one (ɛ ɔ ʊ œ ɪ).
+# The Rust's stand-ins are retired (ADR-0002): ɹ for /ʁ/, ɑ for /a/, æ for /aː/. Each now maps
+# to its own IPA, which German lacks, so a stand-in that reaches validation is reported.
 #must_use
 fn shabda_german_phoneme_to_ipa(phoneme): cstring {
     # Vowels (short)
     if (phoneme == SVARA_PH_VOWEL_NEAR_I)  { return "ɪ"; }
     if (phoneme == SVARA_PH_VOWEL_OPEN_E)  { return "ɛ"; }
-    if (phoneme == SVARA_PH_VOWEL_OPEN_A)  { return "a"; }
+    if (phoneme == SVARA_PH_VOWEL_A)       { return "a"; }
+    if (phoneme == SVARA_PH_VOWEL_OPEN_O)  { return "ɔ"; }
+    if (phoneme == SVARA_PH_VOWEL_NEAR_U)  { return "ʊ"; }
+    if (phoneme == SVARA_PH_VOWEL_OPEN_FRONT_ROUND_O) { return "œ"; }
     if (phoneme == SVARA_PH_VOWEL_SCHWA)   { return "ə"; }
     # Vowels (long)
-    if (phoneme == SVARA_PH_VOWEL_E)       { return "iː"; }
+    if (phoneme == SVARA_PH_VOWEL_LONG_I)  { return "iː"; }
+    if (phoneme == SVARA_PH_VOWEL_Y)       { return "yː"; }
+    if (phoneme == SVARA_PH_VOWEL_E)       { return "eː"; }
     if (phoneme == SVARA_PH_VOWEL_O)       { return "oː"; }
     if (phoneme == SVARA_PH_VOWEL_U)       { return "uː"; }
-    if (phoneme == SVARA_PH_VOWEL_ASH)     { return "aː"; }
+    if (phoneme == SVARA_PH_VOWEL_FRONT_ROUND_O) { return "øː"; }
+    # Not German vowels (the Rust's stand-ins for /a/ and /aː/)
+    if (phoneme == SVARA_PH_VOWEL_OPEN_A)  { return "ɑ"; }
+    if (phoneme == SVARA_PH_VOWEL_ASH)     { return "æ"; }
+    # German diphthongs, which varna's German inventory does not list yet  #skip-lint
+    if (phoneme == SVARA_PH_DIPH_AI)       { return 0; }
+    if (phoneme == SVARA_PH_DIPH_AU)       { return 0; }
+    if (phoneme == SVARA_PH_DIPH_OI)       { return 0; }
     # Plosives
     if (phoneme == SVARA_PH_PLOSIVE_P)     { return "p"; }
     if (phoneme == SVARA_PH_PLOSIVE_B)     { return "b"; }
@@ -157,55 +190,78 @@ fn shabda_german_phoneme_to_ipa(phoneme): cstring {
     if (phoneme == SVARA_PH_FRIC_S)        { return "s"; }
     if (phoneme == SVARA_PH_FRIC_Z)        { return "z"; }
     if (phoneme == SVARA_PH_FRIC_SH)       { return "ʃ"; }
+    if (phoneme == SVARA_PH_FRIC_PALATAL_C) { return "ç"; }   # ich-Laut
+    # The ach-Laut /x/: svara has no velar fricative, the rules use its uvular χ
+    if (phoneme == SVARA_PH_FRIC_UVULAR_CH) { return "x"; }
     if (phoneme == SVARA_PH_FRIC_H)        { return "h"; }
+    if (phoneme == SVARA_PH_FRIC_UVULAR_R) { return "ʁ"; }
     # Nasals
     if (phoneme == SVARA_PH_NASAL_M)       { return "m"; }
     if (phoneme == SVARA_PH_NASAL_N)       { return "n"; }
     if (phoneme == SVARA_PH_NASAL_NG)      { return "ŋ"; }
     # Affricates
+    if (phoneme == SVARA_PH_AFFR_TS)       { return "t͡s"; }
+    if (phoneme == SVARA_PH_AFFR_PF)       { return "p͡f"; }
     if (phoneme == SVARA_PH_AFFR_CH)       { return "t͡ʃ"; }
     # Approximants & lateral
     if (phoneme == SVARA_PH_APPROX_J)      { return "j"; }
     if (phoneme == SVARA_PH_LATERAL_L)     { return "l"; }
-    if (phoneme == SVARA_PH_APPROX_R)      { return "ʁ"; }
+    if (phoneme == SVARA_PH_APPROX_R)      { return "ɹ"; }   # not a German phoneme (was ʁ)
     # Not mapped
     if (phoneme == SVARA_PH_SILENCE)       { return 0; }
     return 0;
 }
 
-# Hindi (was `hindi_phoneme_to_ipa`).
+# Hindi (was `hindi_phoneme_to_ipa`). Each phoneme's sound in varna's spelling:
+# the short i u (svara's lax ɪ ʊ, which is how Hindi says them) are varna's i u;
+# श is varna's ɕ (svara's /ʃ/ is the sound); the tap is varna's r. A phoneme the
+# rules give that varna's Hindi lacks is still spelled as it sounds, so validation
+# reports varna's gap rather than hiding it: आ ɑː, ड़ ɽ, ज़ z, क़ q, ख़ x, ग़ ɣ.
 #must_use
 fn shabda_hindi_phoneme_to_ipa(phoneme): cstring {
     # Vowels
     if (phoneme == SVARA_PH_VOWEL_SCHWA)   { return "ə"; }
     if (phoneme == SVARA_PH_VOWEL_NEAR_I)  { return "i"; }
-    if (phoneme == SVARA_PH_VOWEL_E)       { return "iː"; }
-    if (phoneme == SVARA_PH_VOWEL_CUP_V)   { return "u"; }
+    if (phoneme == SVARA_PH_VOWEL_LONG_I)  { return "iː"; }
+    if (phoneme == SVARA_PH_VOWEL_E)       { return "e"; }
+    if (phoneme == SVARA_PH_VOWEL_NEAR_U)  { return "u"; }
     if (phoneme == SVARA_PH_VOWEL_U)       { return "uː"; }
-    if (phoneme == SVARA_PH_VOWEL_OPEN_E)  { return "e"; }
+    if (phoneme == SVARA_PH_VOWEL_OPEN_E)  { return "ɛː"; }
     if (phoneme == SVARA_PH_VOWEL_O)       { return "o"; }
-    if (phoneme == SVARA_PH_VOWEL_OPEN_A)  { return "ɛː"; }
+    if (phoneme == SVARA_PH_VOWEL_OPEN_A)  { return "ɑː"; }
     if (phoneme == SVARA_PH_VOWEL_OPEN_O)  { return "ɔː"; }
+    if (phoneme == SVARA_PH_VOWEL_CUP_V)   { return "ʌ"; }
     # Plosives (unaspirated only)
     if (phoneme == SVARA_PH_PLOSIVE_P)     { return "p"; }
     if (phoneme == SVARA_PH_PLOSIVE_B)     { return "b"; }
     if (phoneme == SVARA_PH_PLOSIVE_T)     { return "t̪"; }
     if (phoneme == SVARA_PH_PLOSIVE_D)     { return "d̪"; }
+    if (phoneme == SVARA_PH_PLOSIVE_RETRO_T) { return "ʈ"; }
+    if (phoneme == SVARA_PH_PLOSIVE_RETRO_D) { return "ɖ"; }
     if (phoneme == SVARA_PH_PLOSIVE_K)     { return "k"; }
     if (phoneme == SVARA_PH_PLOSIVE_G)     { return "ɡ"; }
+    if (phoneme == SVARA_PH_PLOSIVE_UVULAR_Q) { return "q"; }
     # Fricatives
     if (phoneme == SVARA_PH_FRIC_S)        { return "s"; }
-    if (phoneme == SVARA_PH_FRIC_H)        { return "ɦ"; }
+    if (phoneme == SVARA_PH_FRIC_Z)        { return "z"; }
+    if (phoneme == SVARA_PH_FRIC_GLOTTAL_H) { return "ɦ"; }
+    if (phoneme == SVARA_PH_FRIC_H)        { return "h"; }
     if (phoneme == SVARA_PH_FRIC_F)        { return "f"; }
     if (phoneme == SVARA_PH_FRIC_SH)       { return "ɕ"; }
+    if (phoneme == SVARA_PH_FRIC_RETRO_S)  { return "ʂ"; }
+    if (phoneme == SVARA_PH_FRIC_UVULAR_CH) { return "x"; }
+    if (phoneme == SVARA_PH_FRIC_UVULAR_R) { return "ɣ"; }
     # Nasals
     if (phoneme == SVARA_PH_NASAL_M)       { return "m"; }
     if (phoneme == SVARA_PH_NASAL_N)       { return "n"; }
     if (phoneme == SVARA_PH_NASAL_NG)      { return "ŋ"; }
+    if (phoneme == SVARA_PH_NASAL_PALATAL) { return "ɲ"; }
+    if (phoneme == SVARA_PH_NASAL_RETRO)   { return "ɳ"; }
     # Approximants & lateral
     if (phoneme == SVARA_PH_APPROX_J)      { return "j"; }
     if (phoneme == SVARA_PH_LATERAL_L)     { return "l"; }
     if (phoneme == SVARA_PH_TAP_FLAP)      { return "r"; }
+    if (phoneme == SVARA_PH_FLAP_RETRO)    { return "ɽ"; }
     if (phoneme == SVARA_PH_FRIC_V)        { return "ʋ"; }
     # Affricates
     if (phoneme == SVARA_PH_AFFR_CH)       { return "t͡ɕ"; }
@@ -215,17 +271,27 @@ fn shabda_hindi_phoneme_to_ipa(phoneme): cstring {
     return 0;
 }
 
-# Arabic (was `arabic_phoneme_to_ipa`).
+# Arabic (was `arabic_phoneme_to_ipa`). /a/ is VOWEL_A, and VOWEL_OPEN_A its backed
+# allophone beside an emphatic or uvular, both varna's a; the short i u (svara's
+# lax ɪ ʊ) are varna's i u, the long ones iː uː. The trill is r, and the tap, an
+# allophone of /r/, is r too. svara's uvular fricatives are varna's x ɣ (MSA
+# /x ɣ/). PLOSIVE_G is /ɡ/, which MSA lacks (it was ɣ, for غ, which the rules
+# gave as a stop).
 #must_use
 fn shabda_arabic_phoneme_to_ipa(phoneme): cstring {
+    if (phoneme == SVARA_PH_VOWEL_A)       { return "a"; }
     if (phoneme == SVARA_PH_VOWEL_OPEN_A)  { return "a"; }
     if (phoneme == SVARA_PH_VOWEL_NEAR_I)  { return "i"; }
-    if (phoneme == SVARA_PH_VOWEL_CUP_V)   { return "u"; }
+    if (phoneme == SVARA_PH_VOWEL_LONG_I)  { return "iː"; }
+    if (phoneme == SVARA_PH_VOWEL_NEAR_U)  { return "u"; }
+    if (phoneme == SVARA_PH_VOWEL_U)       { return "uː"; }
+    if (phoneme == SVARA_PH_VOWEL_CUP_V)   { return "ʌ"; }
     if (phoneme == SVARA_PH_PLOSIVE_B)     { return "b"; }
     if (phoneme == SVARA_PH_PLOSIVE_T)     { return "t"; }
     if (phoneme == SVARA_PH_PLOSIVE_D)     { return "d"; }
     if (phoneme == SVARA_PH_PLOSIVE_K)     { return "k"; }
-    if (phoneme == SVARA_PH_PLOSIVE_G)     { return "ɣ"; }
+    if (phoneme == SVARA_PH_PLOSIVE_G)     { return "ɡ"; }
+    if (phoneme == SVARA_PH_PLOSIVE_UVULAR_Q) { return "q"; }
     if (phoneme == SVARA_PH_FRIC_F)        { return "f"; }
     if (phoneme == SVARA_PH_FRIC_TH)       { return "θ"; }
     if (phoneme == SVARA_PH_FRIC_DH)       { return "ð"; }
@@ -233,9 +299,14 @@ fn shabda_arabic_phoneme_to_ipa(phoneme): cstring {
     if (phoneme == SVARA_PH_FRIC_Z)        { return "z"; }
     if (phoneme == SVARA_PH_FRIC_SH)       { return "ʃ"; }
     if (phoneme == SVARA_PH_FRIC_H)        { return "h"; }
+    if (phoneme == SVARA_PH_FRIC_PHARYNGEAL_H) { return "ħ"; }
+    if (phoneme == SVARA_PH_FRIC_PHARYNGEAL_A) { return "ʕ"; }
+    if (phoneme == SVARA_PH_FRIC_UVULAR_CH) { return "x"; }
+    if (phoneme == SVARA_PH_FRIC_UVULAR_R) { return "ɣ"; }
     if (phoneme == SVARA_PH_NASAL_M)       { return "m"; }
     if (phoneme == SVARA_PH_NASAL_N)       { return "n"; }
     if (phoneme == SVARA_PH_LATERAL_L)     { return "l"; }
+    if (phoneme == SVARA_PH_TRILL_ALVEOLAR) { return "r"; }
     if (phoneme == SVARA_PH_TAP_FLAP)      { return "r"; }
     if (phoneme == SVARA_PH_APPROX_W)      { return "w"; }
     if (phoneme == SVARA_PH_APPROX_J)      { return "j"; }
@@ -245,8 +316,11 @@ fn shabda_arabic_phoneme_to_ipa(phoneme): cstring {
     return 0;
 }
 
-# Sanskrit (was `sanskrit_phoneme_to_ipa`). Overrides a handful of vowels, then
-# DELEGATES every other phoneme to the Hindi table (Rust `other => hindi(...)`).
+# Sanskrit (was `sanskrit_phoneme_to_ipa`). Overrides the vowels and the dental
+# nasal, then DELEGATES every other phoneme to the Hindi table (Rust
+# `other => hindi(...)`). e o are long in Sanskrit (eː oː), ai au the diphthongs
+# ɐi ɐu, and न dental n̪, all as varna spells them. The visarga is h, which varna's
+# Sanskrit lacks.
 #must_use
 fn shabda_sanskrit_phoneme_to_ipa(phoneme): cstring {
     # Sanskrit schwa is /ɐ/ not /ə/
@@ -254,11 +328,15 @@ fn shabda_sanskrit_phoneme_to_ipa(phoneme): cstring {
     # Long vowels
     if (phoneme == SVARA_PH_VOWEL_OPEN_A)  { return "ɐː"; }
     if (phoneme == SVARA_PH_VOWEL_NEAR_I)  { return "i"; }
-    if (phoneme == SVARA_PH_VOWEL_E)       { return "iː"; }
-    if (phoneme == SVARA_PH_VOWEL_CUP_V)   { return "u"; }
+    if (phoneme == SVARA_PH_VOWEL_LONG_I)  { return "iː"; }
+    if (phoneme == SVARA_PH_VOWEL_NEAR_U)  { return "u"; }
     if (phoneme == SVARA_PH_VOWEL_U)       { return "uː"; }
-    if (phoneme == SVARA_PH_VOWEL_OPEN_E)  { return "eː"; }
+    if (phoneme == SVARA_PH_VOWEL_E)       { return "eː"; }
     if (phoneme == SVARA_PH_VOWEL_O)       { return "oː"; }
+    if (phoneme == SVARA_PH_DIPH_AI)       { return "ɐi"; }
+    if (phoneme == SVARA_PH_DIPH_AU)       { return "ɐu"; }
+    # The dental nasal
+    if (phoneme == SVARA_PH_NASAL_N)       { return "n̪"; }
     # Consonants — same as Hindi
     return shabda_hindi_phoneme_to_ipa(phoneme);
 }
