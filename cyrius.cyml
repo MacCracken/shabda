@@ -35,7 +35,7 @@ modules = [
 # hisab/goonj/naad are NOT stdlib — they are svara's git deps, auto-vendored by
 # `cyrius deps` via svara's manifest and `include`d in src/main.cyr.
 [deps]
-stdlib = ["syscalls", "string", "alloc", "str", "fmt", "vec", "io", "args", "assert", "fnptr", "atomic", "sakshi", "math", "ganita", "tagged", "hashmap", "bayan", "mmap", "bench", "slice", "result", "callback", "unicode"]
+stdlib = ["syscalls", "string", "alloc", "str", "fmt", "vec", "io", "args", "assert", "fnptr", "atomic", "sakshi", "math", "ganita", "tagged", "hashmap", "bayan", "mmap", "bench", "slice", "result", "callback", "unicode", "thread"]
 
 # shabdakosh — the pronunciation dictionary (shbdk_* symbols). Re-exported by the
 # Rust crate as shabda::arpabet and shabda::dictionary; shabda calls shbdk_arpabet_*
@@ -45,7 +45,7 @@ stdlib = ["syscalls", "string", "alloc", "str", "fmt", "vec", "io", "args", "ass
 # inert. `optional` is a toolchain workaround — see ADR-0001.
 [deps.shabdakosh]
 git = "https://github.com/MacCracken/shabdakosh.git"
-tag = "3.1.1"
+tag = "3.1.4"
 modules = ["dist/shabdakosh.cyr"]
 optional = true
 
@@ -54,7 +54,7 @@ optional = true
 # surface for speak(). Its dist bundle needs the hashmap + bayan folds (svara.deps).
 [deps.svara]
 git = "https://github.com/MacCracken/svara.git"
-tag = "3.6.3"
+tag = "3.14.0"
 modules = ["dist/svara.cyr"]
 
 # varna — phoneme inventories (phoneme_english/spanish/german/hindi/
@@ -64,5 +64,5 @@ modules = ["dist/svara.cyr"]
 # sidecar — self-contained on alloc/string/vec (already declared).
 [deps.varna]
 git = "https://github.com/MacCracken/varna.git"
-tag = "2.5.2"
+tag = "2.6.0"
 modules = ["dist/varna.cyr"]

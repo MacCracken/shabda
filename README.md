@@ -1,6 +1,6 @@
 # shabda
 
-[![version](https://img.shields.io/badge/version-3.1.1-blue.svg)](VERSION)
+[![version](https://img.shields.io/badge/version-3.1.2-blue.svg)](VERSION)
 [![license](https://img.shields.io/badge/license-GPL--3.0--only-green.svg)](LICENSE)
 [![language](https://img.shields.io/badge/language-CYRIUS-orange.svg)](cyrius.cyml)
 
@@ -27,6 +27,7 @@ phoneme-inventory validation.
 - **Heteronym disambiguation** — context triggers pick the right pronunciation for `read`, `lead`, `live`, `wind`, …
 - **Validation** — varna-backed phoneme-inventory and phonotactics validation with per-language IPA mapping (always compiled — no feature gate).
 - **Streaming & audio** — `shabda_convert_streaming` runs a word-by-word `fnptr` callback; `shabda_speak` renders straight to audio samples through svara in one call.
+- **Server use** — `shabda_convert_a` / `shabda_convert_with_a` draw every allocation from a caller's Allocator, so an arena reset per request gets all of it back. A conversion only reads the engine, so threads can share one, each converting into its own arena.
 - **Sakshi errors** — no panics; fallible functions return a sakshi packed-i64 code (`0 == ok`, test with `shabda_is_err`) and write their result to an out-param pointer.
 
 ## Quick Start
@@ -65,6 +66,13 @@ var opts = shabda_convert_options_new();
 opts = shabda_convert_options_with_emphasis(opts, 1);
 opts = shabda_convert_options_with_speaking_rate(opts, 100.0);
 shabda_convert_with(g, "HELLO world", opts, slot);
+
+# In a server: convert into an arena and reset it per request. Nothing reaches
+# the default heap, which never frees. One engine serves every thread; give
+# each thread its own arena.
+var arena = arena_allocator_growable(65536);
+reset_via(arena);                        # at the start of each request
+shabda_convert_a(arena, g, "hello world", slot);
 
 # SSML input.
 shabda_convert_ssml(g, "Hello <break time=\"300ms\"/> <emphasis level=\"strong\">world</emphasis>", slot);
@@ -144,14 +152,14 @@ is the `[lib].modules` list in [`cyrius.cyml`](cyrius.cyml). Regenerate it with
 
 Direct dependencies (git+tag; no `path`, which would make the tag inert):
 
-- **shabdakosh** 3.1.1 — pronunciation dictionary (`shbdk_*`; dict lookup, ARPABET/IPA, heteronym pronunciations).
-- **svara** 3.6.3 — `SVARA_PH_*` phoneme identities, `PhonemeEvent`, and the sequence/voice/render surface for `speak()`. Brings hisab 3.4.1 / naad 2.3.3 / goonj 2.3.1.
-- **varna** 2.5.2 — phoneme inventories, phonotactics, and script detection (self-contained on the stdlib folds).
+- **shabdakosh** 3.1.4 — pronunciation dictionary (`shbdk_*`; dict lookup, ARPABET/IPA, heteronym pronunciations).
+- **svara** 3.14.0 — `SVARA_PH_*` phoneme identities, `PhonemeEvent`, and the sequence/voice/render surface for `speak()`. Brings hisab 3.5.0 / naad 2.3.5 / goonj 2.3.2.
+- **varna** 2.6.0 — phoneme inventories, phonotactics, and script detection (self-contained on the stdlib folds).
 
 ## Tests & Benchmarks
 
-- **727 assertions** across 10 `.tcyr` suites — error (25), normalize (60), syllable (55), heteronym (23), ssml (66), rules (133), prosody (50), validate (127), engine (151), crate-level shabda (37). All green, plus a fuzz corpus (`cyrius fuzz`) of every shape that produced a defect, 400 random-byte rounds and 400 random-markup rounds.
-- **Benchmarks** (`tests/shabda.bcyr`, x86_64, cyrius 6.7.18, median of 8): `g2p_hello_world` 15.3 µs, `g2p_sentence` 60.3 µs, `speak_hello` 5.18 ms, `speak_sentence` 16.9 ms, `dict_english_construction` 7.41 ms, `dict_lookup_hit` 136 ns, `dict_lookup_miss` 155 ns.
+- **840 assertions** across 11 `.tcyr` suites — error (25), normalize (65), syllable (55), heteronym (23), ssml (66), rules (133), prosody (54), validate (127), engine (246), crate-level shabda (37), allocator (9, including four threads converting at once). All green, plus a fuzz corpus (`cyrius fuzz`) of every shape that produced a defect, 400 random-byte rounds and 400 random-markup rounds, each also checking that `shabda_convert_a` matches `shabda_convert` and keeps nothing on the default heap.
+- **Benchmarks** (`tests/shabda.bcyr`, x86_64, cyrius 6.7.18, median of 12): `g2p_hello_world` 17.0 µs, `g2p_sentence` 68.4 µs, `g2p_sentence_arena` (through `shabda_convert_a`) 64.5 µs, `speak_hello` 3.83 ms, `speak_sentence` 12.0 ms, `dict_english_construction` 8.64 ms, `dict_lookup_hit` 160 ns, `dict_lookup_miss` 176 ns. Figures from different sessions on this machine differ by up to about 20%; compare builds only within one session (see `docs/development/state.md`).
 
 ## Consumers
 

@@ -202,5 +202,27 @@ assert_eq(shabda_sentence_intonation(SHABDA_STYPE_QUESTION), SVARA_INTONATION_IN
 assert_eq(shabda_sentence_intonation(SHABDA_STYPE_EXCLAMATION), SVARA_INTONATION_EXCLAMATORY,
   "exclamation -> exclamatory");
 
+# ================================================================
+# 3.1.2: _shabda_event_new_a builds the record svara_phoneme_event_new builds.
+test_group("3.1.2: an event from an Allocator is svara's event, byte for byte");
+# svara's constructor takes no Allocator, so shabda builds the record itself. It is
+# compared over all sizeof(SvPhonemeEvent) bytes against svara's own, on the default
+# heap (zeroed memory: a field svara adds and sets differs here) and on an arena
+# filled with 0xA5 first (a field svara adds and leaves zero differs there).
+fn _ev_same(a, ph, dur, st): i64 {
+    var want = svara_phoneme_event_new(ph, dur, st);
+    var got = _shabda_event_new_a(a, ph, dur, st);
+    return memeq(want, got, sizeof(SvPhonemeEvent));
+}
+var ev_ar = arena_allocator(4096);
+var ev_blk = arena_alloc(allocator_state(ev_ar), 4096);
+memset(ev_blk, 0xA5, 4096);
+reset_via(ev_ar);
+var ev_d = f64_div(f64_from(3), f64_from(40));
+assert_eq(_ev_same(default_alloc(), SVARA_PH_VOWEL_A, ev_d, SVARA_STRESS_PRIMARY), 1, "a vowel, default heap");
+assert_eq(_ev_same(ev_ar, SVARA_PH_VOWEL_A, ev_d, SVARA_STRESS_PRIMARY), 1, "a vowel, dirtied arena");
+assert_eq(_ev_same(ev_ar, SVARA_PH_SILENCE, f64_from(0), SVARA_STRESS_UNSTRESSED), 1, "a silence, dirtied arena");
+assert_eq(_ev_same(ev_ar, SVARA_PH_PLOSIVE_K, ev_d, SVARA_STRESS_SECONDARY), 1, "a plosive, dirtied arena");
+
 var rc = assert_summary();
 syscall(SYS_EXIT, rc);

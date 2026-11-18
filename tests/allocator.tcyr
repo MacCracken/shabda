@@ -1,0 +1,200 @@
+# allocator.tcyr — where a conversion's memory goes, and who may convert at once.
+#
+# Filed by hoosh against 3.1.1 (docs/development/issues/archived/
+# 2026-11-11-conversion-allocates-on-the-default-heap.md): a server converts on
+# every request, Cyrius's default heap never frees, and a conversion kept about
+# 0.66 KB per input byte there for the life of the process. 3.1.2 adds
+# shabda_convert_a / shabda_convert_with_a, which draw every allocation from the
+# caller's Allocator, and builds the process-wide tables a conversion reads in
+# shabda_g2p_new, so a conversion writes nothing but its Allocator.
+#
+# Its own process, because group 1 has to run before any conversion: it checks that
+# the first conversion after shabda_g2p_new finds those tables already built.
+# Groups 3 and 4 convert on one engine from four threads at once and compare every
+# result with one computed alone first. Each worker counts its own mismatches, and
+# every reference is built before any thread starts.
+#
+# `thread` is declared in cyrius.cyml for this suite only.
+
+include "lib/hisab.cyr"
+include "lib/goonj.cyr"
+include "lib/naad.cyr"
+include "lib/svara.cyr"
+include "lib/varna.cyr"
+include "lib/shabdakosh.cyr"
+include "lib/thread.cyr"
+include "src/error.cyr"
+include "src/normalize.cyr"
+include "src/syllable.cyr"
+include "src/heteronym.cyr"
+include "src/ssml.cyr"
+include "src/rules.cyr"
+include "src/prosody.cyr"
+include "src/validate.cyr"
+include "src/engine.cyr"
+
+alloc_init();
+
+# FNV-1a over every event's phoneme, duration bits, stress and tone, and the count.
+fn _ev_hash(events): i64 {
+    var h = 1469598103934665603;
+    var n = vec_len(events);
+    var i = 0;
+    while (i < n) {
+        var ev = vec_get(events, i);
+        h = (h ^ SvPhonemeEvent_phoneme(ev)) * 1099511628211;
+        h = (h ^ SvPhonemeEvent_duration(ev)) * 1099511628211;
+        h = (h ^ SvPhonemeEvent_stress(ev)) * 1099511628211;
+        h = (h ^ SvPhonemeEvent_tone(ev)) * 1099511628211;
+        i = i + 1;
+    }
+    return (h ^ n) * 1099511628211;
+}
+
+# ---- group 1: the first conversion -------------------------------------------
+test_group("the first conversion after shabda_g2p_new keeps nothing on the default heap");
+# Before 3.1.2 the first conversion built the heteronym rules and varna's inventory
+# and phonotactics. Through shabda_convert_a they would have landed in the caller's
+# arena and been read again after it was reset.
+var EN = shabda_g2p_new(SHABDA_LANG_ENGLISH);
+var HI = shabda_g2p_new(SHABDA_LANG_HINDI);
+var g1_ar = arena_allocator_growable(1048576);
+var g1_slot = alloc(8);
+var g1_u = alloc_used();
+assert_eq(shabda_is_err(shabda_convert_a(g1_ar, EN, "I read it, and then I will read more.", g1_slot)), 0,
+  "English, heteronyms and pauses, converts");
+assert_eq(alloc_used() - g1_u, 0, "and keeps nothing on the default heap");
+reset_via(g1_ar);
+g1_u = alloc_used();
+assert_eq(shabda_is_err(shabda_convert_a(g1_ar, HI, "नमस्ते namaste", g1_slot)), 0, "Hindi converts");
+assert_eq(alloc_used() - g1_u, 0, "and keeps nothing on the default heap");
+
+# ---- the inputs groups 2-4 share ---------------------------------------------
+var NIN = 6;
+var TEXTS = alloc(NIN * 8);
+var OPTS = alloc(NIN * 8);
+var REFS = alloc(NIN * 8);
+var O_DEF = shabda_convert_options_new();
+store64(TEXTS, "Hello.");
+store64(TEXTS + 8, "The quick brown fox jumps over the lazy dog, and then it runs far away into the forest.");
+# The issue's 378-byte paragraph, built at run time: one literal would pass 120 columns.
+var PARA = str_builder_new();
+var PART = "the quick brown fox jumps over a lazy dog while seven workers render speech";
+str_builder_add_cstr(PARA, PART);
+str_builder_add_cstr(PARA, " one phoneme at a time and every reply streams to its client as it is made. ");
+str_builder_add_cstr(PARA, PART);
+str_builder_add_cstr(PARA, " one phoneme at a time and every reply streams to its client as it is made. ");
+str_builder_add_cstr(PARA, PART);
+str_builder_add_cstr(PARA, ".");
+store64(TEXTS + 16, str_cstr(str_builder_build(PARA)));
+store64(TEXTS + 24, "Dr. Smith read 1,024 NASA reports about the café.");
+store64(TEXTS + 32, "This is AMAZING and *really* good news!");
+store64(TEXTS + 40, "Speak slowly, please; the wind will wind.");
+store64(OPTS, O_DEF);
+store64(OPTS + 8, O_DEF);
+store64(OPTS + 16, O_DEF);
+store64(OPTS + 24, O_DEF);
+store64(OPTS + 32, shabda_convert_options_with_emphasis(O_DEF, 1));
+store64(OPTS + 40, shabda_convert_options_with_speaking_rate(O_DEF, f64_from(100)));
+var ri = 0;
+while (ri < NIN) {
+    var rslot = alloc(8);
+    var rerr = shabda_convert_with(EN, load64(TEXTS + ri * 8), load64(OPTS + ri * 8), rslot);
+    store64(REFS + ri * 8, _ev_hash(load64(rslot)));
+    ri = ri + 1;
+}
+
+# ---- group 2: a request loop -------------------------------------------------
+test_group("a request loop on one arena keeps nothing once the arena has grown");
+# A 4 KB first chunk, so the first requests chain more from the default heap. After
+# one pass over the inputs the chain is as long as it gets: arena_reset keeps it.
+var g2_ar = arena_allocator_growable(4096);
+var g2_slot = alloc(8);
+var g2_i = 0;
+while (g2_i < NIN) {
+    reset_via(g2_ar);
+    var w0 = shabda_convert_with_a(g2_ar, EN, load64(TEXTS + g2_i * 8), load64(OPTS + g2_i * 8), g2_slot);
+    g2_i = g2_i + 1;
+}
+var g2_cap = arena_capacity_total(allocator_state(g2_ar));
+var g2_u = alloc_used();
+var g2_bad = 0;
+g2_i = 0;
+while (g2_i < 300) {
+    var k = g2_i % NIN;
+    reset_via(g2_ar);
+    var e2 = shabda_convert_with_a(g2_ar, EN, load64(TEXTS + k * 8), load64(OPTS + k * 8), g2_slot);
+    if (shabda_is_err(e2) == 1) { g2_bad = g2_bad + 1; }
+    elif (_ev_hash(load64(g2_slot)) != load64(REFS + k * 8)) { g2_bad = g2_bad + 1; }
+    g2_i = g2_i + 1;
+}
+assert_eq(g2_bad, 0, "300 requests give the events a lone conversion gives");
+assert_eq(alloc_used() - g2_u, 0, "and keep nothing on the default heap");
+assert_eq(arena_capacity_total(allocator_state(g2_ar)), g2_cap, "nor grow the arena");
+
+# ---- groups 3 and 4: four threads on one engine ------------------------------
+var NT = 4;
+var BAD = alloc(NT * 8);
+var ARENAS = alloc(NT * 8);
+
+# Run `fp` on NT threads with args 0..NT-1, wait for all, and return the summed
+# mismatch counts they left in BAD.
+fn _run(fp): i64 {
+    var k = 0;
+    while (k < NT) { store64(BAD + k * 8, 0); k = k + 1; }
+    var ts = alloc(NT * 8);
+    k = 0;
+    while (k < NT) { store64(ts + k * 8, thread_create(fp, k)); k = k + 1; }
+    k = 0;
+    while (k < NT) { thread_join(load64(ts + k * 8)); k = k + 1; }
+    var bad = 0;
+    k = 0;
+    while (k < NT) { bad = bad + load64(BAD + k * 8); k = k + 1; }
+    return bad;
+}
+
+# Worker `arg`: 150 conversions on its own arena, reset before each, starting at a
+# different input from the other workers; leaves its mismatch count in BAD.
+fn _worker_a(arg): i64 {
+    var ar = load64(ARENAS + arg * 8);
+    var slot = alloc(8);
+    var bad = 0;
+    var i = 0;
+    while (i < 150) {
+        var k = (i + arg) % NIN;
+        reset_via(ar);
+        var e = shabda_convert_with_a(ar, EN, load64(TEXTS + k * 8), load64(OPTS + k * 8), slot);
+        if (shabda_is_err(e) == 1) { bad = bad + 1; }
+        elif (_ev_hash(load64(slot)) != load64(REFS + k * 8)) { bad = bad + 1; }
+        i = i + 1;
+    }
+    store64(BAD + arg * 8, bad);
+    return 0;
+}
+
+# Worker `arg`: 40 conversions through the default heap; leaves its mismatch count.
+fn _worker_heap(arg): i64 {
+    var slot = alloc(8);
+    var bad = 0;
+    var i = 0;
+    while (i < 40) {
+        var k = (i + arg) % NIN;
+        var e = shabda_convert_with(EN, load64(TEXTS + k * 8), load64(OPTS + k * 8), slot);
+        if (shabda_is_err(e) == 1) { bad = bad + 1; }
+        elif (_ev_hash(load64(slot)) != load64(REFS + k * 8)) { bad = bad + 1; }
+        i = i + 1;
+    }
+    store64(BAD + arg * 8, bad);
+    return 0;
+}
+
+test_group("four threads convert at once on one engine, each on its own arena");
+var ai = 0;
+while (ai < NT) { store64(ARENAS + ai * 8, arena_allocator_growable(1048576)); ai = ai + 1; }
+assert_eq(_run(&_worker_a), 0, "600 conversions, each the events one thread alone gives");
+
+test_group("four threads convert at once on one engine through the default heap");
+assert_eq(_run(&_worker_heap), 0, "160 conversions, each the events one thread alone gives");
+
+var rc = assert_summary();
+syscall(SYS_EXIT, rc);

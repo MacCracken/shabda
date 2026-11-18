@@ -1,5 +1,180 @@
 # Changelog
 
+## [3.1.2] — 2026-11-17
+
+Dependency release, plus the allocator-taking conversion hoosh asked for. `shabdakosh` 3.1.1 ->
+**3.1.4**, `svara` 3.6.3 -> **3.14.0**, `varna` 2.5.2 -> **2.6.0**, and transitively `hisab` 3.4.1
+-> **3.5.0**, `naad` 2.3.3 -> **2.3.5**, `goonj` 2.3.1 -> **2.3.2**. Each is its dep's newest tag and
+pins cyrius **6.7.18**, which stays the pin: it is still cyrius's newest tag. sakshi stays 2.5.10, now
+as the stdlib leaf only. svara 3.6.4 dropped its sakshi package, so `cyrius.lock` commit-pins 5 deps,
+not 6: the same five commits shabdakosh 3.1.4's lock carries. `lib/` and `cyrius.lock` were regenerated
+from scratch. Every vendored bundle is byte-identical to its tag's `dist/`, every stdlib leaf to the
+6.7.18 snapshot, `cyrius deps --verify` passes 61 of 61, and `cyrius deps --locked` is clean.
+
+No function is removed and no signature changes. Two are added: `shabda_convert_a` and
+`shabda_convert_with_a`. Conversion output changes for one ARPABET vowel, inherited from shabdakosh
+(see *Changed*). **840 assertions / 11 suites** (727 / 10 in 3.1.1). `cyrius fuzz` passes plain,
+`--poison` and `--bounds`, and `cyrius audit` exits 0.
+
+### Added — allocator-taking conversion ([issue](docs/development/issues/archived/2026-11-11-conversion-allocates-on-the-default-heap.md), hoosh)
+
+- **`shabda_convert_a(a, e, text, out_events)` and `shabda_convert_with_a(a, e, text, options,
+  out_events)`** draw every allocation from Allocator `a`, in the stdlib's `vec_new_a` / `alloc_via`
+  convention: the events vec, the events, and everything the conversion builds on the way. A caller
+  that passes an arena and resets it after reading the events gets all of it back. On the issue's three
+  inputs a conversion keeps **0 bytes** on the default heap, and its arena holds exactly the bytes the
+  default-heap form keeps there (4,608 / 60,744 / 250,760). The engine stays where `shabda_g2p_new` put
+  it.
+- **The existing forms are unchanged.** `shabda_convert` and `shabda_convert_with` are now one-line
+  wrappers over `default_alloc()`, and they allocate exactly what 3.1.1 did: the same three figures,
+  and output byte-identical across the differential below.
+- **How.** Each of the 73 functions `shabda_convert_with` reaches that allocates, directly or through a
+  callee, got an `_a` twin that takes the Allocator first: rules 25, normalize 25, engine 10, validate
+  5, syllable 3, prosody 3, heteronym 2. All 73 twins are private apart from the two above. The 26
+  public functions and 7 private ones that still have callers outside a conversion (SSML, streaming)
+  stay as wrappers. The other 40 private ones had no caller left and are gone. The twin keeps the
+  original body, with `alloc` -> `alloc_via(a, …)`, `vec_new()` -> `vec_new_a(a)`, and so on, and the
+  rewrite touched code only, never strings or comments.
+- **Where a dependency allocated on the default heap with no `_a` form**, shabda stands in:
+  - `shbdk_dict_lookup` / `shbdk_dict_lookup_all` allocate a 16-byte `Str` key on every call.
+    `_shabda_dict_entry_a` takes shabdakosh's lowercase fast path with the key from `a`, user overlay
+    first, then the base map, through shabdakosh's public accessors. A word that is not already
+    lowercase goes to `shbdk_dict_lookup_entry` itself. `shabda_normalize` lowers every letter, so a
+    conversion never takes that branch, and the fuzz harness checks it on random bytes.
+  - `svara_phoneme_event_new` takes no Allocator. `_shabda_event_new_a` builds the same record through
+    svara's public struct (`sizeof(SvPhonemeEvent)`, svara's setters). `tests/prosody.tcyr` compares
+    the two byte for byte, on the default heap and on an arena filled with 0xA5, so a field svara adds
+    fails a test.
+  - stdlib `str_cstr` and `str_lower_cstr` copy onto the default heap: `_shabda_str_cstr_a` and
+    `_shabda_ascii_lower_a`. `vec_push` and `str_builder_add_cstr` end the process on a refused grow,
+    while their `_a` forms return -1: `_shabda_vec_push_a` and `_shabda_sb_add_cstr_a` keep the ending
+    and the message.
+- **`shabda_g2p_new` builds the process-wide tables a conversion reads**: the heteronym rules, and
+  varna's inventory and phonotactics for the language. Through 3.1.1 the first conversion built them,
+  so through `shabda_convert_a` they would have landed in the caller's arena and been read again after
+  it was reset. The English engine grows from 6,139,024 to 6,147,200 bytes. Process memory overall
+  does not change, since the first conversion no longer builds them.
+- **An arena reused after a reset is not zeroed**, unlike the default heap. Every allocation a
+  conversion makes was checked to be written before it is read, and the tests run each conversion on
+  an arena filled with 0xA5 first.
+- **A refused allocation is not an error.** A refused vec or builder grow ends the process, as
+  `vec_push` does. Pass an Allocator that grows, such as `arena_allocator_growable()`. A growable arena
+  chains chunks from the default heap until it reaches its high-water mark, and then keeps nothing.
+- **Not covered:** `shabda_convert_ssml`, `shabda_convert_streaming`, `shabda_speak` and
+  `shabda_speak_with` still allocate on the default heap.
+- **Threads.** The issue asked whether a conversion writes the engine. It does not. A conversion reads
+  the engine, the tables above and the dictionary, and writes only its Allocator and the event vec it
+  returns. So two threads can convert at once on one engine, each with its own Allocator, since an
+  arena is not thread-safe. The default-heap forms are safe too, because `alloc` is locked. Changing
+  the dictionary (`shbdk_dict_insert*` through `shabda_g2p_dictionary_mut`) while another thread
+  converts is still the caller's to serialize.
+
+### Fixed
+
+- **A refused builder grow wrote past the buffer.** `_shabda_sb_reserve` returned 0 when the larger
+  buffer was refused, and each push then wrote past the old one anyway: one byte past it for
+  `_shabda_sb_push_byte`, the whole string for `_shabda_sb_push_cstr`. On the default heap only a 2 GiB
+  request or an mmap failure got there; a fixed-size arena gets there as soon as it fills. Reserve now
+  returns -1 and the pushes stop, which gives the truncated build the comment there always described.
+  `tests/normalize.tcyr` places a canary after a 16-byte buffer in a 48-byte arena, and it survives
+  20 pushes.
+
+### Changed — output, inherited from shabdakosh 3.1.3
+
+- **ARPABET `IY` is now /iː/ (`SVARA_PH_VOWEL_LONG_I`, 14), not /e/ (`SVARA_PH_VOWEL_E`, 1).** A
+  differential over 10,855 inputs (the 10,617 words of shabdakosh's `data/cmudict-5k.txt`, 39
+  sentences under default, emphasis, 200 wpm, timing-profile and streaming options, 8 SSML documents
+  and 35 inputs in the other five languages) was built under 3.1.1 and 3.1.2. 2,389 rows differ, and in
+  every one the only change is phoneme 1 -> 14: durations and stress are bit-identical. That is 2,322
+  of the 10,617 words, and every other row is byte-identical.
+- **The letter-to-sound rules still give /e/ for those spellings**, as `rust-old/` does: English
+  "ee" / "ea", German "ie", Hindi ई / ी. So a word in the dictionary and one that is not can now give
+  different vowels for the same spelling. This release does not change the rules.
+
+### Changed — validation, inherited from varna 2.6.0
+
+- **varna's Spanish inventory now spells the tap `ɾ` and the trill `r`.** It spelled them `r` and `rr`,
+  which is orthography, not IPA. shabda's Spanish IPA table (`shabda_spanish_phoneme_to_ipa`) keeps the
+  oracle's `r` / `rr`, which `tests/validate.tcyr` pins. So the public `shabda_validate_phonemes_for(…,
+  SHABDA_LANG_SPANISH)` now flags every trill as missing from the inventory and reads the tap as the
+  trill. Over the 10,617 words' Spanish rule output, 157 gain an `rr` flag and nothing else changes. A
+  conversion discards validation results, so its output does not change. English, German, Hindi,
+  Arabic and Sanskrit validation, and English phonotactics, are identical to 3.1.1 over the same words.
+
+### Changed
+
+- **svara 3.9.0–3.14.0 changed synthesis**, so `shabda_speak` output changes too. It was not compared
+  sample for sample here. The suites' speak checks pass, and both speak rows run 33–38% faster (see
+  *Benchmarks*).
+- **`cyrius.cyml` declares `thread`** for `tests/allocator.tcyr` alone. Nothing in `src/` or the
+  bundle creates a thread. `lib/` gains the 8 thread and sync leaves, and the lock hashes 61 files.
+- **`dist/shabda.cyr`** gains the `_a` forms. `cyrius distlib` now lists 10 `shbdk_*` names for the
+  consumer to supply, up from 5. They are all shabdakosh's dictionary surface: `shbdk_dict_new`,
+  `shbdk_dict_english`, `shbdk_dict_lookup`, `shbdk_pronunciation_phonemes`, plus `shbdk_is_lower_cstr`,
+  `shbdk_dict_lookup_entry`, `shbdk_dict_entries`, `shbdk_dict_user_entries`,
+  `shbdk_dict_entry_primary_phonemes` and `shbdk_dict_entry_all`, which the `_a` lookup calls.
+  `shbdk_dict_lookup_all` leaves the list, because the conversion now reads the entry itself. There
+  is still no `dist/shabda.deps`. The repro builds against the bundle as a consumer would.
+- **`build/shabda` grew from 4,842,184 to 5,570,456 bytes.** Unreachable functions are 4.19 MB of it
+  (8,349 fns), up from 3.62 MB (7,715), most of that from the new dependency versions.
+- **`src/rules.cyr`**: two locals named `a` are renamed (`ca` in `_shabda_english_match`, `ch` in
+  `_shabda_german_double`), since `a` is now the Allocator. 20 lines that the longer push call took
+  past 120 columns are wrapped.
+
+### Tests
+
+- **`tests/allocator.tcyr`** (new, 9 assertions). It runs in its own process, because its first group
+  must come before any conversion: the first `shabda_convert_a` after `shabda_g2p_new` keeps nothing on
+  the default heap. Then 300 requests on one reset arena keep nothing there and never grow the arena.
+  Then four threads convert at once on one engine, 600 times on their own arenas and 160 times through
+  the default heap, and every result matches one converted alone. A scratch soak at 13,600 concurrent
+  conversions found no mismatch.
+- **`tests/engine.tcyr`** (+95). 16 inputs through `shabda_convert_with_a` on a 0xA5-filled arena:
+  pauses, abbreviations, numbers, acronyms, heteronyms, foreign words, unknown words, a phonotactic
+  violation, emphasis, a speaking rate, a timing profile, and all five other languages in both scripts.
+  Each gives the default-heap form's events, keeps 0 default-heap bytes, and holds exactly the bytes the
+  default-heap form kept. Also `shabda_convert_a`, an empty input, and the `_a` lookup against
+  shabdakosh's, user overlay included.
+- **`tests/prosody.tcyr`** (+4): the event record against svara's. **`tests/normalize.tcyr`** (+5):
+  the builder canary under *Fixed*.
+- **`cyrius fuzz`**: every case also converts through `shabda_convert_a`, twice on a dirtied arena, and
+  must match `shabda_convert` and keep nothing on the default heap the second time.
+- **Mutants**: five changes to the new code each fail a test: no table warm-up in `shabda_g2p_new`, the
+  event's tone left unset, the lookup key on the default heap, the reserve fix undone, and one vec on
+  the default heap.
+- **Differential**: the 10,808 convert inputs above go through both forms: every event is identical,
+  no input keeps a default-heap byte through `shabda_convert_with_a`, and every arena holds exactly what
+  the default-heap form kept. A first run found 249 words, each with a phonotactic violation, whose
+  message `str_cstr` had copied onto the default heap. That is fixed, and pinned in
+  `tests/engine.tcyr`.
+
+### Benchmarks
+
+`tests/shabda.bcyr`, x86_64. Medians of **8** alternated runs of three builds in one session: 3.1.1,
+the new deps with 3.1.1's source, and 3.1.2. This session ran slow: 3.1.1's own rows read about 19%
+above the figures recorded for it, so compare within the table only.
+
+| Benchmark | 3.1.1 | new deps, 3.1.1 source | 3.1.2 |
+|-----------|-------|------------------------|-------|
+| g2p_hello_world | 18.22 µs | 18.45 µs | 18.95 µs |
+| g2p_sentence | 72.77 µs | 73.18 µs | 75.27 µs |
+| g2p_sentence_arena (new) | — | — | 69.69 µs |
+| speak_hello | 6.32 ms | 4.21 ms | 4.18 ms |
+| speak_sentence | 20.71 ms | 12.89 ms | 12.94 ms |
+| dict_english_construction | 9.40 ms | 9.34 ms | 9.56 ms |
+| dict_lookup_hit | 164 ns | 172 ns | 167 ns |
+| dict_lookup_miss | 193 ns | 192 ns | 190 ns |
+
+- **The deps make speak 33–38% faster** (svara 3.8.x's per-sample work) and leave the rest within noise.
+- **The `_a` refactor costs the default-heap forms at most a few percent.** In 12 more alternated runs of
+  the last two builds, in a quieter stretch, `g2p_hello_world` read 16.92 against 17.00 µs (+0.5%) and
+  `g2p_sentence` 66.53 against 68.43 µs (+2.9%). Their interquartile ranges overlap, and
+  `dict_lookup_hit`, whose code is the same in both builds, moved +2.2%. Each raw allocation now goes
+  through `alloc_via`, which adds one indirect call.
+- **`g2p_sentence_arena`**, the new row, converts the `g2p_sentence` sentence through `shabda_convert_a`
+  into an arena reset before each conversion. It read 64.47 µs in those 12 runs: 3–6% faster than either
+  default-heap form.
+
 ## [3.1.1] — 2026-11-07
 
 Toolchain and dependency release, plus an audit cleanup. `cyrius` 6.7.9 -> **6.7.18**,

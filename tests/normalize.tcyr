@@ -132,5 +132,22 @@ test_group("3.0.3: ALL-CAPS emphasis reaches non-ASCII scripts");
 var gem = shabda_normalize_with_emphasis("\xCE\x94\xCE\x95\xCE\x96 ok");
 assert_eq(strstr(gem, SHABDA_EMPHASIS_START) >= 0, 1, "Greek ALL-CAPS gets an emphasis marker");
 
+test_group("3.1.2: a refused builder grow stops the push instead of overflowing");
+# Through 3.1.1 _shabda_sb_reserve returned 0 when the larger buffer was refused,
+# and every push then wrote past the old one. An arena of exactly the builder's
+# header and 16-byte buffer plus an 8-byte canary refuses the first grow.
+var sb_ar = arena_allocator(48);
+var sb = _shabda_sb_new_a(sb_ar);
+var canary = alloc_via(sb_ar, 8);
+store64(canary, 0x5A5A5A5A5A5A5A5A);
+var sbi = 0;
+while (sbi < 20) { _shabda_sb_push_byte_a(sb_ar, sb, 120); sbi = sbi + 1; }
+assert_eq(load64(canary), 0x5A5A5A5A5A5A5A5A, "push_byte leaves the next allocation alone");
+assert_eq(_shabda_sb_len(sb), 15, "the build stops at the 16-byte buffer, NUL included");
+assert_eq(strlen(_shabda_sb_cstr(sb)), 15, "and stays NUL-terminated");
+_shabda_sb_push_cstr_a(sb_ar, sb, "more than fits");
+assert_eq(load64(canary), 0x5A5A5A5A5A5A5A5A, "push_cstr leaves it alone too");
+assert_eq(_shabda_sb_len(sb), 15, "push_cstr adds nothing it has no room for");
+
 var rc = assert_summary();
 syscall(SYS_EXIT, rc);

@@ -5,6 +5,13 @@
 
 ## Version
 
+**3.1.2** (2026-11-17): dependency release plus the allocator-taking conversion. shabdakosh 3.1.4,
+svara 3.14.0, varna 2.6.0, with hisab 3.5.0 / naad 2.3.5 / goonj 2.3.2 coming in transitively and
+sakshi 2.5.10 as the stdlib leaf, each its dep's newest tag; cyrius stays 6.7.18. Adds
+`shabda_convert_a` / `shabda_convert_with_a` (hoosh's issue, now archived): every allocation from the
+caller's Allocator, 0 bytes on the default heap. No function removed, no signature changed. Output
+changes for ARPABET `IY`, now /iː/ (shabdakosh 3.1.3). Fixes a builder overflow on a refused grow.
+
 **3.1.1** (2026-11-07): toolchain and dependency release plus an audit cleanup. cyrius 6.7.18,
 shabdakosh 3.1.1, svara 3.6.3, varna 2.5.2, with hisab 3.4.1 / naad 2.3.3 / goonj 2.3.1 /
 sakshi 2.5.10 coming in transitively, each its dep's newest tag. No behavior, API or output
@@ -40,13 +47,14 @@ lines of Rust preserved at `rust-old/` as the parity oracle.
 
 ## Toolchain
 
-- **Cyrius pin**: `6.7.18` (in `cyrius.cyml [package].cyrius`). At 3.1.0 and 3.1.1, `lib/` and
-  `cyrius.lock` were regenerated from scratch, with `cyrius deps` run into an empty `lib/` and no
-  lock. Re-resolving into an existing lock appends new commit rows beside the old ones instead of
-  replacing them.
-- **6.7.18 pin set**: svara 3.6.3, varna 2.5.2, hisab 3.4.1, naad 2.3.3 and goonj 2.3.1 are each
-  dep's newest tag, and all pin exactly 6.7.18. svara's manifest supplies the hisab, naad and goonj
-  versions. shabdakosh 3.1.1 is built on this same set, and its lock has the same six commit pins.
+- **Cyrius pin**: `6.7.18` (in `cyrius.cyml [package].cyrius`), still cyrius's newest tag at
+  3.1.2. At 3.1.0, 3.1.1 and 3.1.2, `lib/` and `cyrius.lock` were regenerated from scratch, with
+  `cyrius deps` run into an empty `lib/` and no lock. Re-resolving into an existing lock appends new
+  commit rows beside the old ones instead of replacing them.
+- **6.7.18 pin set** (3.1.2): svara 3.14.0, varna 2.6.0, hisab 3.5.0, naad 2.3.5 and goonj 2.3.2
+  are each dep's newest tag, and all pin exactly 6.7.18. svara's manifest supplies the hisab, naad and
+  goonj versions. shabdakosh 3.1.4 is built on this same set, and its lock has the same five commit
+  pins. sakshi has no commit pin since svara 3.6.4 dropped its package: it is the stdlib leaf.
 - **`cyrius tests` is gone** (removed in 6.7.12). Run every suite with `cyrius test tests`, or
   with the bare `cyrius test`, which CI runs.
 - **6.7.x meaning changes**: `src/`, `tests/` and `fuzz/` hold none of the constructs whose meaning
@@ -61,6 +69,24 @@ lines of Rust preserved at `rust-old/` as the parity oracle.
   the suites would vendor whatever the sibling has checked out.
 - **`cyrius audit` exits 0** since 3.1.1, with fmt, lint, docs, tests and bench all clean. It had
   failed from 3.0.5 through 3.1.0. CI does not run audit, so check it before a release.
+
+## Allocators (3.1.2)
+
+- **`shabda_convert_a` / `shabda_convert_with_a`** take an Allocator first and draw every allocation
+  from it, the events included. `shabda_convert` / `shabda_convert_with` are wrappers over
+  `default_alloc()` and allocate exactly what 3.1.1 did. CLAUDE.md states the rule new code on the
+  convert path must keep.
+- **No `_a` form yet** for `shabda_convert_ssml`, `shabda_convert_streaming`, `shabda_speak` or
+  `shabda_speak_with`. They allocate on the default heap.
+- **Stand-ins for dependencies without an `_a` form**: `_shabda_dict_entry_a` (shabdakosh's lookup
+  allocates its `Str` key), `_shabda_event_new_a` (svara's event constructor), `_shabda_str_cstr_a`
+  and `_shabda_ascii_lower_a` (stdlib copies). An `_a` form upstream in shabdakosh or svara would let
+  the first two go.
+- **Shared tables are built in `shabda_g2p_new`**: the heteronym rules, varna's inventory and
+  phonotactics. A conversion reads the engine and writes only its Allocator and the event vec, so
+  threads can share one engine, each with its own arena (`tests/allocator.tcyr`, four threads).
+- **A refused allocation ends the process** on a vec or builder grow, as `vec_push` does. Callers
+  should pass a growable arena.
 
 ## Port decisions (Rust → Cyrius)
 
@@ -123,21 +149,28 @@ Leaf-first order (`src/main.cyr` / `[lib].modules`):
 
 ## Tests
 
-**727 assertions** across 10 `.tcyr` suites + the fuzz harness — all green:
+**840 assertions** across 11 `.tcyr` suites + the fuzz harness — all green:
 
 | Suite | Assertions |
 |-------|-----------|
 | error | 25 |
-| normalize | 60 |
+| normalize | 65 |
 | syllable | 55 |
 | heteronym | 23 |
 | ssml | 66 |
 | rules | 133 |
-| prosody | 50 |
+| prosody | 54 |
 | validate | 127 |
-| engine | 151 |
+| engine | 246 |
 | shabda (crate-level) | 37 |
+| allocator | 9 |
 | fuzz (`shabda.fcyr`) | corpus + 800 generated cases |
+
+`allocator.tcyr` is its own process because its first group must run before any
+conversion. It converts from four threads at once, and `thread` is declared in
+`cyrius.cyml` for it alone. Since 3.1.2 every fuzz case also converts through
+`shabda_convert_a` on a dirtied arena and must match `shabda_convert` and keep nothing
+on the default heap. `cyrius fuzz`, `--poison` and `--bounds` all pass.
 
 Run one suite with `cyrius test tests/<mod>.tcyr`, all with `cyrius test tests`, the
 fuzz corpus with `cyrius fuzz`. Every entry file exits through the target-resolved
@@ -147,27 +180,33 @@ read as green.
 
 ## Benchmarks
 
-`tests/shabda.bcyr` (x86_64), run with `cyrius bench tests/shabda.bcyr`. Medians of **8** runs,
-with 3.1.0 (cyrius 6.7.9, its `lib/`) and 3.1.1 (cyrius 6.7.18, the pins below) alternated in one
-session. Each delta is toolchain and dependencies together, not either one alone. Every row's
-range overlaps between the two versions. The lookup rows are sub-µs, and the stdlib hashmap seeds
-itself per process, so they move from run to run: 3.1.1's `dict_lookup_miss` ranged 148–525 ns,
-and three runs alone made it look 27 % slower. Use at least 5 alternated rounds before calling
-a lookup row changed.
+`tests/shabda.bcyr` (x86_64), run with `cyrius bench tests/shabda.bcyr`. Medians of **8** runs of
+three builds alternated in one session (3.1.2): 3.1.1, the 3.1.2 deps with 3.1.1's source, and 3.1.2.
+That session ran slow: 3.1.1's own rows read about 19% above the figures recorded at 3.1.1, so compare
+within a table, never across sessions. The lookup rows are sub-µs, and the stdlib hashmap seeds itself
+per process, so they move from run to run: use at least 5 alternated rounds before calling a lookup
+row changed.
 
-| Benchmark | 3.1.0 | 3.1.1 |
-|-----------|-------|-------|
-| g2p_hello_world | 15.29 µs | 15.32 µs |
-| g2p_sentence | 60.58 µs | 60.34 µs |
-| speak_hello | 5.30 ms | 5.18 ms |
-| speak_sentence | 17.39 ms | 16.95 ms |
-| dict_english_construction | 7.53 ms | 7.41 ms |
-| dict_lookup_hit | 136 ns | 136 ns |
-| dict_lookup_miss | 152 ns | 155 ns |
+| Benchmark | 3.1.1 | 3.1.2 deps, 3.1.1 source | 3.1.2 |
+|-----------|-------|--------------------------|-------|
+| g2p_hello_world | 18.22 µs | 18.45 µs | 18.95 µs |
+| g2p_sentence | 72.77 µs | 73.18 µs | 75.27 µs |
+| g2p_sentence_arena | — | — | 69.69 µs |
+| speak_hello | 6.32 ms | 4.21 ms | 4.18 ms |
+| speak_sentence | 20.71 ms | 12.89 ms | 12.94 ms |
+| dict_english_construction | 9.40 ms | 9.34 ms | 9.56 ms |
+| dict_lookup_hit | 164 ns | 172 ns | 167 ns |
+| dict_lookup_miss | 193 ns | 192 ns | 190 ns |
+
+svara 3.8.x makes both speak rows 33–38% faster. Twelve more alternated runs of the last two builds
+put the `_a` refactor at +0.5% (`g2p_hello_world`) and +2.9% (`g2p_sentence`), with overlapping
+interquartile ranges, while `dict_lookup_hit`, the same code in both, moved +2.2%. `g2p_sentence_arena`
+(`shabda_convert_a` into an arena reset per conversion) read 64.47 µs there, 3–6% under either
+default-heap form.
 
 ## Distlib bundle
 
-`cyrius distlib` → `dist/shabda.cyr` (v3.1.1). There is no `dist/shabda.deps` sidecar since
+`cyrius distlib` → `dist/shabda.cyr` (v3.1.2). There is no `dist/shabda.deps` sidecar since
 3.1.1. Module order is the `[lib].modules` list in `cyrius.cyml`. Consumers pull the bundle
 rather than rebuilding from `src/`.
 
@@ -177,28 +216,30 @@ On 6.7.18 it is none, so distlib removes the file. The `unicode` tables now arri
 which svara's sidecar requires and which includes `lib/unicode/` at 6.7.18. hisab, goonj and naad
 are not listed, so ADR-0001's resolver failure does not hit consumers of shabda.
 
-`cyrius distlib` lists 5 `shbdk_*` names (`shbdk_dict_new`, `shbdk_dict_english`,
-`shbdk_dict_lookup`, `shbdk_dict_lookup_all`, `shbdk_pronunciation_phonemes`) for the
-consumer to supply. They are shabdakosh's dictionary surface, called from `engine.cyr` and
-`heteronym.cyr`, and the consumer's chain provides them (`… → varna → shabdakosh → shabda`,
-as dhvani declares it). This is expected.
+`cyrius distlib` lists 10 `shbdk_*` names for the consumer to supply: `shbdk_dict_new`,
+`shbdk_dict_english`, `shbdk_dict_lookup`, `shbdk_pronunciation_phonemes`, and, since 3.1.2's `_a`
+lookup, `shbdk_is_lower_cstr`, `shbdk_dict_lookup_entry`, `shbdk_dict_entries`,
+`shbdk_dict_user_entries`, `shbdk_dict_entry_primary_phonemes` and `shbdk_dict_entry_all`. They are
+shabdakosh's dictionary surface, called from `engine.cyr` and `heteronym.cyr`, and the consumer's
+chain provides them (`… → varna → shabdakosh → shabda`, as dhvani declares it). This is expected.
 
 ## Dependencies
 
 Direct, declared git+tag only in `cyrius.cyml` (no `path`; see Toolchain):
 
-- **shabdakosh** 3.1.1 (`dist/shabdakosh.cyr`) — pronunciation dictionary (`shbdk_*`). Its bundle needs svara and varna in scope; its sidecar lists only `mmap`. Declared `optional` (see [ADR-0001](../adr/0001-shabdakosh-declared-optional.md)), so `lib/shabdakosh.cyr` is refreshed by hand **from the tag**: `git -C ../shabdakosh show <tag>:dist/shabdakosh.cyr > lib/shabdakosh.cyr`, then `cyrius deps && cyrius deps --verify`. Check the tag against GitHub first (`git ls-remote`). Copy from the tag, not with ADR-0001's `cp ../shabdakosh/dist/...`, because the sibling checkout tracks `main`. On every resolve, 6.7.18 notes that the file is "outside the declared footprint". It keeps the file and its lock line, so the note is expected.
-- **svara** 3.6.3 (`dist/svara.cyr`) — `SVARA_PH_*` phonemes, `PhonemeEvent`, sequence/voice/render for `speak()`. Its sidecar lists `bayan`. Its manifest carries the hisab 3.4.1 / naad 2.3.3 / goonj 2.3.1 git pins the whole chain folds. It sets the consumer floor at cyrius 6.7.2. goonj 2.3.1 includes `lib/simd.cyr`.
-- **varna** 2.5.2 (`dist/varna.cyr`) — phoneme inventories, phonotactics, script detection. Self-contained on the stdlib folds. shabda calls 12 of its functions, and none of them is in 2.5.2's breaking `-D MCP` change.
-- **Lock**: 6 commit pins (svara, varna, hisab, naad, goonj, sakshi) plus a `cyrius 6.7.18` toolchain row; 53 hashed files. shabdakosh has no commit pin because it is `optional`; the lock hashes `lib/shabdakosh.cyr` instead.
-- **stdlib**: syscalls, string, alloc, str, fmt, vec, io, args, assert, fnptr, atomic, sakshi, math, ganita, tagged, hashmap, bayan, mmap, bench, slice, result, callback, **unicode**.
+- **shabdakosh** 3.1.4 (`dist/shabdakosh.cyr`) — pronunciation dictionary (`shbdk_*`). Its bundle needs svara and varna in scope; its sidecar lists only `mmap`. Declared `optional` (see [ADR-0001](../adr/0001-shabdakosh-declared-optional.md)), so `lib/shabdakosh.cyr` is refreshed by hand **from the tag**: `git -C ../shabdakosh show <tag>:dist/shabdakosh.cyr > lib/shabdakosh.cyr`, then `cyrius deps && cyrius deps --verify`. Check the tag against GitHub first (`git ls-remote`). Copy from the tag, not with ADR-0001's `cp ../shabdakosh/dist/...`, because the sibling checkout tracks `main`. On every resolve, 6.7.18 notes that the file is "outside the declared footprint". It keeps the file and its lock line, so the note is expected.
+- **svara** 3.14.0 (`dist/svara.cyr`) — `SVARA_PH_*` phonemes, `PhonemeEvent`, sequence/voice/render for `speak()`. Its sidecar lists `bayan`. Its manifest carries the hisab 3.5.0 / naad 2.3.5 / goonj 2.3.2 git pins the whole chain folds. It sets the consumer floor at cyrius 6.7.2. shabda builds `SvPhonemeEvent` records itself on the `_a` path, through svara's public struct and setters (`_shabda_event_new_a`, compared byte for byte in `tests/prosody.tcyr`).
+- **varna** 2.6.0 (`dist/varna.cyr`) — phoneme inventories, phonotactics, script detection. Self-contained on the stdlib folds. shabda calls 12 of its functions, all with their 2.5.2 signatures. 2.6.0 spells the Spanish tap `ɾ` and trill `r`, where shabda's Spanish IPA table keeps the oracle's `r` / `rr`, so `shabda_validate_phonemes_for` flags every Spanish trill (see the 3.1.2 CHANGELOG entry).
+- **Lock**: 5 commit pins (svara, varna, hisab, naad, goonj) plus a `cyrius 6.7.18` toolchain row; 61 hashed files. shabdakosh has no commit pin because it is `optional`; the lock hashes `lib/shabdakosh.cyr` instead.
+- **stdlib**: syscalls, string, alloc, str, fmt, vec, io, args, assert, fnptr, atomic, sakshi, math, ganita, tagged, hashmap, bayan, mmap, bench, slice, result, callback, **unicode**, **thread**.
+  `thread` is new at 3.1.2, for `tests/allocator.tcyr` alone; nothing in `src/` creates a thread.
   `unicode` is new at 3.0.3 — `unicode_category` (GeneralCategory) and `unicode_to_lower`
   (casefold) back `_shabda_is_alpha` / `_shabda_is_upper` / `_shabda_to_lower_cp`.
   On 6.7.18 a consumer gets the leaf with `bayan`, through svara's sidecar, so
   `dist/shabda.cyr` no longer `include`s it itself.
-- `lib/sakshi.cyr` is **2.5.10**, the 6.7.18 snapshot's copy, byte-identical to the 2.5.10 artifact
-  the dep chain pins. On every resolve `cyrius` prints `refusing to overwrite stdlib leaf 'sakshi'`; the
-  note is expected. The 3.0.4 split, with `cyrius deps` reverting the snapshot copy, is gone.
+- `lib/sakshi.cyr` is **2.5.10**, the 6.7.18 snapshot's copy. Since 3.1.2 no dep in the chain
+  commit-pins sakshi, so the stdlib leaf is the only copy, and a resolve no longer prints the
+  `refusing to overwrite stdlib leaf 'sakshi'` note it printed through 3.1.1.
 
 ## Consumers
 

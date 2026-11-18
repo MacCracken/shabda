@@ -26,7 +26,13 @@ var SHABDA_SYLLABLE_SIZE    = 24;
 # Build a syllable from an onset vec, a nucleus ordinal, and a coda vec.
 #must_use
 fn shabda_syllable_new(onset, nucleus, coda): i64 {
-    var s = alloc(SHABDA_SYLLABLE_SIZE);
+    return _shabda_syllable_new_a(default_alloc(), onset, nucleus, coda);
+}
+
+# shabda_syllable_new, with every allocation drawn from Allocator `a`.
+#must_use
+fn _shabda_syllable_new_a(a, onset, nucleus, coda): i64 {
+    var s = alloc_via(a, SHABDA_SYLLABLE_SIZE);
     store64(s + SHABDA_SYLLABLE_ONSET, onset);
     store64(s + SHABDA_SYLLABLE_NUCLEUS, nucleus);
     store64(s + SHABDA_SYLLABLE_CODA, coda);
@@ -124,11 +130,11 @@ fn _shabda_sonority(ph): i64 {
 }
 
 # Copy v[start..end] into a fresh vec (guarded: empty if start >= end).
-fn _shabda_slice(v, start, end): i64 {
-    var out = vec_new();
+fn _shabda_slice_a(a, v, start, end): i64 {
+    var out = vec_new_a(a);
     var i = start;
     while (i < end) {
-        vec_push(out, vec_get(v, i));
+        _shabda_vec_push_a(a, out, vec_get(v, i));
         i = i + 1;
     }
     return out;
@@ -199,16 +205,22 @@ fn _shabda_max_legal_onset(cluster): i64 {
 # empty vec; else one syllable per nucleus.
 #must_use
 fn shabda_syllabify(phonemes): i64 {
-    var out = vec_new();
+    return _shabda_syllabify_a(default_alloc(), phonemes);
+}
+
+# shabda_syllabify, with every allocation drawn from Allocator `a`.
+#must_use
+fn _shabda_syllabify_a(a, phonemes): i64 {
+    var out = vec_new_a(a);
     var n = vec_len(phonemes);
     if (n == 0) { return out; }
 
     # Find indices of all nuclei (vowels and diphthongs).
-    var nuclei = vec_new();
+    var nuclei = vec_new_a(a);
     var i = 0;
     while (i < n) {
         if (_shabda_is_nucleus(vec_get(phonemes, i)) == 1) {
-            vec_push(nuclei, i);
+            _shabda_vec_push_a(a, nuclei, i);
         }
         i = i + 1;
     }
@@ -238,11 +250,11 @@ fn shabda_syllabify(phonemes): i64 {
             }
         }
 
-        var onset = _shabda_slice(phonemes, onset_start, nucleus_idx);
+        var onset = _shabda_slice_a(a, phonemes, onset_start, nucleus_idx);
         var nucleus = vec_get(phonemes, nucleus_idx);
 
         # coda
-        var coda = vec_new();
+        var coda = vec_new_a(a);
         if (syl_idx < nn - 1) {
             var next_nucleus = vec_get(nuclei, syl_idx + 1);
             # Rust borrows &phonemes[nucleus_idx+1..next_nucleus]; pass the bounds.
@@ -256,12 +268,12 @@ fn shabda_syllabify(phonemes): i64 {
             } else {
                 coda_end = nucleus_idx + 1;
             }
-            coda = _shabda_slice(phonemes, nucleus_idx + 1, coda_end);
+            coda = _shabda_slice_a(a, phonemes, nucleus_idx + 1, coda_end);
         } else {
-            coda = _shabda_slice(phonemes, nucleus_idx + 1, n);
+            coda = _shabda_slice_a(a, phonemes, nucleus_idx + 1, n);
         }
 
-        vec_push(out, shabda_syllable_new(onset, nucleus, coda));
+        _shabda_vec_push_a(a, out, _shabda_syllable_new_a(a, onset, nucleus, coda));
         syl_idx = syl_idx + 1;
     }
 

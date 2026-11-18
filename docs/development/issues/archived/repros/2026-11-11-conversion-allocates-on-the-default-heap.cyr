@@ -1,0 +1,73 @@
+# shabda: what one conversion keeps on the default heap, which never frees.
+#
+# From the repository root:
+#   cyrius build docs/development/issues/archived/repros/2026-11-11-conversion-allocates-on-the-default-heap.cyr /tmp/conv
+#   /tmp/conv; echo "exit=$?"
+#
+# One English engine, then three inputs, each converted twice (the second conversion is the steady state): the input's
+# bytes, the events it gives, and the bytes the second conversion kept.
+#
+# Filed against 3.1.1, where shabda_convert was the only form, and it keeps the same bytes today: it allocates on the
+# default heap by design. 3.1.2 added shabda_convert_a. Each input is then converted twice more into one growable arena
+# with a 1 MB first chunk, reset before each conversion, and the line prints what the second of those kept on the
+# default heap and how many bytes it used in the arena. The exit code is 1 while a shabda_convert_a conversion keeps
+# anything on the default heap.
+include "lib/hisab.cyr"
+include "lib/goonj.cyr"
+include "lib/naad.cyr"
+include "lib/svara.cyr"
+include "lib/varna.cyr"
+include "lib/shabdakosh.cyr"
+include "dist/shabda.cyr"
+
+fn out(s) {
+    syscall(1, 1, s, strlen(s));
+    return 0;
+}
+
+fn out_int(x) {
+    var b[24];
+    var n = fmt_int_buf(x, &b);
+    syscall(1, 1, &b, n);
+    syscall(1, 1, "\n", 1);
+    return 0;
+}
+
+var KEPT = 0;
+var ARENA = 0;
+
+fn measure(g, text) {
+    var slot = alloc(8);
+    var e = shabda_convert(g, text, slot);
+    var u0 = alloc_used();
+    e = shabda_convert(g, text, slot);
+    var u1 = alloc_used();
+    out("input bytes: "); out_int(strlen(text));
+    out("  events: "); out_int(vec_len(load64(slot)));
+    out("  bytes kept: "); out_int(u1 - u0);
+    reset_via(ARENA);
+    e = shabda_convert_a(ARENA, g, text, slot);
+    reset_via(ARENA);
+    var v0 = alloc_used();
+    e = shabda_convert_a(ARENA, g, text, slot);
+    var v1 = alloc_used();
+    out("  shabda_convert_a, default-heap bytes kept: "); out_int(v1 - v0);
+    out("  shabda_convert_a, arena bytes used: "); out_int(arena_used(allocator_state(ARENA)));
+    if (v1 - v0 > 0) { KEPT = 1; }
+    return 0;
+}
+
+fn main() {
+    alloc_init();
+    var u0 = alloc_used();
+    var g = shabda_g2p_new(SHABDA_LANG_ENGLISH);
+    out("engine bytes: "); out_int(alloc_used() - u0);
+    ARENA = arena_allocator_growable(1048576);   # one chunk holds each input, so arena_used is the whole
+    measure(g, "Hello.");
+    measure(g, "The quick brown fox jumps over the lazy dog, and then it runs far away into the forest.");
+    measure(g, "the quick brown fox jumps over a lazy dog while seven workers render speech one phoneme at a time and every reply streams to its client as it is made. the quick brown fox jumps over a lazy dog while seven workers render speech one phoneme at a time and every reply streams to its client as it is made. the quick brown fox jumps over a lazy dog while seven workers render speech.");
+    return KEPT;
+}
+
+var rc = main();
+syscall(60, rc);

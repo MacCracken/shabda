@@ -78,6 +78,7 @@ cyrius distlib                           # regenerate dist/shabda.cyr
 - Phoneme output compatible with svara's `PhonemeEvent` — a conversion result is a vec of svara `PhonemeEvent` handles built from `SVARA_PH_*` ordinals.
 - **No feature flags** — CYRIUS has none, so varna validation / detection and every other capability are always compiled into the one bundle (the Rust `std`/`varna`/`json`/`logging`/`full` gates collapse).
 - **Never skip benchmarks** before claiming a performance change.
+- **A conversion allocates only through its Allocator.** Every fn `shabda_convert_with_a` reaches takes the Allocator `a` first and allocates through it (`alloc_via`, `vec_new_a`, `_shabda_vec_push_a`, `_shabda_str_cstr_a`, …), never through `alloc`, `vec_new`, `vec_push` or a stdlib call that copies onto the default heap (`str_cstr`, `str_lower_cstr`). The non-`_a` public form is a one-line wrapper over `default_alloc()`. A table built once and shared, such as the heteronym rules or a varna inventory, is built in `shabda_g2p_new`, never on first use, so it never lands in a caller's arena. Arena memory is not zeroed after a reset, so never read a field of a fresh allocation before writing it. `tests/allocator.tcyr`, `tests/engine.tcyr` and `cyrius fuzz` check all of this.
 
 ## Module Structure
 

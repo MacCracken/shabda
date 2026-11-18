@@ -45,6 +45,20 @@ fn main(): i64 {
     bench_batch_stop(b2, 2000);
     bench_report(b2);
 
+    # the same sentence through convert_a, into an arena reset before each
+    # conversion, as a server converts per request (3.1.2)
+    var ar = arena_allocator_growable(65536);
+    var b2a = bench_new("g2p_sentence_arena");
+    bench_batch_start(b2a);
+    i = 0;
+    while (i < 2000) {
+        reset_via(ar);
+        sink = shabda_convert_a(ar, g, "the cat sat on the mat and was not happy", slot);
+        i = i + 1;
+    }
+    bench_batch_stop(b2a, 2000);
+    bench_report(b2a);
+
     # speak "hello" -> audio samples
     var b3 = bench_new("speak_hello");
     bench_batch_start(b3);

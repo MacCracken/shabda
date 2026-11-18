@@ -343,7 +343,13 @@ fn _shabda_validate_is_vowel(ph): i64 {
 # concat of the collected IPA cstrs).
 #must_use
 fn shabda_validate_phonotactics(phonemes, language): i64 {
-    var violations = vec_new();
+    return _shabda_validate_phonotactics_a(default_alloc(), phonemes, language);
+}
+
+# shabda_validate_phonotactics, with every allocation drawn from Allocator `a`.
+#must_use
+fn _shabda_validate_phonotactics_a(a, phonemes, language): i64 {
+    var violations = vec_new_a(a);
     var constraints = shabda_phonotactics_for(language);
     if (constraints == 0) { return violations; }   # no constraints available
 
@@ -351,7 +357,7 @@ fn shabda_validate_phonotactics(phonemes, language): i64 {
     var max_coda = phonotactics_max_coda(constraints);
 
     # Walk phonemes, tracking a run of consonant IPA cstrs.
-    var consonant_run = vec_new();
+    var consonant_run = vec_new_a(a);
     var n = vec_len(phonemes);
     var i = 0;
     while (i < n) {
@@ -361,12 +367,12 @@ fn shabda_validate_phonotactics(phonemes, language): i64 {
         if (ipa != 0) {
             if (_shabda_validate_is_vowel(ph) == 1) {
                 if (vec_len(consonant_run) > max_onset) {
-                    var joined = _shabda_validate_join(consonant_run);
-                    vec_push(violations, _shabda_validate_onset_msg(joined));
+                    var joined = _shabda_validate_join_a(a, consonant_run);
+                    _shabda_vec_push_a(a, violations, _shabda_validate_onset_msg_a(a, joined));
                 }
-                consonant_run = vec_new();   # Rust `consonant_run.clear()`
+                consonant_run = vec_new_a(a);   # Rust `consonant_run.clear()`
             } else {
-                vec_push(consonant_run, ipa);
+                _shabda_vec_push_a(a, consonant_run, ipa);
             }
         }
         i = i + 1;
@@ -374,8 +380,8 @@ fn shabda_validate_phonotactics(phonemes, language): i64 {
 
     # Final consonant run vs max coda.
     if (vec_len(consonant_run) > max_coda) {
-        var joined2 = _shabda_validate_join(consonant_run);
-        vec_push(violations, _shabda_validate_coda_msg(joined2));
+        var joined2 = _shabda_validate_join_a(a, consonant_run);
+        _shabda_vec_push_a(a, violations, _shabda_validate_coda_msg_a(a, joined2));
     }
 
     return violations;
@@ -383,31 +389,31 @@ fn shabda_validate_phonotactics(phonemes, language): i64 {
 
 # Join a vec of IPA cstrs with the empty separator (Rust `run.join("")`).
 # Returns a fresh NUL-terminated cstr.
-fn _shabda_validate_join(run): cstring {
-    var sb = str_builder_new();
+fn _shabda_validate_join_a(a, run): cstring {
+    var sb = str_builder_new_a(a);
     var n = vec_len(run);
     var i = 0;
     while (i < n) {
-        str_builder_add_cstr(sb, vec_get(run, i));
+        _shabda_sb_add_cstr_a(a, sb, vec_get(run, i));
         i = i + 1;
     }
-    return str_cstr(str_builder_build(sb));
+    return _shabda_str_cstr_a(a, str_builder_build_a(a, sb));
 }
 
 # "consonant cluster too long for onset: {joined}" (Rust format!).
-fn _shabda_validate_onset_msg(joined): cstring {
-    var sb = str_builder_new();
-    str_builder_add_cstr(sb, "consonant cluster too long for onset: ");
-    str_builder_add_cstr(sb, joined);
-    return str_cstr(str_builder_build(sb));
+fn _shabda_validate_onset_msg_a(a, joined): cstring {
+    var sb = str_builder_new_a(a);
+    _shabda_sb_add_cstr_a(a, sb, "consonant cluster too long for onset: ");
+    _shabda_sb_add_cstr_a(a, sb, joined);
+    return _shabda_str_cstr_a(a, str_builder_build_a(a, sb));
 }
 
 # "consonant cluster too long for coda: {joined}" (Rust format!).
-fn _shabda_validate_coda_msg(joined): cstring {
-    var sb = str_builder_new();
-    str_builder_add_cstr(sb, "consonant cluster too long for coda: ");
-    str_builder_add_cstr(sb, joined);
-    return str_cstr(str_builder_build(sb));
+fn _shabda_validate_coda_msg_a(a, joined): cstring {
+    var sb = str_builder_new_a(a);
+    _shabda_sb_add_cstr_a(a, sb, "consonant cluster too long for coda: ");
+    _shabda_sb_add_cstr_a(a, sb, joined);
+    return _shabda_str_cstr_a(a, str_builder_build_a(a, sb));
 }
 
 # Validate that every phoneme in the vec exists in the given inventory, using
@@ -416,7 +422,13 @@ fn _shabda_validate_coda_msg(joined): cstring {
 # (sentinel 0) is skipped (Rust `if let Some(ipa) = ... && !inventory.has(ipa)`).
 #must_use
 fn shabda_validate_phonemes_for(phonemes, inventory, language): i64 {
-    var invalid = vec_new();
+    return _shabda_validate_phonemes_for_a(default_alloc(), phonemes, inventory, language);
+}
+
+# shabda_validate_phonemes_for, with every allocation drawn from Allocator `a`.
+#must_use
+fn _shabda_validate_phonemes_for_a(a, phonemes, inventory, language): i64 {
+    var invalid = vec_new_a(a);
     var n = vec_len(phonemes);
     var i = 0;
     while (i < n) {
@@ -424,7 +436,7 @@ fn shabda_validate_phonemes_for(phonemes, inventory, language): i64 {
         var ipa = shabda_phoneme_to_ipa_for(ph, language);
         if (ipa != 0) {
             if (phoneme_has(inventory, ipa) == 0) {
-                vec_push(invalid, ipa);
+                _shabda_vec_push_a(a, invalid, ipa);
             }
         }
         i = i + 1;

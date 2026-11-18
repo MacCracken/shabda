@@ -1,6 +1,7 @@
 # shabda.fcyr — fuzz harness. Feeds arbitrary bytes into the text-parsing entry
 # points (normalize, SSML parser, the full convert pipeline). None may crash,
-# over-read, or loop forever on hostile input — robustness, not correctness.
+# over-read, or loop forever on hostile input — robustness, not correctness, with
+# one exception since 3.1.2: shabda_convert_a must agree with shabda_convert.
 #
 # The driver has three parts: a fixed CORPUS of every shape that produced a defect
 # (kept as permanent regressions), random BYTE input including invalid UTF-8, and
@@ -39,8 +40,68 @@ fn _shabda_fuzz_cstr(data, len): i64 {
     return s;
 }
 
+# FNV-1a over every event's phoneme, duration bits, stress and tone, and the count.
+fn _shabda_fuzz_ev_hash(events): i64 {
+    var h = 1469598103934665603;
+    var n = vec_len(events);
+    var i = 0;
+    while (i < n) {
+        var ev = vec_get(events, i);
+        h = (h ^ SvPhonemeEvent_phoneme(ev)) * 1099511628211;
+        h = (h ^ SvPhonemeEvent_duration(ev)) * 1099511628211;
+        h = (h ^ SvPhonemeEvent_stress(ev)) * 1099511628211;
+        h = (h ^ SvPhonemeEvent_tone(ev)) * 1099511628211;
+        i = i + 1;
+    }
+    return (h ^ n) * 1099511628211;
+}
+
+# The arena shabda_convert_a runs on, created on the first case. Before each
+# conversion it is reset and its current chunk filled with 0xA5: a server's arena
+# hands back what the last request left, never zeroed memory.
+var _FZ_ARENA = 0;
+
+fn _shabda_fuzz_dirty_reset(): i64 {
+    var arena = allocator_state(_FZ_ARENA);
+    reset_via(_FZ_ARENA);
+    var room = arena_remaining(arena);
+    var blk = arena_alloc(arena, room);
+    if (blk != 0) { memset(blk, 0xA5, room); }
+    reset_via(_FZ_ARENA);
+    return 0;
+}
+
+# 3.1.2: shabda_convert_a on input `s`, twice on the reset arena, must return what
+# shabda_convert returned (`err0`, and events hashing to `want`) both times. The
+# first may chain more chunks onto the arena from the default heap, as a growable
+# arena does; the second, the steady state a server reaches, must keep nothing
+# there. On a difference it says which and ends the run with status 1.
+fn _shabda_fuzz_check_a(g, s, err0, want): i64 {
+    if (_FZ_ARENA == 0) { _FZ_ARENA = arena_allocator_growable(65536); }
+    var slot = alloc(8);
+    var bad = 0;
+    var pass = 0;
+    var heap = 0;
+    while (pass < 2) {
+        _shabda_fuzz_dirty_reset();
+        var u = alloc_used();
+        var err1 = shabda_convert_a(_FZ_ARENA, g, s, slot);
+        heap = alloc_used() - u;
+        if (err1 != err0) { bad = 1; }
+        elif (err1 == 0) { if (_shabda_fuzz_ev_hash(load64(slot)) != want) { bad = 1; } }
+        pass = pass + 1;
+    }
+    if (heap != 0) { bad = 1; }
+    if (bad == 1) {
+        println("fuzz: shabda_convert_a differs from shabda_convert, or kept default-heap bytes");
+        syscall(SYS_EXIT, 1);
+    }
+    return 0;
+}
+
 # Feeds `len` bytes at `data` to every text entry point (normalize, expand_numbers, the SSML
-# parser, convert, convert_ssml). Returning at all is the pass; the results are discarded.
+# parser, convert, convert_a, convert_ssml). Returning at all is the pass, and since 3.1.2
+# convert_a must also match convert and keep nothing on the default heap.
 fn fuzz_main(data, len) {
     if (len == 0) { return 0; }
     var s = _shabda_fuzz_cstr(data, len);
@@ -51,7 +112,11 @@ fn fuzz_main(data, len) {
     sink = shabda_ssml_parse(s);
     var g = shabda_g2p_new(SHABDA_LANG_ENGLISH);
     var slot = alloc(8);
-    sink = shabda_convert(g, s, slot);
+    store64(slot, 0);
+    var err0 = shabda_convert(g, s, slot);
+    var want = 0;
+    if (err0 == 0) { want = _shabda_fuzz_ev_hash(load64(slot)); }
+    _shabda_fuzz_check_a(g, s, err0, want);
     sink = shabda_convert_ssml(g, s, slot);
     return 0;
 }

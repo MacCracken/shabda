@@ -87,9 +87,9 @@ var SHABDA_SB_LEN  = 8;
 var SHABDA_SB_CAP  = 16;
 var SHABDA_SB_SIZE = 24;
 
-fn _shabda_sb_new(): i64 {
-    var sb = alloc(SHABDA_SB_SIZE);
-    var buf = alloc(16);
+fn _shabda_sb_new_a(a): i64 {
+    var sb = alloc_via(a, SHABDA_SB_SIZE);
+    var buf = alloc_via(a, 16);
     store8(buf, 0);
     store64(sb + SHABDA_SB_DATA, buf);
     store64(sb + SHABDA_SB_LEN, 0);
@@ -97,8 +97,14 @@ fn _shabda_sb_new(): i64 {
     return sb;
 }
 
-# Ensure room for `extra` more bytes plus the NUL terminator.
+# Ensure room for `extra` more bytes plus the NUL terminator. Returns 0, or -1 when
+# the larger buffer is refused.
 fn _shabda_sb_reserve(sb, extra): i64 {
+    return _shabda_sb_reserve_a(default_alloc(), sb, extra);
+}
+
+# _shabda_sb_reserve, with every allocation drawn from Allocator `a`.
+fn _shabda_sb_reserve_a(a, sb, extra): i64 {
     var len = load64(sb + SHABDA_SB_LEN);
     var cap = load64(sb + SHABDA_SB_CAP);
     var need = len + extra + 1;
@@ -106,11 +112,13 @@ fn _shabda_sb_reserve(sb, extra): i64 {
     var newcap = cap;
     while (newcap < need) { newcap = newcap * 2; }
     var old = load64(sb + SHABDA_SB_DATA);
-    var buf = alloc(newcap);
-    # alloc returns 0 for a request over ALLOC_MAX (2 GiB) or on exhaustion. Leaving
-    # the old buffer in place keeps the SB usable at its current capacity; the caller
-    # sees a truncated build rather than a write through address 0.
-    if (buf == 0) { return 0; }
+    var buf = alloc_via(a, newcap);
+    # alloc returns 0 for a request over ALLOC_MAX (2 GiB) or on exhaustion, and an
+    # Allocator may refuse sooner. Leaving the old buffer in place keeps the SB usable
+    # at its current capacity; the caller sees a truncated build rather than a write
+    # through address 0. Through 3.1.1 this returned 0 here and every push wrote past
+    # the old buffer anyway; the pushes now stop on the -1.
+    if (buf == 0) { return 0 - 1; }
     memcpy(buf, old, len);
     store8(buf + len, 0);
     store64(sb + SHABDA_SB_DATA, buf);
@@ -119,8 +127,8 @@ fn _shabda_sb_reserve(sb, extra): i64 {
 }
 
 # Append one raw byte.
-fn _shabda_sb_push_byte(sb, b): i64 {
-    _shabda_sb_reserve(sb, 1);
+fn _shabda_sb_push_byte_a(a, sb, b): i64 {
+    if (_shabda_sb_reserve_a(a, sb, 1) < 0) { return 0; }
     var data = load64(sb + SHABDA_SB_DATA);
     var len = load64(sb + SHABDA_SB_LEN);
     store8(data + len, b);
@@ -130,9 +138,9 @@ fn _shabda_sb_push_byte(sb, b): i64 {
 }
 
 # Append a NUL-terminated cstring.
-fn _shabda_sb_push_cstr(sb, s): i64 {
+fn _shabda_sb_push_cstr_a(a, sb, s): i64 {
     var n = strlen(s);
-    _shabda_sb_reserve(sb, n);
+    if (_shabda_sb_reserve_a(a, sb, n) < 0) { return 0; }
     var data = load64(sb + SHABDA_SB_DATA);
     var len = load64(sb + SHABDA_SB_LEN);
     memcpy(data + len, s, n);
@@ -143,7 +151,7 @@ fn _shabda_sb_push_cstr(sb, s): i64 {
 
 # Append `n` bytes from a raw pointer.
 fn _shabda_sb_push_bytes(sb, p, n): i64 {
-    _shabda_sb_reserve(sb, n);
+    if (_shabda_sb_reserve(sb, n) < 0) { return 0; }
     var data = load64(sb + SHABDA_SB_DATA);
     var len = load64(sb + SHABDA_SB_LEN);
     memcpy(data + len, p, n);
@@ -153,26 +161,26 @@ fn _shabda_sb_push_bytes(sb, p, n): i64 {
 }
 
 # UTF-8-encode a code point and append it.
-fn _shabda_sb_push_cp(sb, cp): i64 {
+fn _shabda_sb_push_cp_a(a, sb, cp): i64 {
     if (cp < 128) {
-        _shabda_sb_push_byte(sb, cp);
+        _shabda_sb_push_byte_a(a, sb, cp);
         return 0;
     }
     if (cp < 2048) {
-        _shabda_sb_push_byte(sb, 192 | (cp >> 6));
-        _shabda_sb_push_byte(sb, 128 | (cp & 63));
+        _shabda_sb_push_byte_a(a, sb, 192 | (cp >> 6));
+        _shabda_sb_push_byte_a(a, sb, 128 | (cp & 63));
         return 0;
     }
     if (cp < 65536) {
-        _shabda_sb_push_byte(sb, 224 | (cp >> 12));
-        _shabda_sb_push_byte(sb, 128 | ((cp >> 6) & 63));
-        _shabda_sb_push_byte(sb, 128 | (cp & 63));
+        _shabda_sb_push_byte_a(a, sb, 224 | (cp >> 12));
+        _shabda_sb_push_byte_a(a, sb, 128 | ((cp >> 6) & 63));
+        _shabda_sb_push_byte_a(a, sb, 128 | (cp & 63));
         return 0;
     }
-    _shabda_sb_push_byte(sb, 240 | (cp >> 18));
-    _shabda_sb_push_byte(sb, 128 | ((cp >> 12) & 63));
-    _shabda_sb_push_byte(sb, 128 | ((cp >> 6) & 63));
-    _shabda_sb_push_byte(sb, 128 | (cp & 63));
+    _shabda_sb_push_byte_a(a, sb, 240 | (cp >> 18));
+    _shabda_sb_push_byte_a(a, sb, 128 | ((cp >> 12) & 63));
+    _shabda_sb_push_byte_a(a, sb, 128 | ((cp >> 6) & 63));
+    _shabda_sb_push_byte_a(a, sb, 128 | (cp & 63));
     return 0;
 }
 
@@ -293,9 +301,9 @@ fn _shabda_to_lower_cp(cp): i64 {
 # words match_abbreviation / is_pronounceable_acronym pass it — those inputs are
 # ASCII, so ASCII folding matches Rust's Unicode folding on them).
 # ================================================================
-fn _shabda_lower_cstr(s): cstring {
+fn _shabda_lower_cstr_a(a, s): cstring {
     var n = strlen(s);
-    var out = alloc(n + 1);
+    var out = alloc_via(a, n + 1);
     if (out == 0) { return ""; }
     var i = 0;
     var c = 0;
@@ -369,73 +377,73 @@ fn _shabda_tens(i): cstring {
 # ================================================================
 
 # Converts 1..99 to words, appended to sb. (Rust tens_to_words)
-fn _shabda_tens_to_words(sb, n): i64 {
+fn _shabda_tens_to_words_a(a, sb, n): i64 {
     if (n < 20) {
-        _shabda_sb_push_cstr(sb, _shabda_ones(n));
+        _shabda_sb_push_cstr_a(a, sb, _shabda_ones(n));
         return 0;
     }
-    _shabda_sb_push_cstr(sb, _shabda_tens(n / 10));
+    _shabda_sb_push_cstr_a(a, sb, _shabda_tens(n / 10));
     var one = n % 10;
     if (one > 0) {
-        _shabda_sb_push_byte(sb, 32);
-        _shabda_sb_push_cstr(sb, _shabda_ones(one));
+        _shabda_sb_push_byte_a(a, sb, 32);
+        _shabda_sb_push_cstr_a(a, sb, _shabda_ones(one));
     }
     return 0;
 }
 
 # Converts 1..999 to words, appended to sb. (Rust hundreds_to_words)
-fn _shabda_hundreds_to_words(sb, n): i64 {
+fn _shabda_hundreds_to_words_a(a, sb, n): i64 {
     var wrote = 0;
     if (n >= 100) {
-        _shabda_sb_push_cstr(sb, _shabda_ones(n / 100));
-        _shabda_sb_push_byte(sb, 32);
-        _shabda_sb_push_cstr(sb, "hundred");
+        _shabda_sb_push_cstr_a(a, sb, _shabda_ones(n / 100));
+        _shabda_sb_push_byte_a(a, sb, 32);
+        _shabda_sb_push_cstr_a(a, sb, "hundred");
         wrote = 1;
     }
     var remainder = n % 100;
     if (remainder > 0) {
-        if (wrote == 1) { _shabda_sb_push_byte(sb, 32); }
-        _shabda_tens_to_words(sb, remainder);
+        if (wrote == 1) { _shabda_sb_push_byte_a(a, sb, 32); }
+        _shabda_tens_to_words_a(a, sb, remainder);
     }
     return 0;
 }
 
 # Converts 0..999,999,999+ to words, appended to sb. (Rust number_to_words)
-fn _shabda_number_to_words(sb, n): i64 {
+fn _shabda_number_to_words_a(a, sb, n): i64 {
     if (n == 0) {
-        _shabda_sb_push_cstr(sb, "zero");
+        _shabda_sb_push_cstr_a(a, sb, "zero");
         return 0;
     }
     var wrote = 0;
     if (n >= 1000000000) {
         var billions = n / 1000000000;
-        _shabda_number_to_words(sb, billions);
-        _shabda_sb_push_byte(sb, 32);
-        _shabda_sb_push_cstr(sb, "billion");
+        _shabda_number_to_words_a(a, sb, billions);
+        _shabda_sb_push_byte_a(a, sb, 32);
+        _shabda_sb_push_cstr_a(a, sb, "billion");
         wrote = 1;
     }
     var remainder = n % 1000000000;
     if (remainder >= 1000000) {
         var millions = remainder / 1000000;
-        if (wrote == 1) { _shabda_sb_push_byte(sb, 32); }
-        _shabda_number_to_words(sb, millions);
-        _shabda_sb_push_byte(sb, 32);
-        _shabda_sb_push_cstr(sb, "million");
+        if (wrote == 1) { _shabda_sb_push_byte_a(a, sb, 32); }
+        _shabda_number_to_words_a(a, sb, millions);
+        _shabda_sb_push_byte_a(a, sb, 32);
+        _shabda_sb_push_cstr_a(a, sb, "million");
         wrote = 1;
     }
     remainder = remainder % 1000000;
     if (remainder >= 1000) {
         var thousands = remainder / 1000;
-        if (wrote == 1) { _shabda_sb_push_byte(sb, 32); }
-        _shabda_number_to_words(sb, thousands);
-        _shabda_sb_push_byte(sb, 32);
-        _shabda_sb_push_cstr(sb, "thousand");
+        if (wrote == 1) { _shabda_sb_push_byte_a(a, sb, 32); }
+        _shabda_number_to_words_a(a, sb, thousands);
+        _shabda_sb_push_byte_a(a, sb, 32);
+        _shabda_sb_push_cstr_a(a, sb, "thousand");
         wrote = 1;
     }
     remainder = remainder % 1000;
     if (remainder > 0) {
-        if (wrote == 1) { _shabda_sb_push_byte(sb, 32); }
-        _shabda_hundreds_to_words(sb, remainder);
+        if (wrote == 1) { _shabda_sb_push_byte_a(a, sb, 32); }
+        _shabda_hundreds_to_words_a(a, sb, remainder);
     }
     return 0;
 }
@@ -475,7 +483,7 @@ fn _shabda_parse_u64(s, ok_out): i64 {
 }
 
 # Reads digits one by one as fallback for very large numbers. (Rust digits_to_words)
-fn _shabda_digits_to_words(sb, s): i64 {
+fn _shabda_digits_to_words_a(a, sb, s): i64 {
     var n = strlen(s);
     var i = 0;
     var c = 0;
@@ -483,8 +491,8 @@ fn _shabda_digits_to_words(sb, s): i64 {
     while (i < n) {
         c = load8(s + i);
         if (c >= 48 && c <= 57) {
-            if (wrote == 1) { _shabda_sb_push_byte(sb, 32); }
-            _shabda_sb_push_cstr(sb, _shabda_ones(c - 48));
+            if (wrote == 1) { _shabda_sb_push_byte_a(a, sb, 32); }
+            _shabda_sb_push_cstr_a(a, sb, _shabda_ones(c - 48));
             wrote = 1;
         }
         i = i + 1;
@@ -493,52 +501,52 @@ fn _shabda_digits_to_words(sb, s): i64 {
 }
 
 # Expands a number token cstr to words, appended to sb. (Rust expand_number_token)
-fn _shabda_expand_number_token(sb, token): i64 {
+fn _shabda_expand_number_token_a(a, sb, token): i64 {
     var dot = strchr(token, 46);
     if (dot >= 0) {
         # Decimal: "3.14" -> "three point one four"
         var tlen = strlen(token);
         # integer_part = token[..dot], decimal_part = token[dot+1..]
-        var intbuf = alloc(dot + 1);
+        var intbuf = alloc_via(a, dot + 1);
         if (intbuf == 0) { return 0; }
         memcpy(intbuf, token, dot);
         store8(intbuf + dot, 0);
         var declen = tlen - dot - 1;
-        var decbuf = alloc(declen + 1);
+        var decbuf = alloc_via(a, declen + 1);
         if (decbuf == 0) { return 0; }
         memcpy(decbuf, token + dot + 1, declen);
         store8(decbuf + declen, 0);
 
         if (strlen(intbuf) == 0) {
-            _shabda_sb_push_cstr(sb, "zero");
+            _shabda_sb_push_cstr_a(a, sb, "zero");
         } else {
-            var ok = alloc(8);
+            var ok = alloc_via(a, 8);
             var v = _shabda_parse_u64(intbuf, ok);
             if (load64(ok) == 1) {
-                _shabda_number_to_words(sb, v);
+                _shabda_number_to_words_a(a, sb, v);
             } else {
-                _shabda_digits_to_words(sb, intbuf);
+                _shabda_digits_to_words_a(a, sb, intbuf);
             }
         }
-        _shabda_sb_push_cstr(sb, " point");
+        _shabda_sb_push_cstr_a(a, sb, " point");
         var i = 0;
         var c = 0;
         while (i < declen) {
             c = load8(decbuf + i);
             if (c >= 48 && c <= 57) {
-                _shabda_sb_push_byte(sb, 32);
-                _shabda_sb_push_cstr(sb, _shabda_ones(c - 48));
+                _shabda_sb_push_byte_a(a, sb, 32);
+                _shabda_sb_push_cstr_a(a, sb, _shabda_ones(c - 48));
             }
             i = i + 1;
         }
         return 0;
     }
-    var ok2 = alloc(8);
+    var ok2 = alloc_via(a, 8);
     var v2 = _shabda_parse_u64(token, ok2);
     if (load64(ok2) == 1) {
-        _shabda_number_to_words(sb, v2);
+        _shabda_number_to_words_a(a, sb, v2);
     } else {
-        _shabda_digits_to_words(sb, token);
+        _shabda_digits_to_words_a(a, sb, token);
     }
     return 0;
 }
@@ -547,9 +555,9 @@ fn _shabda_expand_number_token(sb, token): i64 {
 # Digits go into sb-out buffer; commas between digits skipped; one decimal point.
 # Returns bytes... actually returns count of code points consumed; the collected
 # token cstr is written via out_tok (a pointer to a cstr slot).
-fn _shabda_collect_number(cps, start, out_tok): i64 {
+fn _shabda_collect_number_a(a, cps, start, out_tok): i64 {
     var n = vec_len(cps);
-    var sb = _shabda_sb_new();
+    var sb = _shabda_sb_new_a(a);
     var i = start;
     var has_dot = 0;
     var c = 0;
@@ -558,7 +566,7 @@ fn _shabda_collect_number(cps, start, out_tok): i64 {
     while (i < n && brk == 0) {
         c = vec_get(cps, i);
         if (c >= 48 && c <= 57) {
-            _shabda_sb_push_byte(sb, c);
+            _shabda_sb_push_byte_a(a, sb, c);
             i = i + 1;
         } elif (c == 44 && i + 1 < n) {
             nx = vec_get(cps, i + 1);
@@ -570,7 +578,7 @@ fn _shabda_collect_number(cps, start, out_tok): i64 {
         } elif (c == 46 && has_dot == 0 && i + 1 < n) {
             nx = vec_get(cps, i + 1);
             if (nx >= 48 && nx <= 57) {
-                _shabda_sb_push_byte(sb, 46);
+                _shabda_sb_push_byte_a(a, sb, 46);
                 has_dot = 1;
                 i = i + 1;
             } else {
@@ -587,13 +595,13 @@ fn _shabda_collect_number(cps, start, out_tok): i64 {
 # ================================================================
 # Decode a whole cstring into a vec of code points (Rust `text.chars().collect()`).
 # ================================================================
-fn _shabda_decode_cps(text): i64 {
-    var cps = vec_new();
+fn _shabda_decode_cps_a(a, text): i64 {
+    var cps = vec_new_a(a);
     var p = text;
-    var cp = alloc(8);
+    var cp = alloc_via(a, 8);
     var adv = _shabda_utf8_next(p, cp);
     while (adv > 0) {
-        vec_push(cps, load64(cp));
+        _shabda_vec_push_a(a, cps, load64(cp));
         p = p + adv;
         adv = _shabda_utf8_next(p, cp);
     }
@@ -605,13 +613,19 @@ fn _shabda_decode_cps(text): i64 {
 # ================================================================
 #must_use
 fn shabda_expand_numbers(text): cstring {
-    var cps = _shabda_decode_cps(text);
+    return _shabda_expand_numbers_a(default_alloc(), text);
+}
+
+# shabda_expand_numbers, with every allocation drawn from Allocator `a`.
+#must_use
+fn _shabda_expand_numbers_a(a, text): cstring {
+    var cps = _shabda_decode_cps_a(a, text);
     var n = vec_len(cps);
-    var sb = _shabda_sb_new();
+    var sb = _shabda_sb_new_a(a);
     var i = 0;
     var c = 0;
     var nx = 0;
-    var tokslot = alloc(8);
+    var tokslot = alloc_via(a, 8);
     var consumed = 0;
     var last = 0;
     while (i < n) {
@@ -621,27 +635,27 @@ fn shabda_expand_numbers(text): cstring {
             nx = vec_get(cps, i + 1);
             if (nx >= 48 && nx <= 57) {
                 i = i + 1;
-                consumed = _shabda_collect_number(cps, i, tokslot);
+                consumed = _shabda_collect_number_a(a, cps, i, tokslot);
                 last = _shabda_sb_last(sb);
                 if (_shabda_sb_len(sb) != 0 && last != 32) {
-                    _shabda_sb_push_byte(sb, 32);
+                    _shabda_sb_push_byte_a(a, sb, 32);
                 }
-                _shabda_sb_push_cstr(sb, "negative ");
-                _shabda_expand_number_token(sb, load64(tokslot));
+                _shabda_sb_push_cstr_a(a, sb, "negative ");
+                _shabda_expand_number_token_a(a, sb, load64(tokslot));
                 i = i + consumed;
                 continue;
             }
         }
         if (c >= 48 && c <= 57) {
-            consumed = _shabda_collect_number(cps, i, tokslot);
+            consumed = _shabda_collect_number_a(a, cps, i, tokslot);
             last = _shabda_sb_last(sb);
             if (_shabda_sb_len(sb) != 0 && last != 32) {
-                _shabda_sb_push_byte(sb, 32);
+                _shabda_sb_push_byte_a(a, sb, 32);
             }
-            _shabda_expand_number_token(sb, load64(tokslot));
+            _shabda_expand_number_token_a(a, sb, load64(tokslot));
             i = i + consumed;
         } else {
-            _shabda_sb_push_cp(sb, c);
+            _shabda_sb_push_cp_a(a, sb, c);
             i = i + 1;
         }
     }
@@ -685,11 +699,11 @@ fn _shabda_abbr_at(idx, out_expansion): cstring {
 
 # Tries to match an abbreviation at the start of `text` (a cstr word).
 # Returns bytes_consumed (>0) with *out_exp set to the expansion, or 0 = no match.
-fn _shabda_match_abbreviation(text, out_exp): i64 {
-    var lower = _shabda_lower_cstr(text);
+fn _shabda_match_abbreviation_a(a, text, out_exp): i64 {
+    var lower = _shabda_lower_cstr_a(a, text);
     var idx = 0;
     var abbr = 0;
-    var expslot = alloc(8);
+    var expslot = alloc_via(a, 8);
     var alen = 0;
     var afterc = 0;
     abbr = _shabda_abbr_at(idx, expslot);
@@ -703,7 +717,7 @@ fn _shabda_match_abbreviation(text, out_exp): i64 {
                 return alen;
             }
             # Decode the first code point after the abbreviation.
-            var cpo = alloc(8);
+            var cpo = alloc_via(a, 8);
             _shabda_utf8_next(text + alen, cpo);
             var cpa = load64(cpo);
             if (_shabda_is_ws(cpa) == 1 || _shabda_is_alpha(cpa) == 0) {
@@ -722,9 +736,9 @@ fn _shabda_match_abbreviation(text, out_exp): i64 {
 # split_whitespace over a cstr -> vec of cstr words (Rust str::split_whitespace:
 # collapses runs, drops leading/trailing ws, no empty tokens).
 # ================================================================
-fn _shabda_split_ws(text): i64 {
-    var words = vec_new();
-    var cps = _shabda_decode_cps(text);
+fn _shabda_split_ws_a(a, text): i64 {
+    var words = vec_new_a(a);
+    var cps = _shabda_decode_cps_a(a, text);
     var n = vec_len(cps);
     var i = 0;
     var c = 0;
@@ -734,20 +748,20 @@ fn _shabda_split_ws(text): i64 {
         c = vec_get(cps, i);
         if (_shabda_is_ws(c) == 1) {
             if (inword == 1) {
-                vec_push(words, _shabda_sb_cstr(sb));
+                _shabda_vec_push_a(a, words, _shabda_sb_cstr(sb));
                 inword = 0;
             }
         } else {
             if (inword == 0) {
-                sb = _shabda_sb_new();
+                sb = _shabda_sb_new_a(a);
                 inword = 1;
             }
-            _shabda_sb_push_cp(sb, c);
+            _shabda_sb_push_cp_a(a, sb, c);
         }
         i = i + 1;
     }
     if (inword == 1) {
-        vec_push(words, _shabda_sb_cstr(sb));
+        _shabda_vec_push_a(a, words, _shabda_sb_cstr(sb));
     }
     return words;
 }
@@ -757,23 +771,29 @@ fn _shabda_split_ws(text): i64 {
 # ================================================================
 #must_use
 fn shabda_expand_abbreviations(text): cstring {
-    var words = _shabda_split_ws(text);
+    return _shabda_expand_abbreviations_a(default_alloc(), text);
+}
+
+# shabda_expand_abbreviations, with every allocation drawn from Allocator `a`.
+#must_use
+fn _shabda_expand_abbreviations_a(a, text): cstring {
+    var words = _shabda_split_ws_a(a, text);
     var n = vec_len(words);
-    var sb = _shabda_sb_new();
+    var sb = _shabda_sb_new_a(a);
     var i = 0;
     var word = 0;
-    var expslot = alloc(8);
+    var expslot = alloc_via(a, 8);
     var consumed = 0;
     while (i < n) {
-        if (i > 0) { _shabda_sb_push_byte(sb, 32); }
+        if (i > 0) { _shabda_sb_push_byte_a(a, sb, 32); }
         word = vec_get(words, i);
-        consumed = _shabda_match_abbreviation(word, expslot);
+        consumed = _shabda_match_abbreviation_a(a, word, expslot);
         if (consumed > 0) {
-            _shabda_sb_push_cstr(sb, load64(expslot));
+            _shabda_sb_push_cstr_a(a, sb, load64(expslot));
             # Append remaining bytes after the abbreviation: word[consumed..].
-            _shabda_sb_push_cstr(sb, word + consumed);
+            _shabda_sb_push_cstr_a(a, sb, word + consumed);
         } else {
-            _shabda_sb_push_cstr(sb, word);
+            _shabda_sb_push_cstr_a(a, sb, word);
         }
         i = i + 1;
     }
@@ -787,17 +807,17 @@ fn shabda_expand_abbreviations(text): cstring {
 # Splits trailing (non-alphanumeric) punctuation from a word. Writes the byte
 # offset where trailing punct begins to *out_end (i.e. core = word[..end],
 # trailing = word[end..]). (Rust split_trailing_punct)
-fn _shabda_split_trailing_punct(word, out_end): i64 {
+fn _shabda_split_trailing_punct_a(a, word, out_end): i64 {
     # Decode into (cp, byte_offset) pairs, find the last run of non-alnum at the end.
-    var cps = vec_new();
-    var offs = vec_new();
+    var cps = vec_new_a(a);
+    var offs = vec_new_a(a);
     var p = word;
-    var cpo = alloc(8);
+    var cpo = alloc_via(a, 8);
     var adv = _shabda_utf8_next(p, cpo);
     var off = 0;
     while (adv > 0) {
-        vec_push(cps, load64(cpo));
-        vec_push(offs, off);
+        _shabda_vec_push_a(a, cps, load64(cpo));
+        _shabda_vec_push_a(a, offs, off);
         off = off + adv;
         p = p + adv;
         adv = _shabda_utf8_next(p, cpo);
@@ -879,8 +899,8 @@ fn _shabda_valid_onset(a, b): i64 {
 
 # Returns 1 if an acronym (cstr, ASCII upper) is pronounceable as a word.
 # (Rust is_pronounceable_acronym) — operates on the lowercased chars.
-fn _shabda_is_pronounceable_acronym(word): i64 {
-    var lower = _shabda_lower_cstr(word);
+fn _shabda_is_pronounceable_acronym_a(a, word): i64 {
+    var lower = _shabda_lower_cstr_a(a, word);
     var n = strlen(lower);
     # Must have at least one vowel.
     var i = 0;
@@ -917,33 +937,39 @@ fn _shabda_is_pronounceable_acronym(word): i64 {
 # ================================================================
 #must_use
 fn shabda_expand_acronyms(text): cstring {
-    var words = _shabda_split_ws(text);
+    return _shabda_expand_acronyms_a(default_alloc(), text);
+}
+
+# shabda_expand_acronyms, with every allocation drawn from Allocator `a`.
+#must_use
+fn _shabda_expand_acronyms_a(a, text): cstring {
+    var words = _shabda_split_ws_a(a, text);
     var n = vec_len(words);
-    var sb = _shabda_sb_new();
+    var sb = _shabda_sb_new_a(a);
     var i = 0;
     var word = 0;
-    var endslot = alloc(8);
+    var endslot = alloc_via(a, 8);
     while (i < n) {
-        if (i > 0) { _shabda_sb_push_byte(sb, 32); }
+        if (i > 0) { _shabda_sb_push_byte_a(a, sb, 32); }
         word = vec_get(words, i);
         # Split trailing punct: core = word[..end], trailing = word[end..].
-        _shabda_split_trailing_punct(word, endslot);
+        _shabda_split_trailing_punct_a(a, word, endslot);
         var end = load64(endslot);
-        var core = alloc(end + 1);
+        var core = alloc_via(a, end + 1);
         if (core == 0) { return _shabda_sb_cstr(sb); }
         memcpy(core, word, end);
         store8(core + end, 0);
         var trailing = word + end;
 
         if (_shabda_is_acronym(core) == 1) {
-            if (_shabda_is_pronounceable_acronym(core) == 1) {
+            if (_shabda_is_pronounceable_acronym_a(a, core) == 1) {
                 # lowercase it as a word.
                 var k = 0;
                 var clen = strlen(core);
                 var cc = 0;
                 while (k < clen) {
                     cc = load8(core + k);
-                    _shabda_sb_push_byte(sb, _shabda_to_lower_cp(cc));
+                    _shabda_sb_push_byte_a(a, sb, _shabda_to_lower_cp(cc));
                     k = k + 1;
                 }
             } else {
@@ -952,15 +978,15 @@ fn shabda_expand_acronyms(text): cstring {
                 var clen2 = strlen(core);
                 var cc2 = 0;
                 while (k2 < clen2) {
-                    if (k2 > 0) { _shabda_sb_push_byte(sb, 32); }
+                    if (k2 > 0) { _shabda_sb_push_byte_a(a, sb, 32); }
                     cc2 = load8(core + k2);
-                    _shabda_sb_push_byte(sb, _shabda_to_lower_cp(cc2));
+                    _shabda_sb_push_byte_a(a, sb, _shabda_to_lower_cp(cc2));
                     k2 = k2 + 1;
                 }
             }
-            _shabda_sb_push_cstr(sb, trailing);
+            _shabda_sb_push_cstr_a(a, sb, trailing);
         } else {
-            _shabda_sb_push_cstr(sb, word);
+            _shabda_sb_push_cstr_a(a, sb, word);
         }
         i = i + 1;
     }
@@ -979,8 +1005,14 @@ fn _shabda_is_latin_extended(cp): i64 {
 # foreign loan word; 0 otherwise. (Rust is_foreign_word)
 #must_use
 fn shabda_is_foreign_word(word): i64 {
+    return _shabda_is_foreign_word_a(default_alloc(), word);
+}
+
+# shabda_is_foreign_word, with every allocation drawn from Allocator `a`.
+#must_use
+fn _shabda_is_foreign_word_a(a, word): i64 {
     var p = word;
-    var cpo = alloc(8);
+    var cpo = alloc_via(a, 8);
     var adv = _shabda_utf8_next(p, cpo);
     var cp = 0;
     while (adv > 0) {
@@ -1018,14 +1050,20 @@ fn _shabda_strip_cp(cp): i64 {
 # through. (Rust strip_diacritics)
 #must_use
 fn shabda_strip_diacritics(word): cstring {
-    var sb = _shabda_sb_new();
+    return _shabda_strip_diacritics_a(default_alloc(), word);
+}
+
+# shabda_strip_diacritics, with every allocation drawn from Allocator `a`.
+#must_use
+fn _shabda_strip_diacritics_a(a, word): cstring {
+    var sb = _shabda_sb_new_a(a);
     var p = word;
-    var cpo = alloc(8);
+    var cpo = alloc_via(a, 8);
     var adv = _shabda_utf8_next(p, cpo);
     var cp = 0;
     while (adv > 0) {
         cp = load64(cpo);
-        _shabda_sb_push_cp(sb, _shabda_strip_cp(cp));
+        _shabda_sb_push_cp_a(a, sb, _shabda_strip_cp(cp));
         p = p + adv;
         adv = _shabda_utf8_next(p, cpo);
     }
@@ -1037,8 +1075,8 @@ fn shabda_strip_diacritics(word): cstring {
 # ================================================================
 
 # Process a single token's code points into sb (Rust normalize_token_into).
-fn _shabda_normalize_token_into(token, sb): i64 {
-    var cps = _shabda_decode_cps(token);
+fn _shabda_normalize_token_into_a(a, token, sb): i64 {
+    var cps = _shabda_decode_cps_a(a, token);
     var n = vec_len(cps);
     var i = 0;
     var ch = 0;
@@ -1049,15 +1087,15 @@ fn _shabda_normalize_token_into(token, sb): i64 {
         if (_shabda_is_alpha(ch) == 1 || ch == 39 || ch == 45) {
             last = _shabda_sb_last(sb);
             if (prev_space == 1 && _shabda_sb_len(sb) != 0 && last != 32) {
-                _shabda_sb_push_byte(sb, 32);
+                _shabda_sb_push_byte_a(a, sb, 32);
             }
-            _shabda_sb_push_cp(sb, _shabda_to_lower_cp(ch));
+            _shabda_sb_push_cp_a(a, sb, _shabda_to_lower_cp(ch));
             prev_space = 0;
         } elif (ch == 44) {
-            _shabda_sb_push_cstr(sb, " ,pause");
+            _shabda_sb_push_cstr_a(a, sb, " ,pause");
             prev_space = 1;
         } elif (ch == 46 || ch == 59) {
-            _shabda_sb_push_cstr(sb, " .pause");
+            _shabda_sb_push_cstr_a(a, sb, " .pause");
             prev_space = 1;
         } elif (_shabda_is_ws(ch) == 1 || ch == 33 || ch == 63) {
             prev_space = 1;
@@ -1072,13 +1110,19 @@ fn _shabda_normalize_token_into(token, sb): i64 {
 # hyphens) and collapses runs of spaces. (Rust normalize)
 #must_use
 fn shabda_normalize(text): cstring {
-    var abbr = shabda_expand_abbreviations(text);
-    var acro = shabda_expand_acronyms(abbr);
-    var expanded = shabda_expand_numbers(acro);
+    return _shabda_normalize_a(default_alloc(), text);
+}
 
-    var cps = _shabda_decode_cps(expanded);
+# shabda_normalize, with every allocation drawn from Allocator `a`.
+#must_use
+fn _shabda_normalize_a(a, text): cstring {
+    var abbr = _shabda_expand_abbreviations_a(a, text);
+    var acro = _shabda_expand_acronyms_a(a, abbr);
+    var expanded = _shabda_expand_numbers_a(a, acro);
+
+    var cps = _shabda_decode_cps_a(a, expanded);
     var n = vec_len(cps);
-    var sb = _shabda_sb_new();
+    var sb = _shabda_sb_new_a(a);
     var i = 0;
     var ch = 0;
     var prev_space = 0;
@@ -1086,15 +1130,15 @@ fn shabda_normalize(text): cstring {
         ch = vec_get(cps, i);
         if (_shabda_is_alpha(ch) == 1 || ch == 39 || ch == 45) {
             if (prev_space == 1 && _shabda_sb_len(sb) != 0) {
-                _shabda_sb_push_byte(sb, 32);
+                _shabda_sb_push_byte_a(a, sb, 32);
             }
-            _shabda_sb_push_cp(sb, _shabda_to_lower_cp(ch));
+            _shabda_sb_push_cp_a(a, sb, _shabda_to_lower_cp(ch));
             prev_space = 0;
         } elif (ch == 44) {
-            _shabda_sb_push_cstr(sb, " ,pause");
+            _shabda_sb_push_cstr_a(a, sb, " ,pause");
             prev_space = 1;
         } elif (ch == 46 || ch == 59) {
-            _shabda_sb_push_cstr(sb, " .pause");
+            _shabda_sb_push_cstr_a(a, sb, " .pause");
             prev_space = 1;
         } elif (_shabda_is_ws(ch) == 1 || ch == 33 || ch == 63) {
             prev_space = 1;
@@ -1109,17 +1153,23 @@ fn shabda_normalize(text): cstring {
 # (Rust normalize_with_emphasis)
 #must_use
 fn shabda_normalize_with_emphasis(text): cstring {
-    var abbr = shabda_expand_abbreviations(text);
-    var expanded = shabda_expand_numbers(abbr);
+    return _shabda_normalize_with_emphasis_a(default_alloc(), text);
+}
 
-    var tokens = _shabda_split_ws(expanded);
+# shabda_normalize_with_emphasis, with every allocation drawn from Allocator `a`.
+#must_use
+fn _shabda_normalize_with_emphasis_a(a, text): cstring {
+    var abbr = _shabda_expand_abbreviations_a(a, text);
+    var expanded = _shabda_expand_numbers_a(a, abbr);
+
+    var tokens = _shabda_split_ws_a(a, expanded);
     var nt = vec_len(tokens);
-    var sb = _shabda_sb_new();
+    var sb = _shabda_sb_new_a(a);
     var i = 0;
     var token = 0;
     while (i < nt) {
         if (i > 0 && _shabda_sb_len(sb) != 0) {
-            _shabda_sb_push_byte(sb, 32);
+            _shabda_sb_push_byte_a(a, sb, 32);
         }
         token = vec_get(tokens, i);
         var tlen = strlen(token);
@@ -1129,12 +1179,12 @@ fn shabda_normalize_with_emphasis(text): cstring {
         if (tlen >= 3 && load8(token) == 42 && load8(token + tlen - 1) == 42) {
             # inner = token[1..len-1].
             var ilen = tlen - 2;
-            var inner = alloc(ilen + 1);
+            var inner = alloc_via(a, ilen + 1);
             if (inner == 0) { return _shabda_sb_cstr(sb); }
             memcpy(inner, token + 1, ilen);
             store8(inner + ilen, 0);
             # inner non-empty and all chars alphabetic.
-            var icps = _shabda_decode_cps(inner);
+            var icps = _shabda_decode_cps_a(a, inner);
             var im = vec_len(icps);
             var allalpha = 1;
             var k = 0;
@@ -1143,22 +1193,22 @@ fn shabda_normalize_with_emphasis(text): cstring {
                 k = k + 1;
             }
             if (im > 0 && allalpha == 1) {
-                _shabda_sb_push_cstr(sb, SHABDA_EMPHASIS_START);
-                _shabda_sb_push_byte(sb, 32);
+                _shabda_sb_push_cstr_a(a, sb, SHABDA_EMPHASIS_START);
+                _shabda_sb_push_byte_a(a, sb, 32);
                 var k2 = 0;
                 while (k2 < im) {
-                    _shabda_sb_push_cp(sb, _shabda_to_lower_cp(vec_get(icps, k2)));
+                    _shabda_sb_push_cp_a(a, sb, _shabda_to_lower_cp(vec_get(icps, k2)));
                     k2 = k2 + 1;
                 }
-                _shabda_sb_push_byte(sb, 32);
-                _shabda_sb_push_cstr(sb, SHABDA_EMPHASIS_END);
+                _shabda_sb_push_byte_a(a, sb, 32);
+                _shabda_sb_push_cstr_a(a, sb, SHABDA_EMPHASIS_END);
                 handled = 1;
             }
         }
 
         # ALL-CAPS emphasis: >= 3 alphabetic chars, all uppercase.
         if (handled == 0) {
-            var tcps = _shabda_decode_cps(token);
+            var tcps = _shabda_decode_cps_a(a, token);
             var tm = vec_len(tcps);
             var alpha_count = 0;
             var all_upper = 1;
@@ -1173,17 +1223,17 @@ fn shabda_normalize_with_emphasis(text): cstring {
                 j = j + 1;
             }
             if (alpha_count >= 3 && all_upper == 1) {
-                _shabda_sb_push_cstr(sb, SHABDA_EMPHASIS_START);
-                _shabda_sb_push_byte(sb, 32);
-                _shabda_normalize_token_into(token, sb);
-                _shabda_sb_push_byte(sb, 32);
-                _shabda_sb_push_cstr(sb, SHABDA_EMPHASIS_END);
+                _shabda_sb_push_cstr_a(a, sb, SHABDA_EMPHASIS_START);
+                _shabda_sb_push_byte_a(a, sb, 32);
+                _shabda_normalize_token_into_a(a, token, sb);
+                _shabda_sb_push_byte_a(a, sb, 32);
+                _shabda_sb_push_cstr_a(a, sb, SHABDA_EMPHASIS_END);
                 handled = 1;
             }
         }
 
         if (handled == 0) {
-            _shabda_normalize_token_into(token, sb);
+            _shabda_normalize_token_into_a(a, token, sb);
         }
         i = i + 1;
     }

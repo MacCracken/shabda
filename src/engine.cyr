@@ -107,7 +107,13 @@ fn shabda_timing_pause_scale(p): i64 { return load64(p + SHABDA_TIMING_PAUSE); }
 # ================================================================
 #must_use
 fn shabda_convert_options_new(): i64 {
-    var o = alloc(SHABDA_OPT_SIZE);
+    return _shabda_convert_options_new_a(default_alloc());
+}
+
+# shabda_convert_options_new, with every allocation drawn from Allocator `a`.
+#must_use
+fn _shabda_convert_options_new_a(a): i64 {
+    var o = alloc_via(a, SHABDA_OPT_SIZE);
     store64(o + SHABDA_OPT_EMPHASIS, 0);
     store64(o + SHABDA_OPT_HAS_RATE, 0);
     store64(o + SHABDA_OPT_RATE_WPM, f64_from(0));
@@ -119,7 +125,13 @@ fn shabda_convert_options_new(): i64 {
 # (Rust ConvertOptions::default)
 #must_use
 fn shabda_convert_options_default(): i64 {
-    return shabda_convert_options_new();
+    return _shabda_convert_options_default_a(default_alloc());
+}
+
+# shabda_convert_options_default, with every allocation drawn from Allocator `a`.
+#must_use
+fn _shabda_convert_options_default_a(a): i64 {
+    return _shabda_convert_options_new_a(a);
 }
 
 # Shallow copy of an options block — the value semantics the builders below need.
@@ -290,6 +302,13 @@ fn _shabda_engine_count_script_cps(text, script): i64 {
 # ================================================================
 # Rust: English -> PronunciationDict::english(); every other language ->
 # PronunciationDict::new() (EMPTY — NOT a language-specific dict).
+#
+# It also builds the three tables a conversion reads that are built once per
+# process and then shared: the heteronym rules and varna's inventory and
+# phonotactics for the language. Through 3.1.1 the first conversion built them,
+# so with shabda_convert_a they would have landed in the caller's Allocator and
+# been reused after it was reset. Built here, on the default heap like the engine,
+# no conversion writes anything outside its Allocator and the event vec it returns.
 #must_use
 fn shabda_g2p_new(language): i64 {
     var e = alloc(SHABDA_ENGINE_SIZE);
@@ -299,6 +318,9 @@ fn shabda_g2p_new(language): i64 {
         dict = shbdk_dict_english();
     }
     store64(e + SHABDA_ENGINE_DICT, dict);
+    var _rules = _shabda_het_rules();
+    var _inv = shabda_inventory_for(language);
+    var _pt = shabda_phonotactics_for(language);
     return e;
 }
 
@@ -325,13 +347,19 @@ fn shabda_g2p_phoneme_inventory(e): i64 {
 # ================================================================
 #must_use
 fn _shabda_engine_rules(language, word): i64 {
-    if (language == SHABDA_LANG_ENGLISH)  { return shabda_english_rules(word); }
-    if (language == SHABDA_LANG_SPANISH)  { return shabda_spanish_rules(word); }
-    if (language == SHABDA_LANG_GERMAN)   { return shabda_german_rules(word); }
-    if (language == SHABDA_LANG_HINDI)    { return shabda_hindi_rules(word); }
-    if (language == SHABDA_LANG_ARABIC)   { return shabda_arabic_rules(word); }
-    if (language == SHABDA_LANG_SANSKRIT) { return shabda_sanskrit_rules(word); }
-    return shabda_english_rules(word);    # #[non_exhaustive] fallback
+    return _shabda_engine_rules_a(default_alloc(), language, word);
+}
+
+# _shabda_engine_rules, with every allocation drawn from Allocator `a`.
+#must_use
+fn _shabda_engine_rules_a(a, language, word): i64 {
+    if (language == SHABDA_LANG_ENGLISH)  { return _shabda_english_rules_a(a, word); }
+    if (language == SHABDA_LANG_SPANISH)  { return _shabda_spanish_rules_a(a, word); }
+    if (language == SHABDA_LANG_GERMAN)   { return _shabda_german_rules_a(a, word); }
+    if (language == SHABDA_LANG_HINDI)    { return _shabda_hindi_rules_a(a, word); }
+    if (language == SHABDA_LANG_ARABIC)   { return _shabda_arabic_rules_a(a, word); }
+    if (language == SHABDA_LANG_SANSKRIT) { return _shabda_sanskrit_rules_a(a, word); }
+    return _shabda_english_rules_a(a, word);    # #[non_exhaustive] fallback
 }
 
 # ================================================================
@@ -341,7 +369,13 @@ fn _shabda_engine_rules(language, word): i64 {
 # ================================================================
 #must_use
 fn _shabda_engine_split_ws(text): i64 {
-    var words = vec_new();
+    return _shabda_engine_split_ws_a(default_alloc(), text);
+}
+
+# _shabda_engine_split_ws, with every allocation drawn from Allocator `a`.
+#must_use
+fn _shabda_engine_split_ws_a(a, text): i64 {
+    var words = vec_new_a(a);
     var n = strlen(text);
     var i = 0;
     var start = 0;
@@ -353,11 +387,11 @@ fn _shabda_engine_split_ws(text): i64 {
         if (wlen > 0) {
             if (inword == 1) {
                 var len = i - start;
-                var buf = alloc(len + 1);
+                var buf = alloc_via(a, len + 1);
                 if (buf == 0) { return words; }
                 memcpy(buf, text + start, len);
                 store8(buf + len, 0);
-                vec_push(words, buf);
+                _shabda_vec_push_a(a, words, buf);
                 inword = 0;
             }
             i = i + wlen;
@@ -368,11 +402,11 @@ fn _shabda_engine_split_ws(text): i64 {
     }
     if (inword == 1) {
         var len2 = n - start;
-        var buf2 = alloc(len2 + 1);
+        var buf2 = alloc_via(a, len2 + 1);
         if (buf2 == 0) { return words; }
         memcpy(buf2, text + start, len2);
         store8(buf2 + len2, 0);
-        vec_push(words, buf2);
+        _shabda_vec_push_a(a, words, buf2);
     }
     return words;
 }
@@ -380,7 +414,13 @@ fn _shabda_engine_split_ws(text): i64 {
 # Make a Silence PhonemeEvent of the given f64-bit duration (Unstressed).
 #must_use
 fn _shabda_engine_silence(duration): i64 {
-    return svara_phoneme_event_new(SVARA_PH_SILENCE, duration, SVARA_STRESS_UNSTRESSED);
+    return _shabda_engine_silence_a(default_alloc(), duration);
+}
+
+# _shabda_engine_silence, with every allocation drawn from Allocator `a`.
+#must_use
+fn _shabda_engine_silence_a(a, duration): i64 {
+    return _shabda_event_new_a(a, SVARA_PH_SILENCE, duration, SVARA_STRESS_UNSTRESSED);
 }
 
 # 1 if `word` is any of the 4 marker tokens (comma/period pause, emph start/end).
@@ -395,14 +435,14 @@ fn _shabda_engine_is_marker(word): i64 {
 # Collect up to 3 preceding non-marker words (indices i-1,i-2,i-3 downward),
 # nearest first (Rust words[..i].iter().rev().filter(non-marker).take(3)).
 #must_use
-fn _shabda_engine_preceding(words, i): i64 {
-    var preceding = vec_new();
+fn _shabda_engine_preceding_a(a, words, i): i64 {
+    var preceding = vec_new_a(a);
     var j = i - 1;
     while (j >= 0) {
         if (vec_len(preceding) >= 3) { return preceding; }
         var w = vec_get(words, j);
         if (_shabda_engine_is_marker(w) == 0) {
-            vec_push(preceding, w);
+            _shabda_vec_push_a(a, preceding, w);
         }
         j = j - 1;
     }
@@ -412,14 +452,57 @@ fn _shabda_engine_preceding(words, i): i64 {
 # Copy a vec of i64 (phoneme ordinals) into a fresh owned vec (Rust .to_vec()).
 #must_use
 fn _shabda_engine_copy_vec(v): i64 {
-    var out = vec_new();
+    return _shabda_engine_copy_vec_a(default_alloc(), v);
+}
+
+# _shabda_engine_copy_vec, with every allocation drawn from Allocator `a`.
+#must_use
+fn _shabda_engine_copy_vec_a(a, v): i64 {
+    var out = vec_new_a(a);
     var n = vec_len(v);
     var i = 0;
     while (i < n) {
-        vec_push(out, vec_get(v, i));
+        _shabda_vec_push_a(a, out, vec_get(v, i));
         i = i + 1;
     }
     return out;
+}
+
+# ================================================================
+# Dictionary lookup with the key drawn from an Allocator.
+#
+# shbdk_dict_lookup / shbdk_dict_lookup_all take no Allocator, and their lowercase
+# fast path allocates the 16-byte Str key on the default heap (shabdakosh 3.1.4,
+# shbdk_dict_lookup_entry). This takes that same path with the key from `a`: the
+# user overlay first, then the base map, through shabdakosh's public accessors. A
+# word that is not already lowercase goes to shbdk_dict_lookup_entry itself, whose
+# Unicode lowercasing (U+0130, a final capital sigma) this does not repeat.
+# shabda_normalize lowers every letter, so a conversion never takes that branch.
+# ================================================================
+fn _shabda_dict_entry_a(a, d, word): i64 {
+    if (word == 0) { return 0; }
+    if (shbdk_is_lower_cstr(word) == 0) { return shbdk_dict_lookup_entry(d, word); }
+    var key = str_from_a(a, word);
+    if (key == 0) { _shabda_alloc_refused("shabda: allocation refused\n", 27); }
+    var e = map_get(shbdk_dict_user_entries(d), key);
+    if (e != 0) { return e; }
+    return map_get(shbdk_dict_entries(d), key);
+}
+
+# shbdk_dict_lookup(d, word) with the key drawn from `a`: the primary
+# pronunciation's phonemes (shabdakosh's own vec), or 0.
+fn _shabda_dict_lookup_a(a, d, word): i64 {
+    var e = _shabda_dict_entry_a(a, d, word);
+    if (e == 0) { return 0; }
+    return shbdk_dict_entry_primary_phonemes(e);
+}
+
+# shbdk_dict_lookup_all(d, word) with the key drawn from `a`: the entry's vec of
+# pronunciations (shabdakosh's own), or 0.
+fn _shabda_dict_lookup_all_a(a, d, word): i64 {
+    var e = _shabda_dict_entry_a(a, d, word);
+    if (e == 0) { return 0; }
+    return shbdk_dict_entry_all(e);
 }
 
 # ================================================================
@@ -427,38 +510,38 @@ fn _shabda_engine_copy_vec(v): i64 {
 # Returns a phonemes vec (owned).
 # ================================================================
 #must_use
-fn _shabda_engine_lookup(e, word, preceding): i64 {
+fn _shabda_engine_lookup_a(a, e, word, preceding): i64 {
     var language = load64(e + SHABDA_ENGINE_LANG);
     var dict = load64(e + SHABDA_ENGINE_DICT);
 
     var rule = shabda_heteronym_lookup(word);
     if (rule != 0) {
-        var prons = shbdk_dict_lookup_all(dict, word);
+        var prons = _shabda_dict_lookup_all_a(a, dict, word);
         if (prons != 0) {
-            return _shabda_engine_copy_vec(shabda_select_phonemes(rule, preceding, prons));
+            return _shabda_engine_copy_vec_a(a, _shabda_select_phonemes_a(a, rule, preceding, prons));
         }
-        var entry = shbdk_dict_lookup(dict, word);
+        var entry = _shabda_dict_lookup_a(a, dict, word);
         if (entry != 0) {
-            return _shabda_engine_copy_vec(entry);
+            return _shabda_engine_copy_vec_a(a, entry);
         }
-        return _shabda_engine_rules(language, word);
+        return _shabda_engine_rules_a(a, language, word);
     }
 
-    var dhit = shbdk_dict_lookup(dict, word);
+    var dhit = _shabda_dict_lookup_a(a, dict, word);
     if (dhit != 0) {
-        return _shabda_engine_copy_vec(dhit);
+        return _shabda_engine_copy_vec_a(a, dhit);
     }
 
-    if (shabda_is_foreign_word(word) == 1) {
-        var stripped = shabda_strip_diacritics(word);
-        var shit = shbdk_dict_lookup(dict, stripped);
+    if (_shabda_is_foreign_word_a(a, word) == 1) {
+        var stripped = _shabda_strip_diacritics_a(a, word);
+        var shit = _shabda_dict_lookup_a(a, dict, stripped);
         if (shit != 0) {
-            return _shabda_engine_copy_vec(shit);
+            return _shabda_engine_copy_vec_a(a, shit);
         }
-        return _shabda_engine_rules(language, stripped);
+        return _shabda_engine_rules_a(a, language, stripped);
     }
 
-    return _shabda_engine_rules(language, word);
+    return _shabda_engine_rules_a(a, language, word);
 }
 
 # ================================================================
@@ -467,7 +550,19 @@ fn _shabda_engine_lookup(e, word, preceding): i64 {
 # ================================================================
 #must_use
 fn shabda_convert(e, text, out_events): i64 {
-    return shabda_convert_with(e, text, shabda_convert_options_default(), out_events);
+    return shabda_convert_a(default_alloc(), e, text, out_events);
+}
+
+# shabda_convert with every allocation drawn from Allocator `a` (the stdlib's `_a`
+# convention): the events vec, the events, and everything the conversion builds on
+# the way. Nothing is written to the default heap or to the engine, so a caller that
+# passes an arena and resets it after reading the events gets all of it back. A
+# conversion has no error for a refused allocation, so pass an Allocator that grows,
+# such as arena_allocator_growable(): a refused vec or builder grow ends the process,
+# as vec_push does.
+#must_use
+fn shabda_convert_a(a, e, text, out_events): i64 {
+    return shabda_convert_with_a(a, e, text, _shabda_convert_options_default_a(a), out_events);
 }
 
 # ================================================================
@@ -476,10 +571,17 @@ fn shabda_convert(e, text, out_events): i64 {
 # ================================================================
 #must_use
 fn shabda_convert_with(e, text, options, out_events): i64 {
+    return shabda_convert_with_a(default_alloc(), e, text, options, out_events);
+}
+
+# shabda_convert_with with every allocation drawn from Allocator `a`. See
+# shabda_convert_a. `options` is only read; it may live anywhere.
+#must_use
+fn shabda_convert_with_a(a, e, text, options, out_events): i64 {
     # 1. empty text -> InvalidInput error.
     var tn = strlen(text);
-    var tso = alloc(8);
-    var teo = alloc(8);
+    var tso = alloc_via(a, 8);
+    var teo = alloc_via(a, 8);
     if (tso == 0 || teo == 0) { return shabda_err_invalid_input(); }
     _shabda_engine_trim(text, 0, tn, tso, teo);
     if (load64(teo) <= load64(tso)) { return shabda_err_invalid_input(); }
@@ -495,17 +597,17 @@ fn shabda_convert_with(e, text, options, out_events): i64 {
     # 4. normalize (with or without emphasis).
     var normalized = 0;
     if (shabda_convert_options_emphasis(options) != 0) {
-        normalized = shabda_normalize_with_emphasis(text);
+        normalized = _shabda_normalize_with_emphasis_a(a, text);
     } else {
-        normalized = shabda_normalize(text);
+        normalized = _shabda_normalize_a(a, text);
     }
 
     # 5. split on whitespace.
-    var words = _shabda_engine_split_ws(normalized);
+    var words = _shabda_engine_split_ws_a(a, normalized);
     var nwords = vec_len(words);
 
     # 6. events + emphasis state.
-    var events = vec_new();
+    var events = vec_new_a(a);
     var emphasis_active = 0;
 
     # 7. per-word loop.
@@ -526,25 +628,25 @@ fn shabda_convert_with(e, text, options, out_events): i64 {
         }
         # c/d. phrase-boundary markers.
         if (streq(word, SHABDA_COMMA_PAUSE) == 1) {
-            vec_push(events, _shabda_engine_silence(SHABDA_ENGINE_COMMA_DUR));
+            _shabda_vec_push_a(a, events, _shabda_engine_silence_a(a, SHABDA_ENGINE_COMMA_DUR));
             i = i + 1;
             continue;
         }
         if (streq(word, SHABDA_PERIOD_PAUSE) == 1) {
-            vec_push(events, _shabda_engine_silence(SHABDA_ENGINE_PERIOD_DUR));
+            _shabda_vec_push_a(a, events, _shabda_engine_silence_a(a, SHABDA_ENGINE_PERIOD_DUR));
             i = i + 1;
             continue;
         }
 
         # e. preceding context.
-        var preceding = _shabda_engine_preceding(words, i);
+        var preceding = _shabda_engine_preceding_a(a, words, i);
 
         # f. LOOKUP (dict-first, rule fallback).
-        var phonemes = _shabda_engine_lookup(e, word, preceding);
+        var phonemes = _shabda_engine_lookup_a(a, e, word, preceding);
 
         # g. debug validation — always compiled, results DISCARDED, never abort.
-        var _invalid = shabda_validate_phonemes_for(phonemes, inv, language);
-        var _violations = shabda_validate_phonotactics(phonemes, language);
+        var _invalid = _shabda_validate_phonemes_for_a(a, phonemes, inv, language);
+        var _violations = _shabda_validate_phonotactics_a(a, phonemes, language);
 
         # h. skip empties.
         if (vec_len(phonemes) == 0) {
@@ -553,13 +655,13 @@ fn shabda_convert_with(e, text, options, out_events): i64 {
         }
 
         # i/j/k. syllabify + assign stress.
-        var is_content = shabda_is_content_word(word);
-        var syllables = shabda_syllabify(phonemes);
+        var is_content = _shabda_is_content_word_a(a, word);
+        var syllables = _shabda_syllabify_a(a, phonemes);
         var word_events = 0;
         if (vec_len(syllables) == 0) {
-            word_events = shabda_assign_stress(phonemes, is_content);
+            word_events = _shabda_assign_stress_a(a, phonemes, is_content);
         } else {
-            word_events = shabda_assign_stress_syllabic(syllables, is_content);
+            word_events = _shabda_assign_stress_syllabic_a(a, syllables, is_content);
         }
 
         # l. emphasis if active.
@@ -571,13 +673,13 @@ fn shabda_convert_with(e, text, options, out_events): i64 {
         var wn = vec_len(word_events);
         var wi = 0;
         while (wi < wn) {
-            vec_push(events, vec_get(word_events, wi));
+            _shabda_vec_push_a(a, events, vec_get(word_events, wi));
             wi = wi + 1;
         }
 
         # n. inter-word silence (not after last word).
         if (i < nwords - 1) {
-            vec_push(events, _shabda_engine_silence(SHABDA_ENGINE_WORD_DUR));
+            _shabda_vec_push_a(a, events, _shabda_engine_silence_a(a, SHABDA_ENGINE_WORD_DUR));
         }
 
         i = i + 1;

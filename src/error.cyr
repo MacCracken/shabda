@@ -213,3 +213,73 @@ fn shabda_ws_len_before(buf, start, end): i64 {
     if (n == end - i) { return n; }                    # must land exactly on end
     return 0;
 }
+
+# ================================================================
+# Allocator plumbing for the `_a` forms (3.1.2). Stdlib only, so every suite can
+# include it.
+#
+# Every fn that shabda_convert_with reaches and that allocates has an `_a` twin
+# taking the Allocator first, in the stdlib's `vec_new_a` / `alloc_via`
+# convention. The original fn is a one-line wrapper over `default_alloc()`, so
+# the two share one body and the original allocates exactly what it did before.
+# The helpers below stand in for the stdlib calls whose `_a` form behaves
+# differently: `vec_push` and `str_builder_add_cstr` end the process when a grow
+# is refused, while their `_a` forms return -1 and the caller carries on with the
+# value missing, and `str_cstr` and `str_lower_cstr` copy onto the default heap
+# with no `_a` form at all.
+# ================================================================
+
+# End the process over a refused allocation, writing `msg` (`n` bytes) to stderr
+# and exiting with status 1, as the stdlib's aborting wrappers do.
+fn _shabda_alloc_refused(msg, n): i64 {
+    syscall(SYS_WRITE, 2, msg, n);
+    syscall(SYS_EXIT, 1);
+    return 0;
+}
+
+# vec_push(v, val) with the grow drawn from `a`. A refused grow ends the process
+# with vec_push's own message, so the wrapper over default_alloc() behaves as
+# vec_push did.
+fn _shabda_vec_push_a(a, v, val): i64 {
+    if (vec_push_a(a, v, val) < 0) { _shabda_alloc_refused("vec: alloc failed\n", 18); }
+    return 0;
+}
+
+# str_builder_add_cstr(sb, cstr) with the grow drawn from `a`. A refused grow ends
+# the process with str_builder_add_cstr's own message.
+fn _shabda_sb_add_cstr_a(a, sb, cstr): i64 {
+    if (str_builder_add_cstr_a(a, sb, cstr) < 0) {
+        _shabda_alloc_refused("str_builder: alloc failed\n", 26);
+    }
+    return 0;
+}
+
+# str_cstr(s) with the copy drawn from `a`: a NUL-terminated copy of Str `s`'s
+# bytes, or 0 if the copy is refused.
+#must_use
+fn _shabda_str_cstr_a(a, s): i64 {
+    var slen = str_len(s);
+    var buf = alloc_via(a, slen + 1);
+    if (buf == 0) { return 0; }
+    memcpy(buf, str_data(s), slen);
+    store8(buf + slen, 0);
+    return buf;
+}
+
+# str_lower_cstr(s) with the copy drawn from `a`: a NUL-terminated copy of `s`
+# with 'A'..'Z' lowered and every other byte unchanged, or 0 if the copy is refused.
+#must_use
+fn _shabda_ascii_lower_a(a, s): i64 {
+    var n = strlen(s);
+    var dst = alloc_via(a, n + 1);
+    if (dst == 0) { return 0; }
+    var i = 0;
+    while (i < n) {
+        var c = load8(s + i);
+        if (c >= 65 && c <= 90) { c = c + 32; }
+        store8(dst + i, c);
+        i = i + 1;
+    }
+    store8(dst + n, 0);
+    return dst;
+}

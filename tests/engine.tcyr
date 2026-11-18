@@ -585,5 +585,135 @@ assert_eq(shabda_is_err(shabda_convert_ssml(ueng, _nestx(4), sslot)), 0, "depth 
 assert_eq(shabda_is_err(shabda_convert_ssml(ueng, _nestx(20000), sslot)), 1,
   "depth 20,000 returns InvalidInput instead of crashing");
 
+# ================================================================
+# 3.1.2: shabda_convert_a / shabda_convert_with_a
+# ================================================================
+# FNV-1a over every event's phoneme, duration bits, stress and tone, and the count.
+fn _ev_hash(events): i64 {
+    var h = 1469598103934665603;
+    var n = vec_len(events);
+    var i = 0;
+    while (i < n) {
+        var ev = vec_get(events, i);
+        h = (h ^ SvPhonemeEvent_phoneme(ev)) * 1099511628211;
+        h = (h ^ SvPhonemeEvent_duration(ev)) * 1099511628211;
+        h = (h ^ SvPhonemeEvent_stress(ev)) * 1099511628211;
+        h = (h ^ SvPhonemeEvent_tone(ev)) * 1099511628211;
+        i = i + 1;
+    }
+    return (h ^ n) * 1099511628211;
+}
+
+# Reset the arena behind Allocator `ar`, fill its whole first chunk with 0xA5, and
+# reset it again, so the next conversion runs on memory that is not zero. The
+# default heap only ever hands out zeroed bytes; an arena reused after a reset
+# hands back whatever the last request left.
+fn _dirty_reset(ar): i64 {
+    var arena = allocator_state(ar);
+    reset_via(ar);
+    var room = arena_remaining(arena);
+    var blk = arena_alloc(arena, room);
+    if (blk != 0) { memset(blk, 0xA5, room); }
+    reset_via(ar);
+    return 0;
+}
+
+# One convert_with through the default heap and one through `ar`, on dirtied arena
+# memory. Checks: the same events, nothing kept on the default heap by the `_a`
+# form, and the arena holding exactly the bytes the default-heap form kept.
+fn _check_a(ar, g, text, opts, name): i64 {
+    var slot = alloc(8);
+    var u0 = alloc_used();
+    var err0 = shabda_convert_with(g, text, opts, slot);
+    var kept = alloc_used() - u0;
+    assert_eq(shabda_is_err(err0), 0, name);
+    var want = _ev_hash(load64(slot));
+    _dirty_reset(ar);
+    store64(slot, 0);
+    var u1 = alloc_used();
+    var err1 = shabda_convert_with_a(ar, g, text, opts, slot);
+    var heap = alloc_used() - u1;
+    assert_eq(shabda_is_err(err1), 0, name);
+    assert_eq(heap, 0, name);
+    assert_eq(arena_used(allocator_state(ar)), kept, name);
+    assert_eq(_ev_hash(load64(slot)), want, name);
+    return 0;
+}
+
+test_group("3.1.2: convert_with_a takes every allocation from its Allocator");
+# A 1 MB first chunk holds the longest conversion here, so the arena never chains a
+# chunk from the default heap mid-test.
+var ar = arena_allocator_growable(1048576);
+var en_a = shabda_g2p_new(SHABDA_LANG_ENGLISH);
+var o_def = shabda_convert_options_new();
+var o_emph = shabda_convert_options_with_emphasis(o_def, 1);
+var o_rate = shabda_convert_options_with_speaking_rate(o_def, f64_from(200));
+var o_time = shabda_convert_options_with_timing(o_def,
+  shabda_timing_new(f64_div(f64_from(3), f64_from(2)), f64_div(f64_from(4), f64_from(5)), f64_from(2)));
+_check_a(ar, en_a, "Hello, world!", o_def, "a sentence with pauses");
+_check_a(ar, en_a, "Dr. Smith paid $3.50 for 12 apples on Main St.", o_def, "abbreviations and numbers");
+_check_a(ar, en_a, "-42 and 1,000,000 and 3.14159 and 9223372036854775808", o_def,
+  "negative, grouped, decimal and over-long numbers");
+_check_a(ar, en_a, "The FBI and NASA met at noon.", o_def, "acronyms spelled out and read as words");
+_check_a(ar, en_a, "I read the book yesterday, and they will lead the way.", o_def,
+  "heteronyms through the dictionary's variants");
+_check_a(ar, en_a, "The café served a jalapeño to the naïve critic.", o_def,
+  "foreign words through strip_diacritics");
+_check_a(ar, en_a, "zxqv blorptastic unfrobbing", o_def, "unknown words through the letter-to-sound rules");
+# Each of these breaks an English phonotactic limit, so validation builds its
+# message; through str_cstr that message was copied onto the default heap.
+_check_a(ar, en_a, "The abstract was explained proudly.", o_def, "phonotactic violations");
+_check_a(ar, en_a, "This is AMAZING and *really* good.", o_emph, "emphasis markers");
+_check_a(ar, en_a, "Speaking quickly now, please.", o_rate, "a speaking rate");
+_check_a(ar, en_a, "A timing profile, applied.", o_time, "a timing profile");
+_check_a(ar, shabda_g2p_new(SHABDA_LANG_SPANISH), "Hola, ¿cómo estás? Mañana.", o_def, "Spanish rules");
+_check_a(ar, shabda_g2p_new(SHABDA_LANG_GERMAN), "Guten Morgen, schöne Straße.", o_def, "German rules");
+_check_a(ar, shabda_g2p_new(SHABDA_LANG_HINDI), "नमस्ते भारत namaste", o_def, "Hindi, both scripts");
+_check_a(ar, shabda_g2p_new(SHABDA_LANG_ARABIC), "كتاب مَدْرَسَة kitab", o_def, "Arabic, both scripts");
+_check_a(ar, shabda_g2p_new(SHABDA_LANG_SANSKRIT), "संस्कृतम् धर्म yoga", o_def, "Sanskrit, both scripts");
+
+test_group("3.1.2: convert_a is convert with default options");
+var ca_slot = alloc(8);
+assert_eq(shabda_is_err(shabda_convert(en_a, "The quick brown fox.", ca_slot)), 0, "convert ok");
+var ca_want = _ev_hash(load64(ca_slot));
+_dirty_reset(ar);
+var ca_u = alloc_used();
+assert_eq(shabda_is_err(shabda_convert_a(ar, en_a, "The quick brown fox.", ca_slot)), 0, "convert_a ok");
+assert_eq(alloc_used() - ca_u, 0, "convert_a keeps nothing on the default heap");
+assert_eq(_ev_hash(load64(ca_slot)), ca_want, "convert_a gives convert's events");
+
+test_group("3.1.2: an empty input refused by convert_a");
+var ce_slot = alloc(8);
+store64(ce_slot, 7);
+var ce_u = alloc_used();
+assert_eq(shabda_is_err(shabda_convert_a(ar, en_a, " \xE3\x80\x80 ", ce_slot)), 1, "whitespace only -> InvalidInput");
+assert_eq(load64(ce_slot), 7, "the out-param is left alone");
+assert_eq(alloc_used() - ce_u, 0, "and nothing is kept on the default heap");
+
+test_group("3.1.2: the dictionary lookup with its key from an Allocator");
+var dl_dict = shbdk_dict_new();
+var dl_ph = vec_new();
+vec_push(dl_ph, SVARA_PH_PLOSIVE_K);
+shbdk_dict_insert(dl_dict, "cat", dl_ph);
+var dl_user = vec_new();
+vec_push(dl_user, SVARA_PH_PLOSIVE_T);
+shbdk_dict_insert_user(dl_dict, "dog", dl_user);
+shbdk_dict_insert(dl_dict, "dog", dl_ph);
+reset_via(ar);
+assert_eq(_shabda_dict_lookup_a(ar, dl_dict, "cat"), shbdk_dict_lookup(dl_dict, "cat"), "a base word");
+assert_eq(_shabda_dict_lookup_a(ar, dl_dict, "dog"), shbdk_dict_lookup(dl_dict, "dog"),
+  "the user overlay before the base, as shabdakosh looks");
+assert_eq(vec_get(_shabda_dict_lookup_a(ar, dl_dict, "dog"), 0), SVARA_PH_PLOSIVE_T,
+  "which is the overlay's pronunciation");
+assert_eq(_shabda_dict_lookup_a(ar, dl_dict, "CAT"), shbdk_dict_lookup(dl_dict, "CAT"),
+  "a capitalised word goes to shabdakosh's own lookup");
+assert_eq(_shabda_dict_lookup_a(ar, dl_dict, "cow"), 0, "a missing word is 0");
+assert_eq(_shabda_dict_lookup_all_a(ar, dl_dict, "dog"), shbdk_dict_lookup_all(dl_dict, "dog"),
+  "lookup_all reads the same entry");
+assert_eq(_shabda_dict_lookup_all_a(ar, dl_dict, "cow"), 0, "lookup_all of a missing word is 0");
+var dl_u = alloc_used();
+var dl_hit = _shabda_dict_lookup_a(ar, dl_dict, "cat");
+assert_eq(alloc_used() - dl_u, 0, "a lowercase lookup keeps nothing on the default heap");
+
 var rc = assert_summary();
 syscall(SYS_EXIT, rc);
